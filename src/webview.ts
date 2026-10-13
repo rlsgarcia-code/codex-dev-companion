@@ -1,5 +1,14 @@
+import { realpath } from "node:fs/promises";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { DevelopmentAgent } from "./agent";
+import {
+  AZURE_API_KEY_SECRET,
+  isRecognizedAzureOpenAIHost,
+  normalizeAzureEndpoint,
+  resolveWorkspaceModelCatalogPath,
+  validateAzureConnection
+} from "./azure";
 import { ContextCollector } from "./context";
 import { ProjectMemory } from "./memory";
 import type { AgentUiEvent, ChatMessage, RunMode } from "./types";
@@ -14,7 +23,20 @@ type IncomingMessage =
   | { type: "newThread" }
   | { type: "remember"; text: string }
   | { type: "openMemory" }
-  | { type: "configureAzure" };
+  | { type: "configureAzure" }
+  | { type: "saveAzure"; endpoint: string; deployment: string; apiVersion: string; apiKey: string }
+  | { type: "selectModelCatalog" }
+  | { type: "clearModelCatalog" };
+
+type AzureSettingsSnapshot = {
+  endpoint: string;
+  deployment: string;
+  apiVersion: string;
+  hasApiKey: boolean;
+  corporateGateway: boolean;
+  caCertificatePath: string;
+  modelCatalogPath: string;
+};
 
 export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
@@ -69,7 +91,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           type: "hydrate",
           history: this.history(),
           workspace: vscode.workspace.name ?? "No workspace",
-          activeFile: this.activeFileLabel()
+          activeFile: this.activeFileLabel(),
+          azure: await this.azureSettingsSnapshot()
         });
         break;
       case "send":
@@ -89,8 +112,137 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         break;
       case "configureAzure":
         await vscode.commands.executeCommand("codexDevCompanion.configureAzure");
+        this.post({ type: "azureSettings", azure: await this.azureSettingsSnapshot() });
+        break;
+      case "saveAzure":
+        await this.saveAzureSettings(message);
+        break;
+      case "selectModelCatalog":
+        await this.selectModelCatalog();
+        break;
+      case "clearModelCatalog":
+        await this.clearModelCatalog();
         break;
     }
+  }
+
+  private async azureSettingsSnapshot(): Promise<AzureSettingsSnapshot> {
+    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    return {
+      endpoint: configuration.get<string>("azureEndpoint", ""),
+      deployment: configuration.get<string>("azureDeployment", ""),
+      apiVersion: configuration.get<string>("azureApiVersion", "2025-04-01-preview"),
+      hasApiKey: Boolean(await this.extensionContext.secrets.get(AZURE_API_KEY_SECRET)),
+      corporateGateway: configuration.get<boolean>("allowCorporateGateway", false),
+      caCertificatePath: configuration.get<string>("corporateCaCertificatePath", ""),
+      modelCatalogPath: configuration.get<string>("modelCatalogPath", "")
+    };
+  }
+
+  private async saveAzureSettings(message: Extract<IncomingMessage, { type: "saveAzure" }>): Promise<void> {
+    try {
+      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const existingApiKey = await this.extensionContext.secrets.get(AZURE_API_KEY_SECRET);
+      const candidateEndpoint = normalizeAzureEndpoint(message.endpoint, true);
+      const usesCorporateGateway = !isRecognizedAzureOpenAIHost(candidateEndpoint);
+      const currentEndpoint = configuration.get<string>("azureEndpoint", "");
+      let sameApprovedGateway = false;
+      if (usesCorporateGateway && configuration.get<boolean>("allowCorporateGateway", false)) {
+        try {
+          sameApprovedGateway = normalizeAzureEndpoint(currentEndpoint, true) === candidateEndpoint;
+        } catch {
+          sameApprovedGateway = false;
+        }
+      }
+      if (usesCorporateGateway && !sameApprovedGateway) {
+        const approval = await vscode.window.showWarningMessage(
+          "This is not a direct Azure OpenAI hostname. Approve it only if this HTTPS endpoint is your corporate gateway. The API key will be sent in the api-key header.",
+          { modal: true },
+          "Use corporate gateway"
+        );
+        if (approval !== "Use corporate gateway") {
+          throw new Error("Corporate gateway was not authorized. No changes were saved.");
+        }
+      }
+
+      const apiKey = message.apiKey.trim() || existingApiKey || "";
+      const connection = validateAzureConnection({
+        endpoint: candidateEndpoint,
+        deployment: message.deployment,
+        apiVersion: message.apiVersion,
+        apiKey,
+        allowCorporateGateway: usesCorporateGateway
+      });
+      await Promise.all([
+        configuration.update("azureEndpoint", connection.endpoint, vscode.ConfigurationTarget.Global),
+        configuration.update("azureDeployment", connection.deployment, vscode.ConfigurationTarget.Global),
+        configuration.update("azureApiVersion", connection.apiVersion, vscode.ConfigurationTarget.Global),
+        configuration.update("allowCorporateGateway", usesCorporateGateway, vscode.ConfigurationTarget.Global),
+        ...(message.apiKey.trim()
+          ? [this.extensionContext.secrets.store(AZURE_API_KEY_SECRET, message.apiKey.trim())]
+          : [])
+      ]);
+      await this.agent.reloadAzureConfiguration();
+      this.post({
+        type: "azureSaved",
+        azure: await this.azureSettingsSnapshot(),
+        message: `Azure updated · ${connection.deployment}`
+      });
+    } catch (error) {
+      this.post({
+        type: "azureSaveError",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  private async selectModelCatalog(): Promise<void> {
+    try {
+      const workspace = vscode.workspace.workspaceFolders?.[0];
+      if (!workspace) {
+        throw new Error("Open the workspace that contains the model catalog JSON.");
+      }
+      const selected = await vscode.window.showOpenDialog({
+        title: "Select a Codex model catalog inside this workspace",
+        defaultUri: workspace.uri,
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { "JSON model catalog": ["json"] },
+        openLabel: "Use this catalog"
+      });
+      if (!selected?.[0]) return;
+
+      const candidate = resolveWorkspaceModelCatalogPath(workspace.uri.fsPath, selected[0].fsPath);
+      const [realWorkspace, realCatalog] = await Promise.all([
+        realpath(workspace.uri.fsPath),
+        realpath(candidate)
+      ]);
+      const relative = path.relative(realWorkspace, realCatalog);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        throw new Error("Model catalog must resolve to a JSON file inside the opened workspace.");
+      }
+      const contents = await vscode.workspace.fs.readFile(vscode.Uri.file(realCatalog));
+      if (contents.byteLength > 5_000_000) {
+        throw new Error("Model catalog is unexpectedly large (maximum 5 MB).");
+      }
+      JSON.parse(Buffer.from(contents).toString("utf8"));
+      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      await configuration.update("modelCatalogPath", relative, vscode.ConfigurationTarget.Workspace);
+      await this.agent.reloadAzureConfiguration();
+      this.post({ type: "azureSettings", azure: await this.azureSettingsSnapshot() });
+      this.post({ type: "toast", message: `Model catalog selected · ${relative}` });
+    } catch (error) {
+      this.post({ type: "azureSaveError", message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private async clearModelCatalog(): Promise<void> {
+    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    await configuration.update("modelCatalogPath", undefined, vscode.ConfigurationTarget.Workspace);
+    await this.agent.reloadAzureConfiguration();
+    this.post({ type: "azureSettings", azure: await this.azureSettingsSnapshot() });
+    this.post({ type: "toast", message: "Model catalog removed" });
   }
 
   private async send(text: string, mode: RunMode): Promise<void> {
@@ -191,6 +343,50 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       <ol id="plan-items"></ol>
     </section>
 
+    <section class="settings-panel hidden" id="azure-settings" aria-label="Azure OpenAI settings">
+      <div class="settings-heading">
+        <div>
+          <div class="section-label">AZURE OPENAI</div>
+          <h2>Connection</h2>
+        </div>
+        <button class="icon-button settings-close" id="azure-close" title="Close settings" aria-label="Close settings">×</button>
+      </div>
+      <label class="field">
+        <span>OpenAI API Base</span>
+        <input id="azure-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example/openai" />
+      </label>
+      <div class="field-grid">
+        <label class="field">
+          <span>Deployment ID</span>
+          <input id="azure-deployment" type="text" autocomplete="off" spellcheck="false" placeholder="my-deployment" />
+        </label>
+        <label class="field">
+          <span>API Version</span>
+          <input id="azure-api-version" type="text" autocomplete="off" spellcheck="false" placeholder="2025-04-01-preview" />
+        </label>
+      </div>
+      <label class="field">
+        <span>API Key <small id="azure-key-state"></small></span>
+        <input id="azure-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the stored key" />
+      </label>
+      <div class="local-setting">
+        <div>
+          <span>Model metadata <small>optional</small></span>
+          <code id="model-catalog-path">No local catalog</code>
+        </div>
+        <div class="inline-actions">
+          <button id="select-model-catalog">Select JSON</button>
+          <button class="hidden" id="clear-model-catalog">Clear</button>
+        </div>
+      </div>
+      <p class="settings-note" id="azure-details"></p>
+      <p class="settings-error hidden" id="azure-settings-error"></p>
+      <div class="settings-actions">
+        <button class="secondary-action" id="azure-advanced">Setup wizard / PEM</button>
+        <button class="primary-action" id="azure-save">Save connection</button>
+      </div>
+    </section>
+
     <section class="timeline" id="timeline" aria-live="polite">
       <div class="welcome" id="welcome">
         <div class="monogram">C</div>
@@ -235,7 +431,7 @@ const styles = String.raw`
 body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font: 13px/1.5 var(--vscode-font-family); }
 button, textarea, select { font: inherit; }
 button { color: inherit; }
-.shell { min-height: 100vh; display: grid; grid-template-rows: auto auto auto 1fr auto; }
+.shell { min-height: 100vh; display: grid; grid-template-rows: auto auto auto auto 1fr auto; }
 .topbar { display: flex; align-items: flex-start; justify-content: space-between; padding: 20px 18px 13px; border-bottom: 1px solid var(--line); }
 .eyebrow, .section-label { color: var(--muted); font: 600 9px/1.2 var(--vscode-editor-font-family); letter-spacing: .16em; }
 h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; }
@@ -251,6 +447,26 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .plan li::before { content: ''; position: absolute; left: 0; top: .45em; width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
 .plan li.done { color: var(--vscode-foreground); text-decoration: line-through; opacity: .66; }
 .plan li.done::before { background: var(--accent); border-color: var(--accent); }
+.settings-panel { padding: 14px 18px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); animation: reveal .2s ease-out; }
+.settings-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+.settings-heading h2 { margin: 3px 0 0; font-size: 16px; line-height: 1.1; letter-spacing: -.025em; }
+.settings-close { margin-top: -5px; }
+.field { display: grid; gap: 4px; margin-top: 9px; color: var(--muted); font-size: 10px; }
+.field span, .local-setting > div > span { font-weight: 600; letter-spacing: .02em; }
+.field small, .local-setting small { font-weight: 400; opacity: .75; }
+.field input { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 4px; outline: 0; color: var(--vscode-input-foreground); background: var(--vscode-input-background); font: 11px/1.3 var(--vscode-editor-font-family); }
+.field input:focus { border-color: color-mix(in srgb, var(--accent) 62%, transparent); }
+.field-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.local-setting { display: flex; align-items: end; justify-content: space-between; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.local-setting > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.local-setting code { overflow: hidden; color: var(--vscode-foreground); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.inline-actions, .settings-actions { display: flex; align-items: center; gap: 6px; }
+.inline-actions button, .secondary-action, .primary-action { border: 0; border-radius: 4px; padding: 5px 7px; cursor: pointer; font-size: 10px; }
+.inline-actions button, .secondary-action { color: var(--muted); background: var(--vscode-button-secondaryBackground); }
+.primary-action { margin-left: auto; color: #111; background: var(--accent); font-weight: 650; }
+.settings-note { min-height: 1.4em; margin: 8px 0 0; color: var(--muted); font-size: 10px; }
+.settings-error { margin: 8px 0 0; color: var(--vscode-errorForeground); font-size: 10px; white-space: pre-wrap; }
+.settings-actions { margin-top: 12px; }
 .timeline { min-height: 0; overflow-y: auto; padding: 0 18px 32px; }
 .welcome { padding: 48px 0 24px; animation: reveal .35s ease-out; }
 .monogram { display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 24px; border-radius: 10px; background: var(--accent); color: #111; font-weight: 800; font-size: 18px; transform: rotate(-3deg); }
@@ -302,6 +518,12 @@ const status = document.getElementById('status');
 const signal = document.getElementById('signal');
 const plan = document.getElementById('plan');
 const planItems = document.getElementById('plan-items');
+const azureSettings = document.getElementById('azure-settings');
+const azureEndpoint = document.getElementById('azure-endpoint');
+const azureDeployment = document.getElementById('azure-deployment');
+const azureApiVersion = document.getElementById('azure-api-version');
+const azureApiKey = document.getElementById('azure-api-key');
+const azureSettingsError = document.getElementById('azure-settings-error');
 let busy = false;
 
 function escapeHtml(value) {
@@ -357,11 +579,48 @@ function submit() {
   prompt.value = '';
 }
 
+function fillAzureSettings(azure) {
+  azureEndpoint.value = azure.endpoint || '';
+  azureDeployment.value = azure.deployment || '';
+  azureApiVersion.value = azure.apiVersion || '2025-04-01-preview';
+  azureApiKey.value = '';
+  document.getElementById('azure-key-state').textContent = azure.hasApiKey ? '· stored securely' : '· required';
+  document.getElementById('model-catalog-path').textContent = azure.modelCatalogPath || 'No local catalog';
+  document.getElementById('clear-model-catalog').classList.toggle('hidden', !azure.modelCatalogPath);
+  const details = [];
+  if (azure.corporateGateway) details.push('Corporate gateway');
+  if (azure.caCertificatePath) details.push('CA: ' + azure.caCertificatePath);
+  details.push(azure.modelCatalogPath ? 'custom model metadata enabled' : 'fallback metadata may be used for custom aliases');
+  document.getElementById('azure-details').textContent = details.join(' · ');
+  azureSettingsError.classList.add('hidden');
+}
+
+function openAzureSettings() {
+  azureSettings.classList.remove('hidden');
+  azureDeployment.focus();
+}
+
+function saveAzureSettings() {
+  azureSettingsError.classList.add('hidden');
+  vscode.postMessage({
+    type: 'saveAzure',
+    endpoint: azureEndpoint.value,
+    deployment: azureDeployment.value,
+    apiVersion: azureApiVersion.value,
+    apiKey: azureApiKey.value
+  });
+}
+
 send.addEventListener('click', submit);
 cancel.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
 document.getElementById('new-thread').addEventListener('click', () => vscode.postMessage({ type: 'newThread' }));
 document.getElementById('memory').addEventListener('click', () => vscode.postMessage({ type: 'openMemory' }));
-document.getElementById('azure').addEventListener('click', () => vscode.postMessage({ type: 'configureAzure' }));
+document.getElementById('azure').addEventListener('click', () => azureSettings.classList.contains('hidden') ? openAzureSettings() : azureSettings.classList.add('hidden'));
+document.getElementById('azure-close').addEventListener('click', () => azureSettings.classList.add('hidden'));
+document.getElementById('azure-save').addEventListener('click', saveAzureSettings);
+document.getElementById('azure-advanced').addEventListener('click', () => vscode.postMessage({ type: 'configureAzure' }));
+document.getElementById('select-model-catalog').addEventListener('click', () => vscode.postMessage({ type: 'selectModelCatalog' }));
+document.getElementById('clear-model-catalog').addEventListener('click', () => vscode.postMessage({ type: 'clearModelCatalog' }));
 prompt.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
 });
@@ -374,7 +633,19 @@ window.addEventListener('message', ({ data }) => {
     case 'hydrate':
       document.getElementById('workspace').textContent = data.workspace;
       document.getElementById('active-file').textContent = data.activeFile || 'No active file';
+      fillAzureSettings(data.azure || {});
       (data.history || []).forEach(appendMessage);
+      break;
+    case 'azureSettings': fillAzureSettings(data.azure); break;
+    case 'azureSaved':
+      fillAzureSettings(data.azure);
+      azureSettings.classList.add('hidden');
+      status.textContent = data.message;
+      break;
+    case 'azureSaveError':
+      azureSettingsError.textContent = data.message;
+      azureSettingsError.classList.remove('hidden');
+      openAzureSettings();
       break;
     case 'user': case 'assistant': appendMessage(data.message); break;
     case 'busy': setBusy(data.value); break;

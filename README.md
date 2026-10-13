@@ -40,7 +40,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.2.4.vsix
+code --install-extension ./codex-dev-companion-0.3.0.vsix
 ```
 
 Execute esses comandos na própria máquina em que a extensão será usada. O `npm ci` instala o runtime nativo do Codex correspondente ao sistema operacional e à arquitetura atuais; por isso, um VSIX gerado no macOS não deve ser reutilizado no Windows ou Linux.
@@ -50,7 +50,7 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.2.4.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.3.0.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 ### Primeiro uso
@@ -59,6 +59,8 @@ Se o comando `code` não estiver disponível:
 2. Pressione `Ctrl/Cmd + Shift + P` e execute **Codex Companion: Configure Azure OpenAI**.
 3. Complete as quatro etapas numeradas usando o mapeamento abaixo.
 4. Abra o ícone **Codex Companion** na barra lateral.
+
+Depois do primeiro setup, clique em **Azure** no rodapé da própria sidebar para alterar rapidamente **Deployment ID**, **API Version**, base e chave. Deixar o campo da chave vazio preserva o valor já guardado no Secret Storage. Use **Setup wizard / PEM** somente quando precisar trocar a CA corporativa ou revisar a configuração completa.
 
 | Variável que você já possui | Campo da extensão | Formato esperado |
 | --- | --- | --- |
@@ -72,6 +74,15 @@ Se seu `OPENAI_API_BASE` terminar em `/openai/deployments/<id>`, informe somente
 Gateways corporativos HTTPS também são aceitos. Quando o host não pertence diretamente ao Azure, a extensão exige uma confirmação explícita, preserva o caminho completo configurado e envia a chave no cabeçalho `api-key`. O gateway precisa expor `POST <OPENAI_API_BASE>/responses` com streaming e tool calls; compatibilidade apenas com Chat Completions não é suficiente.
 
 Se o cliente `httpx`/`AzureChatOpenAI` usa `verify="arquivo.pem"`, selecione o mesmo bundle PEM na quinta etapa. O arquivo deve estar dentro do workspace. A extensão guarda apenas seu caminho relativo e passa o caminho absoluto ao processo local por `CODEX_CA_CERTIFICATE`, conforme o suporte oficial do Codex; o conteúdo do certificado não é copiado, enviado ao modelo ou incluído no VSIX.
+
+### Aviso `Model metadata not found`
+
+Esse aviso indica que o Deployment ID não foi encontrado no catálogo de modelos conhecido pelo Codex. O runtime continua com metadados de fallback, mas recursos como limites de contexto, opções de raciocínio e suporte a ferramentas podem ficar imprecisos.
+
+- Se o deployment usa o nome real de um modelo suportado, corrija o **Deployment ID** no formulário **Azure**.
+- Se ele é um alias criado pelo gateway corporativo, peça à equipe responsável um catálogo JSON compatível com a versão instalada do Codex e com o modelo real por trás do alias. No formulário **Azure**, use **Select JSON** em **Model metadata**. O arquivo permanece local e precisa estar dentro do workspace.
+
+Não invente os metadados do alias: eles devem corresponder ao modelo upstream. A estrutura e o processo de geração são descritos na documentação oficial em [Roll out a gateway — Add model metadata](https://learn.chatgpt.com/docs/enterprise/roll-out-a-gateway#add-model-metadata).
 
 A chave é solicitada como senha e guardada somente no Secret Storage do VS Code. Ela não é escrita em `settings.json`, `.env`, `config.toml`, logs ou arquivos do projeto.
 
@@ -96,7 +107,7 @@ npm run watch
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.2.4.vsix
+code --install-extension codex-dev-companion-0.3.0.vsix
 ```
 
 ## Memória
@@ -120,7 +131,7 @@ Não armazene credenciais, tokens, dados pessoais, hipóteses ou status transit�
 - Web search, serviços hospedados, atualização automática, login ChatGPT e credenciais OpenAI são desativados.
 - Analytics, exportadores OpenTelemetry, feedback, apps, plugins e servidores MCP são desativados explicitamente.
 - O processo Codex recebe um ambiente mínimo: variáveis essenciais do sistema, um `CODEX_HOME` isolado e somente a chave Azure.
-- O endpoint é validado como HTTPS e deve pertencer a um hostname Azure OpenAI reconhecido.
+- O endpoint é validado como HTTPS; hosts Azure são aceitos diretamente e gateways corporativos exigem confirmação explícita.
 - A única chamada externa em runtime é `Codex local → Azure OpenAI Responses API`.
 - A política de aprovação é `never` porque o SDK em modo não interativo não oferece uma interface de aprovação no meio do turno; o sandbox do workspace continua sendo a fronteira de execução.
 - Revise alterações antes de fazer commit e mantenha segredos fora do workspace.
@@ -134,6 +145,7 @@ Não armazene credenciais, tokens, dados pessoais, hipóteses ou status transit�
 | `codexDevCompanion.azureApiVersion` | `2025-04-01-preview` | Versão da Responses API no Azure. |
 | `codexDevCompanion.allowCorporateGateway` | `false` | Autoriza o host HTTPS configurado como gateway corporativo após confirmação explícita. |
 | `codexDevCompanion.corporateCaCertificatePath` | vazio | Caminho relativo, dentro do workspace, para o bundle CA `.pem` corporativo. |
+| `codexDevCompanion.modelCatalogPath` | vazio | Caminho relativo para um catálogo JSON local usado por aliases de deployment. |
 | `codexDevCompanion.reasoningEffort` | `high` | Define o esforço de raciocínio. |
 | `codexDevCompanion.autoContext` | `true` | Inclui contexto atual do editor. |
 | `codexDevCompanion.maxContextCharacters` | `24000` | Limita o contexto coletado pela extensão. |

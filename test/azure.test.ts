@@ -6,6 +6,7 @@ import {
   isRecognizedAzureOpenAIHost,
   normalizeAzureEndpoint,
   resolveWorkspaceCertificatePath,
+  resolveWorkspaceModelCatalogPath,
   validateAzureConnection
 } from "../src/azure";
 
@@ -115,6 +116,31 @@ test("keeps the corporate CA certificate inside the workspace", () => {
     () => resolveWorkspaceCertificatePath("/workspace/project", "certificate.crt"),
     /.pem extension/
   );
+});
+
+test("keeps a model catalog inside the workspace and passes it to Codex", () => {
+  assert.equal(
+    resolveWorkspaceModelCatalogPath("/workspace/project", ".codex/model-catalog.json"),
+    "/workspace/project/.codex/model-catalog.json"
+  );
+  assert.throws(
+    () => resolveWorkspaceModelCatalogPath("/workspace/project", "../model-catalog.json"),
+    /inside the opened workspace/
+  );
+  assert.throws(
+    () => resolveWorkspaceModelCatalogPath("/workspace/project", "model-catalog.toml"),
+    /.json extension/
+  );
+
+  const connection = validateAzureConnection({
+    endpoint: "https://gateway.example.com/ia/openai-azure/openai",
+    deployment: "corporate-codex-alias",
+    apiVersion: "2025-04-01-preview",
+    apiKey: "secret",
+    allowCorporateGateway: true
+  });
+  const config = buildAzureCodexConfig(connection, "/workspace/project/.codex/model-catalog.json");
+  assert.equal(config.model_catalog_json, "/workspace/project/.codex/model-catalog.json");
 });
 
 test("passes only an allowlisted local environment, the Azure credential, and an explicit CA", () => {

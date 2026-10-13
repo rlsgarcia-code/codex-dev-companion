@@ -144,11 +144,28 @@ export function resolveWorkspaceCertificatePath(
   return certificate;
 }
 
-export function buildAzureCodexConfig(connection: AzureConnection) {
+export function resolveWorkspaceModelCatalogPath(
+  workspaceRoot: string,
+  configuredPath: string
+): string {
+  const root = path.resolve(workspaceRoot);
+  const catalog = path.resolve(root, configuredPath.trim());
+  const relative = path.relative(root, catalog);
+  if (!configuredPath.trim() || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Model catalog must be a JSON file inside the opened workspace.");
+  }
+  if (path.extname(catalog).toLowerCase() !== ".json") {
+    throw new Error("Model catalog must use the .json extension.");
+  }
+  return catalog;
+}
+
+export function buildAzureCodexConfig(connection: AzureConnection, modelCatalogPath?: string) {
   const usesCorporateGateway = !isRecognizedAzureOpenAIHost(connection.endpoint);
   return {
     model: connection.deployment,
     model_provider: "azure",
+    ...(modelCatalogPath ? { model_catalog_json: modelCatalogPath } : {}),
     web_search: "disabled",
     check_for_update_on_startup: false,
     analytics: {

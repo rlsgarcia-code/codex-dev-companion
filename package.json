@@ -2,9 +2,13 @@
   "name": "codex-dev-companion",
   "displayName": "Codex Dev Companion",
   "description": "A context-aware development support agent powered by the OpenAI Codex harness.",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "publisher": "local",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rlsgarcia-code/codex-dev-companion.git"
+  },
   "engines": {
     "vscode": "^1.96.0",
     "node": ">=18"
@@ -109,6 +113,12 @@
           "default": "",
           "scope": "resource",
           "description": "Workspace-relative path to a corporate CA PEM bundle passed locally to Codex as CODEX_CA_CERTIFICATE."
+        },
+        "codexDevCompanion.modelCatalogPath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Workspace-relative path to an optional Codex model catalog JSON for custom deployment aliases."
         },
         "codexDevCompanion.reasoningEffort": {
           "type": "string",

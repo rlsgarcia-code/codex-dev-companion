@@ -14,6 +14,7 @@ import {
   buildAzureCodexConfig,
   buildIsolatedEnvironment,
   resolveWorkspaceCertificatePath,
+  resolveWorkspaceModelCatalogPath,
   validateAzureConnection
 } from "./azure";
 import { ContextCollector, renderContext } from "./context";
@@ -162,6 +163,7 @@ export class DevelopmentAgent implements vscode.Disposable {
     await vscode.workspace.fs.createDirectory(codexHome);
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     let caCertificatePath: string | undefined;
+    let modelCatalogPath: string | undefined;
     if (connection.allowCorporateGateway) {
       const configuredCertificate = configuration.get<string>("corporateCaCertificatePath", "").trim();
       if (configuredCertificate) {
@@ -185,8 +187,29 @@ export class DevelopmentAgent implements vscode.Disposable {
       }
     }
 
+    const configuredCatalog = configuration.get<string>("modelCatalogPath", "").trim();
+    if (configuredCatalog) {
+      if (!workspaceRoot) {
+        throw new Error("Open the workspace containing the model catalog.");
+      }
+      const candidate = resolveWorkspaceModelCatalogPath(workspaceRoot, configuredCatalog);
+      const [realWorkspace, realCatalog] = await Promise.all([
+        realpath(workspaceRoot),
+        realpath(candidate)
+      ]);
+      const relative = path.relative(realWorkspace, realCatalog);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        throw new Error("Model catalog must resolve to a file inside the opened workspace.");
+      }
+      const catalogStat = await vscode.workspace.fs.stat(vscode.Uri.file(realCatalog));
+      if ((catalogStat.type & vscode.FileType.File) === 0) {
+        throw new Error("Model catalog must be a JSON file.");
+      }
+      modelCatalogPath = realCatalog;
+    }
+
     return {
-      config: buildAzureCodexConfig(connection),
+      config: buildAzureCodexConfig(connection, modelCatalogPath),
       env: buildIsolatedEnvironment(connection.apiKey, codexHome.fsPath, process.env, caCertificatePath)
     };
   }
