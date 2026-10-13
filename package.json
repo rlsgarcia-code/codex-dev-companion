@@ -2,7 +2,7 @@
   "name": "codex-dev-companion",
   "displayName": "Codex Dev Companion",
   "description": "A context-aware development support agent powered by the OpenAI Codex harness.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -10,7 +10,7 @@
     "url": "https://github.com/rlsgarcia-code/codex-dev-companion.git"
   },
   "engines": {
-    "vscode": "^1.96.0",
+    "vscode": "^1.106.0",
     "node": ">=18"
   },
   "categories": [
@@ -26,7 +26,7 @@
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "codexDevCompanion",
           "title": "Codex Companion",
@@ -155,7 +155,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "@types/vscode": "^1.96.0",
+    "@types/vscode": "^1.106.0",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"

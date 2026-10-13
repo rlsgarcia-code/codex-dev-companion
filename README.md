@@ -6,7 +6,7 @@ O projeto usa o SDK oficial `@openai/codex-sdk`. O harness, shell, ferramentas, 
 
 ## O que já funciona
 
-- Painel lateral de conversa dentro do VS Code.
+- Chat na Secondary Sidebar, à direita do editor, ao lado de Copilot Chat e outros agentes.
 - Thread persistente por workspace, retomada automaticamente entre sessões.
 - Contexto automático: arquivo ativo, seleção, cursor, diagnósticos, arquivos abertos e amostra da árvore do projeto.
 - Contexto fixado pelo menu **Codex Companion: Add Selection to Context**.
@@ -26,7 +26,7 @@ O projeto usa o SDK oficial `@openai/codex-sdk`. O harness, shell, ferramentas, 
 ## Pré-requisitos
 
 - Node.js 18 ou superior.
-- Visual Studio Code 1.96 ou superior.
+- Visual Studio Code 1.106 ou superior.
 - Um deployment Azure OpenAI compatível com a Responses API.
 - Endpoint, nome do deployment, versão da API e chave do Azure OpenAI.
 
@@ -40,7 +40,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.3.0.vsix
+code --install-extension ./codex-dev-companion-0.4.0.vsix
 ```
 
 Execute esses comandos na própria máquina em que a extensão será usada. O `npm ci` instala o runtime nativo do Codex correspondente ao sistema operacional e à arquitetura atuais; por isso, um VSIX gerado no macOS não deve ser reutilizado no Windows ou Linux.
@@ -50,7 +50,7 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.3.0.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.4.0.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 ### Primeiro uso
@@ -58,7 +58,9 @@ Se o comando `code` não estiver disponível:
 1. Abra uma pasta de projeto no VS Code.
 2. Pressione `Ctrl/Cmd + Shift + P` e execute **Codex Companion: Configure Azure OpenAI**.
 3. Complete as quatro etapas numeradas usando o mapeamento abaixo.
-4. Abra o ícone **Codex Companion** na barra lateral.
+4. Abra o ícone **Codex Companion** na barra lateral direita, junto do Chat/Copilot.
+
+Em instalações novas, o Companion abre por padrão na **Secondary Sidebar**, à direita do editor. O VS Code preserva layouts personalizados; portanto, ao atualizar uma instalação anterior, use `View: Move View` na Command Palette e mova **Development Agent** para **Secondary Side Bar** caso ele continue à esquerda.
 
 Depois do primeiro setup, clique em **Azure** no rodapé da própria sidebar para alterar rapidamente **Deployment ID**, **API Version**, base e chave. Deixar o campo da chave vazio preserva o valor já guardado no Secret Storage. Use **Setup wizard / PEM** somente quando precisar trocar a CA corporativa ou revisar a configuração completa.
 
@@ -95,7 +97,7 @@ npm run build
 npm test
 ```
 
-Abra esta pasta no VS Code e pressione `F5`. Na janela **Extension Development Host**, abra uma pasta de código e clique no ícone **Codex Companion** na Activity Bar.
+Abra esta pasta no VS Code e pressione `F5`. Na janela **Extension Development Host**, abra uma pasta de código e clique no ícone **Codex Companion** na Secondary Sidebar.
 
 Para recompilar enquanto edita:
 
@@ -107,7 +109,7 @@ npm run watch
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.3.0.vsix
+code --install-extension codex-dev-companion-0.4.0.vsix
 ```
 
 ## Memória
@@ -153,7 +155,7 @@ Não armazene credenciais, tokens, dados pessoais, hipóteses ou status transit�
 ## Arquitetura
 
 ```text
-VS Code sidebar
+VS Code Secondary Sidebar (direita)
     │  prompt + editor context
     ▼
 Extension host
