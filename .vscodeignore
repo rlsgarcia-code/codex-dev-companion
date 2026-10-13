@@ -1,0 +1,17 @@
+.vscode/**
+.codex-agent/**
+src/**
+esbuild.mjs
+tsconfig.json
+tsconfig.test.json
+test/**
+scripts/**
+package-lock.json
+AGENTS.md
+CHANGELOG.md
+*.vsix
+dist/**/*.map
+dist-tests/**
+.gitignore
+node_modules/@openai/codex-*/vendor/**/bin/codex-code-mode-host*
+node_modules/@openai/codex-*/vendor/**/codex-resources/**

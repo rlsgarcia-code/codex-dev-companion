@@ -1,0 +1,142 @@
+{
+  "name": "codex-dev-companion",
+  "displayName": "Codex Dev Companion",
+  "description": "A context-aware development support agent powered by the OpenAI Codex harness.",
+  "version": "0.2.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:codexDevCompanion.chat",
+    "onCommand:codexDevCompanion.open",
+    "onCommand:codexDevCompanion.newThread",
+    "onCommand:codexDevCompanion.configureAzure"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codexDevCompanion",
+          "title": "Codex Companion",
+          "icon": "media/codex-companion.svg"
+        }
+      ]
+    },
+    "views": {
+      "codexDevCompanion": [
+        {
+          "type": "webview",
+          "id": "codexDevCompanion.chat",
+          "name": "Development Agent"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "codexDevCompanion.open",
+        "title": "Codex Companion: Open Agent"
+      },
+      {
+        "command": "codexDevCompanion.newThread",
+        "title": "Codex Companion: New Thread"
+      },
+      {
+        "command": "codexDevCompanion.addSelection",
+        "title": "Codex Companion: Add Selection to Context"
+      },
+      {
+        "command": "codexDevCompanion.remember",
+        "title": "Codex Companion: Remember Note"
+      },
+      {
+        "command": "codexDevCompanion.configureAzure",
+        "title": "Codex Companion: Configure Azure OpenAI"
+      },
+      {
+        "command": "codexDevCompanion.clearAzureKey",
+        "title": "Codex Companion: Remove Azure OpenAI Key"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "codexDevCompanion.addSelection",
+          "group": "navigation@50",
+          "when": "editorHasSelection"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "codexDevCompanion.newThread",
+          "when": "view == codexDevCompanion.chat",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Codex Dev Companion",
+      "properties": {
+        "codexDevCompanion.azureEndpoint": {
+          "type": "string",
+          "default": "",
+          "description": "Azure OpenAI base endpoint. The extension accepts only recognized Azure HTTPS hostnames."
+        },
+        "codexDevCompanion.azureDeployment": {
+          "type": "string",
+          "default": "",
+          "description": "Azure OpenAI deployment name used by the Responses API."
+        },
+        "codexDevCompanion.azureApiVersion": {
+          "type": "string",
+          "default": "2025-04-01-preview",
+          "description": "Azure OpenAI Responses API version."
+        },
+        "codexDevCompanion.reasoningEffort": {
+          "type": "string",
+          "enum": ["minimal", "low", "medium", "high", "xhigh"],
+          "default": "high",
+          "description": "Reasoning effort used by the development agent."
+        },
+        "codexDevCompanion.autoContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include the active file, selection, diagnostics and workspace summary with each request."
+        },
+        "codexDevCompanion.maxContextCharacters": {
+          "type": "number",
+          "default": 24000,
+          "minimum": 2000,
+          "maximum": 100000,
+          "description": "Maximum number of characters collected from the editor for one request."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "check": "tsc --noEmit",
+    "test": "npm run compile:tests && node --test dist-tests/test/**/*.test.js",
+    "compile:tests": "tsc -p tsconfig.test.json",
+    "smoke:azure": "npm run compile:tests && node scripts/smoke-azure-routing.mjs",
+    "package": "npm run check && npm run build && vsce package"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "0.162.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}
