@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Turned Azure configuration into an explicit four-step flow with inline validation.
+- Added clear cancellation feedback and support for retaining an existing secret key.
+
 ## 0.2.0
 
 - Enforced a fully local Codex runtime with Azure OpenAI as the only external model endpoint.

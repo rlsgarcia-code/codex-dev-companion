@@ -40,7 +40,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.2.0.vsix
+code --install-extension ./codex-dev-companion-0.2.1.vsix
 ```
 
 Execute esses comandos na própria máquina em que a extensão será usada. O `npm ci` instala o runtime nativo do Codex correspondente ao sistema operacional e à arquitetura atuais; por isso, um VSIX gerado no macOS não deve ser reutilizado no Windows ou Linux.
@@ -50,14 +50,14 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.2.0.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.2.1.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 ### Primeiro uso
 
 1. Abra uma pasta de projeto no VS Code.
 2. Pressione `Ctrl/Cmd + Shift + P` e execute **Codex Companion: Configure Azure OpenAI**.
-3. Informe o endpoint Azure, o nome exato do deployment, a versão da API e a chave.
+3. Complete as quatro etapas numeradas: endpoint, nome exato do deployment, versão da API e chave.
 4. Abra o ícone **Codex Companion** na barra lateral.
 
 A chave é solicitada como senha e guardada somente no Secret Storage do VS Code. Ela não é escrita em `settings.json`, `.env`, `config.toml`, logs ou arquivos do projeto.
@@ -83,7 +83,7 @@ npm run watch
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.2.0.vsix
+code --install-extension codex-dev-companion-0.2.1.vsix
 ```
 
 ## Memória

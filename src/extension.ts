@@ -35,55 +35,84 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("codexDevCompanion.configureAzure", async () => {
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const existingApiKey = await context.secrets.get(AZURE_API_KEY_SECRET);
       const endpointInput = await vscode.window.showInputBox({
-        title: "Azure OpenAI endpoint",
+        title: "Azure OpenAI setup (1/4) — Endpoint",
         prompt: "Only this HTTPS endpoint will receive model requests.",
         value: configuration.get<string>("azureEndpoint", ""),
         placeHolder: "https://your-resource.openai.azure.com/openai",
-        ignoreFocusOut: true
+        ignoreFocusOut: true,
+        validateInput: (value) => {
+          try {
+            normalizeAzureEndpoint(value);
+            return undefined;
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        }
       });
-      if (endpointInput === undefined) return;
-
-      let endpoint: string;
-      try {
-        endpoint = normalizeAzureEndpoint(endpointInput);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        void vscode.window.showErrorMessage(message);
+      if (endpointInput === undefined) {
+        void vscode.window.showInformationMessage("Azure OpenAI setup cancelled at step 1/4. No changes were saved.");
         return;
       }
 
+      const endpoint = normalizeAzureEndpoint(endpointInput);
       const deployment = await vscode.window.showInputBox({
-        title: "Azure OpenAI deployment",
-        prompt: "Enter the Azure deployment name used by the Responses API.",
+        title: "Azure OpenAI setup (2/4) — Deployment",
+        prompt: "Enter the exact Azure deployment name used by the Responses API.",
         value: configuration.get<string>("azureDeployment", ""),
-        ignoreFocusOut: true
+        placeHolder: "my-codex-deployment",
+        ignoreFocusOut: true,
+        validateInput: (value) => value.trim() ? undefined : "Azure OpenAI deployment name is required."
       });
-      if (deployment === undefined || !deployment.trim()) return;
+      if (deployment === undefined) {
+        void vscode.window.showInformationMessage("Azure OpenAI setup cancelled at step 2/4. No changes were saved.");
+        return;
+      }
 
       const apiVersion = await vscode.window.showInputBox({
-        title: "Azure OpenAI API version",
+        title: "Azure OpenAI setup (3/4) — API version",
+        prompt: "Enter an Azure API version that supports the Responses API.",
         value: configuration.get<string>("azureApiVersion", "2025-04-01-preview"),
-        ignoreFocusOut: true
+        ignoreFocusOut: true,
+        validateInput: (value) => value.trim() ? undefined : "Azure OpenAI API version is required."
       });
-      if (apiVersion === undefined || !apiVersion.trim()) return;
+      if (apiVersion === undefined) {
+        void vscode.window.showInformationMessage("Azure OpenAI setup cancelled at step 3/4. No changes were saved.");
+        return;
+      }
 
       const apiKey = await vscode.window.showInputBox({
-        title: "Azure OpenAI API key",
-        prompt: "Stored in VS Code Secret Storage, never in settings or the repository.",
+        title: "Azure OpenAI setup (4/4) — API key",
+        prompt: existingApiKey
+          ? "Enter a replacement key, or leave blank to keep the key already stored in VS Code Secret Storage."
+          : "Stored in VS Code Secret Storage, never in settings or the repository.",
         password: true,
-        ignoreFocusOut: true
+        ignoreFocusOut: true,
+        validateInput: (value) => value.trim() || existingApiKey
+          ? undefined
+          : "Azure OpenAI API key is required."
       });
-      if (apiKey === undefined || !apiKey.trim()) return;
+      if (apiKey === undefined) {
+        void vscode.window.showInformationMessage("Azure OpenAI setup cancelled at step 4/4. No changes were saved.");
+        return;
+      }
+      const resolvedApiKey = apiKey.trim() || existingApiKey;
+      if (!resolvedApiKey) {
+        void vscode.window.showErrorMessage("Azure OpenAI API key is required.");
+        return;
+      }
 
       await Promise.all([
         configuration.update("azureEndpoint", endpoint, vscode.ConfigurationTarget.Global),
         configuration.update("azureDeployment", deployment.trim(), vscode.ConfigurationTarget.Global),
         configuration.update("azureApiVersion", apiVersion.trim(), vscode.ConfigurationTarget.Global),
-        context.secrets.store(AZURE_API_KEY_SECRET, apiKey.trim())
+        context.secrets.store(AZURE_API_KEY_SECRET, resolvedApiKey)
       ]);
       await agent.reloadAzureConfiguration();
-      void vscode.window.showInformationMessage("Azure OpenAI configured. Codex will use the isolated local runtime.");
+      void vscode.window.showInformationMessage(
+        `Azure OpenAI configured for deployment “${deployment.trim()}”. Codex will use the isolated local runtime.`
+      );
     }),
     vscode.commands.registerCommand("codexDevCompanion.clearAzureKey", async () => {
       await context.secrets.delete(AZURE_API_KEY_SECRET);
