@@ -4,3 +4,4 @@ dist-tests/
 *.vsix
 .DS_Store
 .codex-agent/session.json
+*.pem

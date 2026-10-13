@@ -40,7 +40,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.2.2.vsix
+code --install-extension ./codex-dev-companion-0.2.4.vsix
 ```
 
 Execute esses comandos na própria máquina em que a extensão será usada. O `npm ci` instala o runtime nativo do Codex correspondente ao sistema operacional e à arquitetura atuais; por isso, um VSIX gerado no macOS não deve ser reutilizado no Windows ou Linux.
@@ -50,7 +50,7 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.2.2.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.2.4.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 ### Primeiro uso
@@ -68,6 +68,10 @@ Se o comando `code` não estiver disponível:
 | API Key | **API key** | Chave do recurso Azure OpenAI |
 
 Se seu `OPENAI_API_BASE` terminar em `/openai/deployments/<id>`, informe somente a parte até `/openai`; o Deployment ID é preenchido separadamente. A extensão não instancia nem recebe um objeto `AzureChatOpenAI`: ela aplica esses mesmos quatro valores diretamente ao provider Azure do Codex SDK.
+
+Gateways corporativos HTTPS também são aceitos. Quando o host não pertence diretamente ao Azure, a extensão exige uma confirmação explícita, preserva o caminho completo configurado e envia a chave no cabeçalho `api-key`. O gateway precisa expor `POST <OPENAI_API_BASE>/responses` com streaming e tool calls; compatibilidade apenas com Chat Completions não é suficiente.
+
+Se o cliente `httpx`/`AzureChatOpenAI` usa `verify="arquivo.pem"`, selecione o mesmo bundle PEM na quinta etapa. O arquivo deve estar dentro do workspace. A extensão guarda apenas seu caminho relativo e passa o caminho absoluto ao processo local por `CODEX_CA_CERTIFICATE`, conforme o suporte oficial do Codex; o conteúdo do certificado não é copiado, enviado ao modelo ou incluído no VSIX.
 
 A chave é solicitada como senha e guardada somente no Secret Storage do VS Code. Ela não é escrita em `settings.json`, `.env`, `config.toml`, logs ou arquivos do projeto.
 
@@ -92,7 +96,7 @@ npm run watch
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.2.2.vsix
+code --install-extension codex-dev-companion-0.2.4.vsix
 ```
 
 ## Memória
@@ -128,6 +132,8 @@ Não armazene credenciais, tokens, dados pessoais, hipóteses ou status transit�
 | `codexDevCompanion.azureEndpoint` | vazio | OpenAI API Base HTTPS do Azure terminando em `/openai`. |
 | `codexDevCompanion.azureDeployment` | vazio | Deployment ID Azure usado como modelo. |
 | `codexDevCompanion.azureApiVersion` | `2025-04-01-preview` | Versão da Responses API no Azure. |
+| `codexDevCompanion.allowCorporateGateway` | `false` | Autoriza o host HTTPS configurado como gateway corporativo após confirmação explícita. |
+| `codexDevCompanion.corporateCaCertificatePath` | vazio | Caminho relativo, dentro do workspace, para o bundle CA `.pem` corporativo. |
 | `codexDevCompanion.reasoningEffort` | `high` | Define o esforço de raciocínio. |
 | `codexDevCompanion.autoContext` | `true` | Inclui contexto atual do editor. |
 | `codexDevCompanion.maxContextCharacters` | `24000` | Limita o contexto coletado pela extensão. |

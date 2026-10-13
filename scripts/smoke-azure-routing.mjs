@@ -65,7 +65,8 @@ try {
   assert.equal(requests.length, 1);
   assert.equal(requests[0].method, "POST");
   assert.equal(requests[0].url, "/openai/responses?api-version=smoke-version");
-  assert.equal(requests[0].headers.authorization, "Bearer azure-smoke-key");
+  assert.equal(requests[0].headers["api-key"], "azure-smoke-key");
+  assert.equal(requests[0].headers.authorization, undefined);
   console.log("AZURE_LOCAL_ROUTING_OK");
 } finally {
   await new Promise((resolve) => server.close(resolve));

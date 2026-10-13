@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.4
+
+- Added workspace-scoped corporate CA PEM selection for Azure gateways.
+- Pass the selected certificate to the local Codex runtime through `CODEX_CA_CERTIFICATE`.
+- Reject certificate paths and symbolic links that resolve outside the opened workspace.
+
+## 0.2.3
+
+- Added explicit support for HTTPS corporate gateways that route to Azure OpenAI.
+- Preserve gateway API paths and send Azure credentials through the `api-key` header.
+- Require a modal confirmation before trusting a non-Azure hostname.
+
 ## 0.2.2
 
 - Aligned Azure setup labels with existing `AzureChatOpenAI` values: OpenAI API Base, Deployment ID, API Version, and API Key.

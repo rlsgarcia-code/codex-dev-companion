@@ -1,3 +1,5 @@
+import { realpath } from "node:fs/promises";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import type {
   Codex as CodexType,
@@ -11,6 +13,7 @@ import {
   AZURE_API_KEY_SECRET,
   buildAzureCodexConfig,
   buildIsolatedEnvironment,
+  resolveWorkspaceCertificatePath,
   validateAzureConnection
 } from "./azure";
 import { ContextCollector, renderContext } from "./context";
@@ -149,17 +152,42 @@ export class DevelopmentAgent implements vscode.Disposable {
       endpoint: configuration.get<string>("azureEndpoint", ""),
       deployment: configuration.get<string>("azureDeployment", ""),
       apiVersion: configuration.get<string>("azureApiVersion", "2025-04-01-preview"),
-      apiKey: apiKey ?? ""
+      apiKey: apiKey ?? "",
+      allowCorporateGateway: configuration.get<boolean>("allowCorporateGateway", false)
     });
     const codexHome = vscode.Uri.joinPath(
       this.extensionContext.globalStorageUri,
       "local-codex-home"
     );
     await vscode.workspace.fs.createDirectory(codexHome);
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    let caCertificatePath: string | undefined;
+    if (connection.allowCorporateGateway) {
+      const configuredCertificate = configuration.get<string>("corporateCaCertificatePath", "").trim();
+      if (configuredCertificate) {
+        if (!workspaceRoot) {
+          throw new Error("Open the workspace containing the corporate CA certificate.");
+        }
+        const candidate = resolveWorkspaceCertificatePath(workspaceRoot, configuredCertificate);
+        const [realWorkspace, realCertificate] = await Promise.all([
+          realpath(workspaceRoot),
+          realpath(candidate)
+        ]);
+        const relative = path.relative(realWorkspace, realCertificate);
+        if (relative.startsWith("..") || path.isAbsolute(relative)) {
+          throw new Error("Corporate CA certificate must resolve to a file inside the opened workspace.");
+        }
+        const certificateStat = await vscode.workspace.fs.stat(vscode.Uri.file(realCertificate));
+        if ((certificateStat.type & vscode.FileType.File) === 0) {
+          throw new Error("Corporate CA certificate must be a .pem file.");
+        }
+        caCertificatePath = realCertificate;
+      }
+    }
 
     return {
       config: buildAzureCodexConfig(connection),
-      env: buildIsolatedEnvironment(connection.apiKey, codexHome.fsPath)
+      env: buildIsolatedEnvironment(connection.apiKey, codexHome.fsPath, process.env, caCertificatePath)
     };
   }
 

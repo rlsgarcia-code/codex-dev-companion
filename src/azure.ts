@@ -7,6 +7,7 @@ export type AzureConnection = {
   deployment: string;
   apiVersion: string;
   apiKey: string;
+  allowCorporateGateway?: boolean;
 };
 
 const AZURE_HOST_SUFFIXES = [
@@ -36,7 +37,16 @@ const SAFE_ENVIRONMENT_KEYS = [
   "PATHEXT"
 ] as const;
 
-export function normalizeAzureEndpoint(value: string): string {
+export function isRecognizedAzureOpenAIHost(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+    return AZURE_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeAzureEndpoint(value: string, allowCorporateGateway = false): string {
   const raw = value.trim();
   let url: URL;
   try {
@@ -47,21 +57,29 @@ export function normalizeAzureEndpoint(value: string): string {
   if (url.protocol !== "https:") {
     throw new Error("Azure OpenAI endpoint must use HTTPS.");
   }
+  if (url.username || url.password) {
+    throw new Error("OpenAI API Base must not contain credentials in the URL.");
+  }
   const hostname = url.hostname.toLowerCase();
-  if (!AZURE_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix))) {
+  const isAzureHost = AZURE_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+  if (!isAzureHost && !allowCorporateGateway) {
     throw new Error(
-      "Endpoint must be an Azure OpenAI hostname (*.openai.azure.com, *.services.ai.azure.com, or *.cognitiveservices.azure.com)."
+      "Endpoint is not a recognized Azure OpenAI host. Reconfigure it and explicitly approve the corporate gateway."
     );
   }
-  const pathname = url.pathname.replace(/\/+$/, "").toLowerCase();
-  if (!pathname) {
+  const pathname = url.pathname.replace(/\/+$/, "");
+  if (isAzureHost && !pathname) {
     url.pathname = "/openai";
-  } else if (pathname === "/openai") {
+  } else if (isAzureHost && pathname.toLowerCase() === "/openai") {
     url.pathname = "/openai";
-  } else {
+  } else if (isAzureHost) {
     throw new Error(
       "OpenAI API Base must end at /openai and must not include /deployments/<id>, /responses, or another API route."
     );
+  } else if (!pathname) {
+    throw new Error("Corporate gateway OpenAI API Base must include its API path.");
+  } else {
+    url.pathname = pathname;
   }
   url.search = "";
   url.hash = "";
@@ -82,7 +100,7 @@ export function validateAzureConnection(connection: AzureConnection): AzureConne
     throw new Error("Azure OpenAI API key is required.");
   }
   return {
-    endpoint: normalizeAzureEndpoint(connection.endpoint),
+    endpoint: normalizeAzureEndpoint(connection.endpoint, connection.allowCorporateGateway),
     deployment,
     apiVersion,
     apiKey
@@ -92,7 +110,8 @@ export function validateAzureConnection(connection: AzureConnection): AzureConne
 export function buildIsolatedEnvironment(
   apiKey: string,
   codexHome: string,
-  source: NodeJS.ProcessEnv = process.env
+  source: NodeJS.ProcessEnv = process.env,
+  caCertificatePath?: string
 ): Record<string, string> {
   const environment: Record<string, string> = {};
   for (const key of SAFE_ENVIRONMENT_KEYS) {
@@ -103,10 +122,30 @@ export function buildIsolatedEnvironment(
   }
   environment.CODEX_HOME = path.resolve(codexHome);
   environment.AZURE_OPENAI_API_KEY = apiKey;
+  if (caCertificatePath) {
+    environment.CODEX_CA_CERTIFICATE = path.resolve(caCertificatePath);
+  }
   return environment;
 }
 
+export function resolveWorkspaceCertificatePath(
+  workspaceRoot: string,
+  configuredPath: string
+): string {
+  const root = path.resolve(workspaceRoot);
+  const certificate = path.resolve(root, configuredPath.trim());
+  const relative = path.relative(root, certificate);
+  if (!configuredPath.trim() || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Corporate CA certificate must be a .pem file inside the opened workspace.");
+  }
+  if (path.extname(certificate).toLowerCase() !== ".pem") {
+    throw new Error("Corporate CA certificate must use the .pem extension.");
+  }
+  return certificate;
+}
+
 export function buildAzureCodexConfig(connection: AzureConnection) {
+  const usesCorporateGateway = !isRecognizedAzureOpenAIHost(connection.endpoint);
   return {
     model: connection.deployment,
     model_provider: "azure",
@@ -153,7 +192,9 @@ export function buildAzureCodexConfig(connection: AzureConnection) {
       azure: {
         name: "Azure OpenAI",
         base_url: connection.endpoint,
-        env_key: "AZURE_OPENAI_API_KEY",
+        ...(usesCorporateGateway
+          ? { env_http_headers: { "api-key": "AZURE_OPENAI_API_KEY" } }
+          : { env_key: "AZURE_OPENAI_API_KEY" }),
         query_params: { "api-version": connection.apiVersion },
         wire_api: "responses",
         requires_openai_auth: false,

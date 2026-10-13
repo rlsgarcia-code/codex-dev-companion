@@ -2,7 +2,7 @@
   "name": "codex-dev-companion",
   "displayName": "Codex Dev Companion",
   "description": "A context-aware development support agent powered by the OpenAI Codex harness.",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -98,6 +98,17 @@
           "type": "string",
           "default": "2025-04-01-preview",
           "description": "Azure OpenAI Responses API version."
+        },
+        "codexDevCompanion.allowCorporateGateway": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow the explicitly configured non-Azure HTTPS host as a corporate gateway to Azure OpenAI. Set automatically only after user confirmation."
+        },
+        "codexDevCompanion.corporateCaCertificatePath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Workspace-relative path to a corporate CA PEM bundle passed locally to Codex as CODEX_CA_CERTIFICATE."
         },
         "codexDevCompanion.reasoningEffort": {
           "type": "string",
