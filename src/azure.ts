@@ -53,8 +53,15 @@ export function normalizeAzureEndpoint(value: string): string {
       "Endpoint must be an Azure OpenAI hostname (*.openai.azure.com, *.services.ai.azure.com, or *.cognitiveservices.azure.com)."
     );
   }
-  if (!url.pathname || url.pathname === "/") {
+  const pathname = url.pathname.replace(/\/+$/, "").toLowerCase();
+  if (!pathname) {
     url.pathname = "/openai";
+  } else if (pathname === "/openai") {
+    url.pathname = "/openai";
+  } else {
+    throw new Error(
+      "OpenAI API Base must end at /openai and must not include /deployments/<id>, /responses, or another API route."
+    );
   }
   url.search = "";
   url.hash = "";

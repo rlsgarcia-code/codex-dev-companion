@@ -16,11 +16,19 @@ test("normalizes a recognized Azure OpenAI endpoint", () => {
     normalizeAzureEndpoint("https://example.openai.azure.com/openai?ignored=true"),
     "https://example.openai.azure.com/openai"
   );
+  assert.equal(
+    normalizeAzureEndpoint("https://example.openai.azure.com/openai/"),
+    "https://example.openai.azure.com/openai"
+  );
 });
 
-test("rejects non-Azure and non-HTTPS endpoints", () => {
+test("rejects non-Azure, non-HTTPS, and deployment-specific API bases", () => {
   assert.throws(() => normalizeAzureEndpoint("https://api.openai.com/v1"), /Azure OpenAI hostname/);
   assert.throws(() => normalizeAzureEndpoint("http://example.openai.azure.com"), /HTTPS/);
+  assert.throws(
+    () => normalizeAzureEndpoint("https://example.openai.azure.com/openai/deployments/coding"),
+    /must not include \/deployments/
+  );
 });
 
 test("builds a Responses-only Azure provider with every external integration disabled", () => {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Aligned Azure setup labels with existing `AzureChatOpenAI` values: OpenAI API Base, Deployment ID, API Version, and API Key.
+- Reject deployment-specific URLs so Codex can construct the Azure Responses route correctly.
+
 ## 0.2.1
 
 - Turned Azure configuration into an explicit four-step flow with inline validation.

@@ -2,7 +2,7 @@
   "name": "codex-dev-companion",
   "displayName": "Codex Dev Companion",
   "description": "A context-aware development support agent powered by the OpenAI Codex harness.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -87,12 +87,12 @@
         "codexDevCompanion.azureEndpoint": {
           "type": "string",
           "default": "",
-          "description": "Azure OpenAI base endpoint. The extension accepts only recognized Azure HTTPS hostnames."
+          "description": "Azure OpenAI API base ending at /openai. Do not include /deployments/<id> or /responses."
         },
         "codexDevCompanion.azureDeployment": {
           "type": "string",
           "default": "",
-          "description": "Azure OpenAI deployment name used by the Responses API."
+          "description": "Azure OpenAI deployment ID used by the Responses API."
         },
         "codexDevCompanion.azureApiVersion": {
           "type": "string",

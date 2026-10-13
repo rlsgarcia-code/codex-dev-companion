@@ -37,8 +37,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       const existingApiKey = await context.secrets.get(AZURE_API_KEY_SECRET);
       const endpointInput = await vscode.window.showInputBox({
-        title: "Azure OpenAI setup (1/4) — Endpoint",
-        prompt: "Only this HTTPS endpoint will receive model requests.",
+        title: "Azure OpenAI setup (1/4) — OpenAI API Base",
+        prompt: "Paste OPENAI_API_BASE. Use the resource URL ending at /openai, without /deployments/<id>.",
         value: configuration.get<string>("azureEndpoint", ""),
         placeHolder: "https://your-resource.openai.azure.com/openai",
         ignoreFocusOut: true,
@@ -58,12 +58,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const endpoint = normalizeAzureEndpoint(endpointInput);
       const deployment = await vscode.window.showInputBox({
-        title: "Azure OpenAI setup (2/4) — Deployment",
-        prompt: "Enter the exact Azure deployment name used by the Responses API.",
+        title: "Azure OpenAI setup (2/4) — Deployment ID",
+        prompt: "Paste the exact deployment ID used by your Azure OpenAI resource.",
         value: configuration.get<string>("azureDeployment", ""),
         placeHolder: "my-codex-deployment",
         ignoreFocusOut: true,
-        validateInput: (value) => value.trim() ? undefined : "Azure OpenAI deployment name is required."
+        validateInput: (value) => value.trim() ? undefined : "Azure OpenAI deployment ID is required."
       });
       if (deployment === undefined) {
         void vscode.window.showInformationMessage("Azure OpenAI setup cancelled at step 2/4. No changes were saved.");

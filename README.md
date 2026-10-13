@@ -40,7 +40,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.2.1.vsix
+code --install-extension ./codex-dev-companion-0.2.2.vsix
 ```
 
 Execute esses comandos na própria máquina em que a extensão será usada. O `npm ci` instala o runtime nativo do Codex correspondente ao sistema operacional e à arquitetura atuais; por isso, um VSIX gerado no macOS não deve ser reutilizado no Windows ou Linux.
@@ -50,15 +50,24 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.2.1.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.2.2.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 ### Primeiro uso
 
 1. Abra uma pasta de projeto no VS Code.
 2. Pressione `Ctrl/Cmd + Shift + P` e execute **Codex Companion: Configure Azure OpenAI**.
-3. Complete as quatro etapas numeradas: endpoint, nome exato do deployment, versão da API e chave.
+3. Complete as quatro etapas numeradas usando o mapeamento abaixo.
 4. Abra o ícone **Codex Companion** na barra lateral.
+
+| Variável que você já possui | Campo da extensão | Formato esperado |
+| --- | --- | --- |
+| `OPENAI_API_BASE` | **OpenAI API Base** | `https://seu-recurso.openai.azure.com/openai` |
+| Deployment ID | **Deployment ID** | Nome exato do deployment, sem URL |
+| API Version | **API version** | Por exemplo, `2025-04-01-preview` |
+| API Key | **API key** | Chave do recurso Azure OpenAI |
+
+Se seu `OPENAI_API_BASE` terminar em `/openai/deployments/<id>`, informe somente a parte até `/openai`; o Deployment ID é preenchido separadamente. A extensão não instancia nem recebe um objeto `AzureChatOpenAI`: ela aplica esses mesmos quatro valores diretamente ao provider Azure do Codex SDK.
 
 A chave é solicitada como senha e guardada somente no Secret Storage do VS Code. Ela não é escrita em `settings.json`, `.env`, `config.toml`, logs ou arquivos do projeto.
 
@@ -83,7 +92,7 @@ npm run watch
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.2.1.vsix
+code --install-extension codex-dev-companion-0.2.2.vsix
 ```
 
 ## Memória
@@ -116,8 +125,8 @@ Não armazene credenciais, tokens, dados pessoais, hipóteses ou status transit�
 
 | Configuração | Padrão | Finalidade |
 | --- | --- | --- |
-| `codexDevCompanion.azureEndpoint` | vazio | Endpoint HTTPS do Azure OpenAI. |
-| `codexDevCompanion.azureDeployment` | vazio | Nome do deployment Azure usado como modelo. |
+| `codexDevCompanion.azureEndpoint` | vazio | OpenAI API Base HTTPS do Azure terminando em `/openai`. |
+| `codexDevCompanion.azureDeployment` | vazio | Deployment ID Azure usado como modelo. |
 | `codexDevCompanion.azureApiVersion` | `2025-04-01-preview` | Versão da Responses API no Azure. |
 | `codexDevCompanion.reasoningEffort` | `high` | Define o esforço de raciocínio. |
 | `codexDevCompanion.autoContext` | `true` | Inclui contexto atual do editor. |
