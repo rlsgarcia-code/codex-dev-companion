@@ -40,7 +40,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.4.0.vsix
+code --install-extension ./codex-dev-companion-0.4.1.vsix
 ```
 
 Execute esses comandos na própria máquina em que a extensão será usada. O `npm ci` instala o runtime nativo do Codex correspondente ao sistema operacional e à arquitetura atuais; por isso, um VSIX gerado no macOS não deve ser reutilizado no Windows ou Linux.
@@ -50,7 +50,7 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.4.0.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.4.1.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 ### Primeiro uso
@@ -109,7 +109,7 @@ npm run watch
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.4.0.vsix
+code --install-extension codex-dev-companion-0.4.1.vsix
 ```
 
 ## Memória

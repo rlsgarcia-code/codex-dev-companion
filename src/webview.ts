@@ -102,7 +102,14 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.agent.cancel();
         break;
       case "newThread":
-        await this.newThread();
+        try {
+          await this.newThread();
+        } catch (error) {
+          this.post({
+            type: "newThreadError",
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
         break;
       case "remember":
         await this.remember(message.text);
@@ -437,6 +444,7 @@ button { color: inherit; }
 h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; }
 .icon-button { border: 0; background: transparent; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 18px; opacity: .7; transition: opacity .15s, background .15s; }
 .icon-button:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
+.icon-button:disabled { cursor: default; opacity: .3; }
 .presence { display: flex; align-items: center; gap: 8px; padding: 9px 18px; color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--line); }
 .signal { width: 7px; height: 7px; border-radius: 50%; background: #6ddc72; box-shadow: 0 0 0 3px color-mix(in srgb, #6ddc72 16%, transparent); }
 .signal.busy { background: var(--accent); animation: pulse 1.2s infinite; }
@@ -510,7 +518,7 @@ select, .cancel { border: 0; border-radius: 5px; color: var(--muted); background
 const script = String.raw`
 const vscode = acquireVsCodeApi();
 const timeline = document.getElementById('timeline');
-const welcome = document.getElementById('welcome');
+const welcomeMarkup = timeline.innerHTML;
 const prompt = document.getElementById('prompt');
 const send = document.getElementById('send');
 const cancel = document.getElementById('cancel');
@@ -524,6 +532,7 @@ const azureDeployment = document.getElementById('azure-deployment');
 const azureApiVersion = document.getElementById('azure-api-version');
 const azureApiKey = document.getElementById('azure-api-key');
 const azureSettingsError = document.getElementById('azure-settings-error');
+const newThreadButton = document.getElementById('new-thread');
 let busy = false;
 
 function escapeHtml(value) {
@@ -546,7 +555,7 @@ function renderText(value) {
 }
 
 function appendMessage(message) {
-  welcome?.remove();
+  document.getElementById('welcome')?.remove();
   const element = document.createElement('article');
   element.className = 'message ' + message.role;
   element.innerHTML = '<div class="message-role">' + (message.role === 'user' ? 'YOU' : 'CODEX') + '</div>' +
@@ -611,9 +620,32 @@ function saveAzureSettings() {
   });
 }
 
+function wireStarterButtons() {
+  document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => {
+    prompt.value = button.dataset.prompt;
+    prompt.focus();
+  }));
+}
+
+function resetConversation() {
+  timeline.innerHTML = welcomeMarkup;
+  plan.classList.add('hidden');
+  planItems.innerHTML = '';
+  prompt.value = '';
+  newThreadButton.disabled = false;
+  setBusy(false);
+  status.textContent = 'Ready';
+  wireStarterButtons();
+}
+
 send.addEventListener('click', submit);
 cancel.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
-document.getElementById('new-thread').addEventListener('click', () => vscode.postMessage({ type: 'newThread' }));
+newThreadButton.addEventListener('click', () => {
+  if (newThreadButton.disabled) return;
+  newThreadButton.disabled = true;
+  status.textContent = 'Starting a new thread';
+  vscode.postMessage({ type: 'newThread' });
+});
 document.getElementById('memory').addEventListener('click', () => vscode.postMessage({ type: 'openMemory' }));
 document.getElementById('azure').addEventListener('click', () => azureSettings.classList.contains('hidden') ? openAzureSettings() : azureSettings.classList.add('hidden'));
 document.getElementById('azure-close').addEventListener('click', () => azureSettings.classList.add('hidden'));
@@ -624,9 +656,7 @@ document.getElementById('clear-model-catalog').addEventListener('click', () => v
 prompt.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
 });
-document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => {
-  prompt.value = button.dataset.prompt; prompt.focus();
-}));
+wireStarterButtons();
 
 window.addEventListener('message', ({ data }) => {
   switch (data.type) {
@@ -658,7 +688,15 @@ window.addEventListener('message', ({ data }) => {
     case 'usage': status.textContent = 'Ready · ' + data.input + ' in / ' + data.output + ' out'; break;
     case 'error':
       const error = document.createElement('div'); error.className = 'error'; error.textContent = data.message; timeline.appendChild(error); break;
-    case 'reset': location.reload(); break;
+    case 'reset': resetConversation(); break;
+    case 'newThreadError':
+      newThreadButton.disabled = false;
+      status.textContent = 'New thread failed';
+      const threadError = document.createElement('div');
+      threadError.className = 'error';
+      threadError.textContent = data.message;
+      timeline.appendChild(threadError);
+      break;
     case 'contextPinned':
       document.getElementById('active-file').textContent = 'Pinned: ' + data.filename; break;
     case 'toast': status.textContent = data.message; break;
