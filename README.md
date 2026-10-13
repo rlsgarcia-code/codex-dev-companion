@@ -30,6 +30,38 @@ O projeto usa o SDK oficial `@openai/codex-sdk`. O harness, shell, ferramentas, 
 - Um deployment Azure OpenAI compatível com a Responses API.
 - Endpoint, nome do deployment, versão da API e chave do Azure OpenAI.
 
+## Clonou o repositório? Instale assim
+
+Este é o fluxo para usar a extensão normalmente, sem abrir o ambiente de desenvolvimento do VS Code:
+
+```bash
+git clone https://github.com/rlsgarcia-code/codex-dev-companion.git
+cd codex-dev-companion
+npm ci
+npm test
+npm run package
+code --install-extension ./codex-dev-companion-0.2.0.vsix
+```
+
+Execute esses comandos na própria máquina em que a extensão será usada. O `npm ci` instala o runtime nativo do Codex correspondente ao sistema operacional e à arquitetura atuais; por isso, um VSIX gerado no macOS não deve ser reutilizado no Windows ou Linux.
+
+Se o comando `code` não estiver disponível:
+
+1. Abra **Extensions** no VS Code.
+2. Clique no menu `…` do painel.
+3. Escolha **Install from VSIX…**.
+4. Selecione `codex-dev-companion-0.2.0.vsix` na pasta clonada.
+5. Reinicie o VS Code quando solicitado.
+
+### Primeiro uso
+
+1. Abra uma pasta de projeto no VS Code.
+2. Pressione `Ctrl/Cmd + Shift + P` e execute **Codex Companion: Configure Azure OpenAI**.
+3. Informe o endpoint Azure, o nome exato do deployment, a versão da API e a chave.
+4. Abra o ícone **Codex Companion** na barra lateral.
+
+A chave é solicitada como senha e guardada somente no Secret Storage do VS Code. Ela não é escrita em `settings.json`, `.env`, `config.toml`, logs ou arquivos do projeto.
+
 ## Executar em desenvolvimento
 
 ```bash
@@ -47,20 +79,12 @@ Para recompilar enquanto edita:
 npm run watch
 ```
 
-## Instalar o VSIX
+## Reinstalar o VSIX após alterações
 
 ```bash
 npm run package
 code --install-extension codex-dev-companion-0.2.0.vsix
 ```
-
-Depois:
-
-1. Execute **Codex Companion: Configure Azure OpenAI** pela Command Palette.
-2. Informe o endpoint Azure, o nome do deployment, a versão da API e a chave.
-3. Abra um workspace e execute **Codex Companion: Open Agent**.
-
-A chave é solicitada como senha e guardada no Secret Storage do VS Code. Ela não é escrita em `settings.json`, `.env`, `config.toml`, logs ou arquivos do projeto.
 
 ## Memória
 
