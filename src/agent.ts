@@ -10,13 +10,13 @@ import type {
   ThreadOptions
 } from "@openai/codex-sdk";
 import {
-  AZURE_API_KEY_SECRET,
-  buildAzureCodexConfig,
+  LITELLM_API_KEY_SECRET,
+  buildLiteLlmCodexConfig,
   buildIsolatedEnvironment,
   resolveWorkspaceCertificatePath,
   resolveWorkspaceModelCatalogPath,
-  validateAzureConnection
-} from "./azure";
+  validateLiteLlmConnection
+} from "./litellm";
 import { ContextCollector, renderContext } from "./context";
 import { ProjectMemory } from "./memory";
 import type { AgentUiEvent, RunMode } from "./types";
@@ -102,7 +102,7 @@ export class DevelopmentAgent implements vscode.Disposable {
     await this.extensionContext.workspaceState.update(this.threadStorageKey(), undefined);
   }
 
-  public async reloadAzureConfiguration(): Promise<void> {
+  public async reloadProviderConfiguration(): Promise<void> {
     await this.newThread();
     this.codex = undefined;
   }
@@ -133,9 +133,9 @@ export class DevelopmentAgent implements vscode.Disposable {
   private threadOptions(): ThreadOptions {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const deployment = configuration.get<string>("azureDeployment", "").trim();
+    const model = configuration.get<string>("liteLlmModel", "").trim();
     return {
-      model: deployment,
+      model,
       threadSource: "vscode-codex-dev-companion",
       workingDirectory: root,
       skipGitRepoCheck: true,
@@ -148,13 +148,11 @@ export class DevelopmentAgent implements vscode.Disposable {
 
   private async codexOptions(): Promise<CodexOptions> {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-    const apiKey = await this.extensionContext.secrets.get(AZURE_API_KEY_SECRET);
-    const connection = validateAzureConnection({
-      endpoint: configuration.get<string>("azureEndpoint", ""),
-      deployment: configuration.get<string>("azureDeployment", ""),
-      apiVersion: configuration.get<string>("azureApiVersion", "2025-04-01-preview"),
-      apiKey: apiKey ?? "",
-      allowCorporateGateway: configuration.get<boolean>("allowCorporateGateway", false)
+    const apiKey = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
+    const connection = validateLiteLlmConnection({
+      endpoint: configuration.get<string>("liteLlmEndpoint", ""),
+      model: configuration.get<string>("liteLlmModel", ""),
+      apiKey: apiKey ?? ""
     });
     const codexHome = vscode.Uri.joinPath(
       this.extensionContext.globalStorageUri,
@@ -164,27 +162,25 @@ export class DevelopmentAgent implements vscode.Disposable {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     let caCertificatePath: string | undefined;
     let modelCatalogPath: string | undefined;
-    if (connection.allowCorporateGateway) {
-      const configuredCertificate = configuration.get<string>("corporateCaCertificatePath", "").trim();
-      if (configuredCertificate) {
-        if (!workspaceRoot) {
-          throw new Error("Open the workspace containing the corporate CA certificate.");
-        }
-        const candidate = resolveWorkspaceCertificatePath(workspaceRoot, configuredCertificate);
-        const [realWorkspace, realCertificate] = await Promise.all([
-          realpath(workspaceRoot),
-          realpath(candidate)
-        ]);
-        const relative = path.relative(realWorkspace, realCertificate);
-        if (relative.startsWith("..") || path.isAbsolute(relative)) {
-          throw new Error("Corporate CA certificate must resolve to a file inside the opened workspace.");
-        }
-        const certificateStat = await vscode.workspace.fs.stat(vscode.Uri.file(realCertificate));
-        if ((certificateStat.type & vscode.FileType.File) === 0) {
-          throw new Error("Corporate CA certificate must be a .pem file.");
-        }
-        caCertificatePath = realCertificate;
+    const configuredCertificate = configuration.get<string>("gatewayCaCertificatePath", "").trim();
+    if (configuredCertificate) {
+      if (!workspaceRoot) {
+        throw new Error("Open the workspace containing the gateway CA certificate.");
       }
+      const candidate = resolveWorkspaceCertificatePath(workspaceRoot, configuredCertificate);
+      const [realWorkspace, realCertificate] = await Promise.all([
+        realpath(workspaceRoot),
+        realpath(candidate)
+      ]);
+      const relative = path.relative(realWorkspace, realCertificate);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        throw new Error("Gateway CA certificate must resolve to a file inside the opened workspace.");
+      }
+      const certificateStat = await vscode.workspace.fs.stat(vscode.Uri.file(realCertificate));
+      if ((certificateStat.type & vscode.FileType.File) === 0) {
+        throw new Error("Gateway CA certificate must be a .pem file.");
+      }
+      caCertificatePath = realCertificate;
     }
 
     const configuredCatalog = configuration.get<string>("modelCatalogPath", "").trim();
@@ -209,7 +205,7 @@ export class DevelopmentAgent implements vscode.Disposable {
     }
 
     return {
-      config: buildAzureCodexConfig(connection, modelCatalogPath),
+      config: buildLiteLlmCodexConfig(connection, modelCatalogPath),
       env: buildIsolatedEnvironment(connection.apiKey, codexHome.fsPath, process.env, caCertificatePath)
     };
   }
@@ -329,7 +325,7 @@ ${request}
 
   private explainError(message: string): string {
     if (/login|auth|unauthorized|401/i.test(message)) {
-      return `${message}\n\nCheck the Azure OpenAI endpoint, deployment, API version, and API key in “Codex Companion: Configure Azure OpenAI”.`;
+      return `${message}\n\nCheck the LiteLLM base URL, model alias, virtual key, and optional CA in “Codex Companion: Configure LiteLLM”.`;
     }
     if (/ENOENT|not found|spawn/i.test(message)) {
       return `${message}\n\nThe bundled Codex runtime was not found. Reinstall the extension or its dependencies.`;

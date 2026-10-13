@@ -7,5 +7,5 @@
     "rootDir": ".",
     "sourceMap": true
   },
-  "include": ["src/azure.ts", "test/**/*.ts"]
+  "include": ["src/litellm.ts", "test/**/*.ts"]
 }

@@ -3,9 +3,9 @@
 ## Product contract
 
 - This project is a VS Code extension backed by the official OpenAI Codex SDK.
-- The harness, tools, state, memory, shell, and file access must run locally. The only permitted external request path is the user-configured Azure OpenAI Responses API endpoint.
+- The harness, tools, state, memory, shell, and file access must run locally. The only permitted external request path is the user-configured LiteLLM Responses API endpoint.
 - Do not add ChatGPT sign-in, OpenAI Platform endpoints, hosted tools, web search, external MCP servers, telemetry, or update checks.
-- Store the Azure API key only in VS Code Secret Storage. Never write it to settings, logs, prompts, or repository files.
+- Store the LiteLLM virtual key only in VS Code Secret Storage. Never write it to settings, logs, prompts, or repository files.
 - Keep file access and command execution inside the opened workspace by default.
 - Preserve the split between editor context (`ContextCollector`), durable project memory (`ProjectMemory`), Codex runtime (`DevelopmentAgent`), and UI (`AgentViewProvider`).
 - Do not store secrets or raw chat logs in `.codex-agent/memory.md`.

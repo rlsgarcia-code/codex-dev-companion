@@ -4,10 +4,9 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Codex } from "@openai/codex-sdk";
-import azureModule from "../dist-tests/src/azure.js";
+import liteLlmModule from "../dist-tests/src/litellm.js";
 
-const { buildAzureCodexConfig } = azureModule;
-
+const { buildLiteLlmCodexConfig } = liteLlmModule;
 const codexHome = mkdtempSync(join(tmpdir(), "codex-dev-companion-smoke-"));
 const requests = [];
 const server = createServer((request, response) => {
@@ -22,28 +21,24 @@ const address = server.address();
 assert(address && typeof address === "object");
 
 try {
+  const connection = {
+    endpoint: `http://127.0.0.1:${address.port}/v1`,
+    model: "smoke-model-alias",
+    apiKey: "litellm-smoke-key"
+  };
+  const providerConfig = buildLiteLlmCodexConfig(connection);
   const codex = new Codex({
     env: {
       HOME: process.env.HOME ?? codexHome,
       PATH: process.env.PATH ?? "",
       CODEX_HOME: codexHome,
-      AZURE_OPENAI_API_KEY: "azure-smoke-key"
+      LITELLM_API_KEY: connection.apiKey
     },
     config: {
-      ...buildAzureCodexConfig({
-        endpoint: `http://127.0.0.1:${address.port}/openai`,
-        deployment: "smoke-deployment",
-        apiVersion: "smoke-version",
-        apiKey: "azure-smoke-key"
-      }),
+      ...providerConfig,
       model_providers: {
-        azure: {
-          ...buildAzureCodexConfig({
-            endpoint: `http://127.0.0.1:${address.port}/openai`,
-            deployment: "smoke-deployment",
-            apiVersion: "smoke-version",
-            apiKey: "azure-smoke-key"
-          }).model_providers.azure,
+        litellm: {
+          ...providerConfig.model_providers.litellm,
           request_max_retries: 0,
           stream_max_retries: 0
         }
@@ -51,7 +46,7 @@ try {
     }
   });
   const thread = codex.startThread({
-    model: "smoke-deployment",
+    model: connection.model,
     workingDirectory: process.cwd(),
     skipGitRepoCheck: true,
     sandboxMode: "read-only",
@@ -64,10 +59,10 @@ try {
 
   assert.equal(requests.length, 1);
   assert.equal(requests[0].method, "POST");
-  assert.equal(requests[0].url, "/openai/responses?api-version=smoke-version");
-  assert.equal(requests[0].headers["api-key"], "azure-smoke-key");
-  assert.equal(requests[0].headers.authorization, undefined);
-  console.log("AZURE_LOCAL_ROUTING_OK");
+  assert.equal(requests[0].url, "/v1/responses");
+  assert.equal(requests[0].headers.authorization, "Bearer litellm-smoke-key");
+  assert.equal(requests[0].headers["api-key"], undefined);
+  console.log("LITELLM_LOCAL_ROUTING_OK");
 } finally {
   await new Promise((resolve) => server.close(resolve));
   rmSync(codexHome, { recursive: true, force: true });

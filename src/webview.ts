@@ -3,12 +3,11 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { DevelopmentAgent } from "./agent";
 import {
-  AZURE_API_KEY_SECRET,
-  isRecognizedAzureOpenAIHost,
-  normalizeAzureEndpoint,
+  LITELLM_API_KEY_SECRET,
+  normalizeLiteLlmEndpoint,
   resolveWorkspaceModelCatalogPath,
-  validateAzureConnection
-} from "./azure";
+  validateLiteLlmConnection
+} from "./litellm";
 import { ContextCollector } from "./context";
 import { ProjectMemory } from "./memory";
 import type { AgentUiEvent, ChatMessage, RunMode } from "./types";
@@ -23,17 +22,15 @@ type IncomingMessage =
   | { type: "newThread" }
   | { type: "remember"; text: string }
   | { type: "openMemory" }
-  | { type: "configureAzure" }
-  | { type: "saveAzure"; endpoint: string; deployment: string; apiVersion: string; apiKey: string }
+  | { type: "configureLiteLlm" }
+  | { type: "saveLiteLlm"; endpoint: string; model: string; apiKey: string }
   | { type: "selectModelCatalog" }
   | { type: "clearModelCatalog" };
 
-type AzureSettingsSnapshot = {
+type LiteLlmSettingsSnapshot = {
   endpoint: string;
-  deployment: string;
-  apiVersion: string;
+  model: string;
   hasApiKey: boolean;
-  corporateGateway: boolean;
   caCertificatePath: string;
   modelCatalogPath: string;
 };
@@ -92,7 +89,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           history: this.history(),
           workspace: vscode.workspace.name ?? "No workspace",
           activeFile: this.activeFileLabel(),
-          azure: await this.azureSettingsSnapshot()
+          liteLlm: await this.liteLlmSettingsSnapshot()
         });
         break;
       case "send":
@@ -117,12 +114,12 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "openMemory":
         await this.memory.open();
         break;
-      case "configureAzure":
-        await vscode.commands.executeCommand("codexDevCompanion.configureAzure");
-        this.post({ type: "azureSettings", azure: await this.azureSettingsSnapshot() });
+      case "configureLiteLlm":
+        await vscode.commands.executeCommand("codexDevCompanion.configureLiteLlm");
+        this.post({ type: "liteLlmSettings", liteLlm: await this.liteLlmSettingsSnapshot() });
         break;
-      case "saveAzure":
-        await this.saveAzureSettings(message);
+      case "saveLiteLlm":
+        await this.saveLiteLlmSettings(message);
         break;
       case "selectModelCatalog":
         await this.selectModelCatalog();
@@ -133,71 +130,43 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
   }
 
-  private async azureSettingsSnapshot(): Promise<AzureSettingsSnapshot> {
+  private async liteLlmSettingsSnapshot(): Promise<LiteLlmSettingsSnapshot> {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
     return {
-      endpoint: configuration.get<string>("azureEndpoint", ""),
-      deployment: configuration.get<string>("azureDeployment", ""),
-      apiVersion: configuration.get<string>("azureApiVersion", "2025-04-01-preview"),
-      hasApiKey: Boolean(await this.extensionContext.secrets.get(AZURE_API_KEY_SECRET)),
-      corporateGateway: configuration.get<boolean>("allowCorporateGateway", false),
-      caCertificatePath: configuration.get<string>("corporateCaCertificatePath", ""),
+      endpoint: configuration.get<string>("liteLlmEndpoint", ""),
+      model: configuration.get<string>("liteLlmModel", ""),
+      hasApiKey: Boolean(await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET)),
+      caCertificatePath: configuration.get<string>("gatewayCaCertificatePath", ""),
       modelCatalogPath: configuration.get<string>("modelCatalogPath", "")
     };
   }
 
-  private async saveAzureSettings(message: Extract<IncomingMessage, { type: "saveAzure" }>): Promise<void> {
+  private async saveLiteLlmSettings(message: Extract<IncomingMessage, { type: "saveLiteLlm" }>): Promise<void> {
     try {
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-      const existingApiKey = await this.extensionContext.secrets.get(AZURE_API_KEY_SECRET);
-      const candidateEndpoint = normalizeAzureEndpoint(message.endpoint, true);
-      const usesCorporateGateway = !isRecognizedAzureOpenAIHost(candidateEndpoint);
-      const currentEndpoint = configuration.get<string>("azureEndpoint", "");
-      let sameApprovedGateway = false;
-      if (usesCorporateGateway && configuration.get<boolean>("allowCorporateGateway", false)) {
-        try {
-          sameApprovedGateway = normalizeAzureEndpoint(currentEndpoint, true) === candidateEndpoint;
-        } catch {
-          sameApprovedGateway = false;
-        }
-      }
-      if (usesCorporateGateway && !sameApprovedGateway) {
-        const approval = await vscode.window.showWarningMessage(
-          "This is not a direct Azure OpenAI hostname. Approve it only if this HTTPS endpoint is your corporate gateway. The API key will be sent in the api-key header.",
-          { modal: true },
-          "Use corporate gateway"
-        );
-        if (approval !== "Use corporate gateway") {
-          throw new Error("Corporate gateway was not authorized. No changes were saved.");
-        }
-      }
-
+      const existingApiKey = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
       const apiKey = message.apiKey.trim() || existingApiKey || "";
-      const connection = validateAzureConnection({
-        endpoint: candidateEndpoint,
-        deployment: message.deployment,
-        apiVersion: message.apiVersion,
-        apiKey,
-        allowCorporateGateway: usesCorporateGateway
+      const connection = validateLiteLlmConnection({
+        endpoint: normalizeLiteLlmEndpoint(message.endpoint),
+        model: message.model,
+        apiKey
       });
       await Promise.all([
-        configuration.update("azureEndpoint", connection.endpoint, vscode.ConfigurationTarget.Global),
-        configuration.update("azureDeployment", connection.deployment, vscode.ConfigurationTarget.Global),
-        configuration.update("azureApiVersion", connection.apiVersion, vscode.ConfigurationTarget.Global),
-        configuration.update("allowCorporateGateway", usesCorporateGateway, vscode.ConfigurationTarget.Global),
+        configuration.update("liteLlmEndpoint", connection.endpoint, vscode.ConfigurationTarget.Global),
+        configuration.update("liteLlmModel", connection.model, vscode.ConfigurationTarget.Global),
         ...(message.apiKey.trim()
-          ? [this.extensionContext.secrets.store(AZURE_API_KEY_SECRET, message.apiKey.trim())]
+          ? [this.extensionContext.secrets.store(LITELLM_API_KEY_SECRET, message.apiKey.trim())]
           : [])
       ]);
-      await this.agent.reloadAzureConfiguration();
+      await this.agent.reloadProviderConfiguration();
       this.post({
-        type: "azureSaved",
-        azure: await this.azureSettingsSnapshot(),
-        message: `Azure updated · ${connection.deployment}`
+        type: "liteLlmSaved",
+        liteLlm: await this.liteLlmSettingsSnapshot(),
+        message: `LiteLLM updated · ${connection.model}`
       });
     } catch (error) {
       this.post({
-        type: "azureSaveError",
+        type: "liteLlmSaveError",
         message: error instanceof Error ? error.message : String(error)
       });
     }
@@ -236,19 +205,19 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       JSON.parse(Buffer.from(contents).toString("utf8"));
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       await configuration.update("modelCatalogPath", relative, vscode.ConfigurationTarget.Workspace);
-      await this.agent.reloadAzureConfiguration();
-      this.post({ type: "azureSettings", azure: await this.azureSettingsSnapshot() });
+      await this.agent.reloadProviderConfiguration();
+      this.post({ type: "liteLlmSettings", liteLlm: await this.liteLlmSettingsSnapshot() });
       this.post({ type: "toast", message: `Model catalog selected · ${relative}` });
     } catch (error) {
-      this.post({ type: "azureSaveError", message: error instanceof Error ? error.message : String(error) });
+      this.post({ type: "liteLlmSaveError", message: error instanceof Error ? error.message : String(error) });
     }
   }
 
   private async clearModelCatalog(): Promise<void> {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
     await configuration.update("modelCatalogPath", undefined, vscode.ConfigurationTarget.Workspace);
-    await this.agent.reloadAzureConfiguration();
-    this.post({ type: "azureSettings", azure: await this.azureSettingsSnapshot() });
+    await this.agent.reloadProviderConfiguration();
+    this.post({ type: "liteLlmSettings", liteLlm: await this.liteLlmSettingsSnapshot() });
     this.post({ type: "toast", message: "Model catalog removed" });
   }
 
@@ -350,31 +319,25 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       <ol id="plan-items"></ol>
     </section>
 
-    <section class="settings-panel hidden" id="azure-settings" aria-label="Azure OpenAI settings">
+    <section class="settings-panel hidden" id="litellm-settings" aria-label="LiteLLM settings">
       <div class="settings-heading">
         <div>
-          <div class="section-label">AZURE OPENAI</div>
+          <div class="section-label">LITELLM GATEWAY</div>
           <h2>Connection</h2>
         </div>
-        <button class="icon-button settings-close" id="azure-close" title="Close settings" aria-label="Close settings">×</button>
+        <button class="icon-button settings-close" id="litellm-close" title="Close settings" aria-label="Close settings">×</button>
       </div>
       <label class="field">
-        <span>OpenAI API Base</span>
-        <input id="azure-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example/openai" />
+        <span>Gateway Base URL</span>
+        <input id="litellm-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/v1" />
       </label>
-      <div class="field-grid">
-        <label class="field">
-          <span>Deployment ID</span>
-          <input id="azure-deployment" type="text" autocomplete="off" spellcheck="false" placeholder="my-deployment" />
-        </label>
-        <label class="field">
-          <span>API Version</span>
-          <input id="azure-api-version" type="text" autocomplete="off" spellcheck="false" placeholder="2025-04-01-preview" />
-        </label>
-      </div>
       <label class="field">
-        <span>API Key <small id="azure-key-state"></small></span>
-        <input id="azure-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the stored key" />
+        <span>Model Alias</span>
+        <input id="litellm-model" type="text" autocomplete="off" spellcheck="false" placeholder="company-coding-model" />
+      </label>
+      <label class="field">
+        <span>Virtual Key <small id="litellm-key-state"></small></span>
+        <input id="litellm-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the stored key" />
       </label>
       <div class="local-setting">
         <div>
@@ -386,11 +349,11 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           <button class="hidden" id="clear-model-catalog">Clear</button>
         </div>
       </div>
-      <p class="settings-note" id="azure-details"></p>
-      <p class="settings-error hidden" id="azure-settings-error"></p>
+      <p class="settings-note" id="litellm-details"></p>
+      <p class="settings-error hidden" id="litellm-settings-error"></p>
       <div class="settings-actions">
-        <button class="secondary-action" id="azure-advanced">Setup wizard / PEM</button>
-        <button class="primary-action" id="azure-save">Save connection</button>
+        <button class="secondary-action" id="litellm-advanced">Setup wizard / PEM</button>
+        <button class="primary-action" id="litellm-save">Save connection</button>
       </div>
     </section>
 
@@ -410,7 +373,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     <footer class="composer-wrap">
       <div class="context-row">
         <span class="context-chip" id="active-file">No active file</span>
-        <span class="utility-links"><button class="memory-link" id="azure">Azure</button><button class="memory-link" id="memory">Memory</button></span>
+        <span class="utility-links"><button class="memory-link" id="litellm">LiteLLM</button><button class="memory-link" id="memory">Memory</button></span>
       </div>
       <div class="composer">
         <textarea id="prompt" rows="3" placeholder="Ask about the code, request a change, or explore an idea…"></textarea>
@@ -526,12 +489,11 @@ const status = document.getElementById('status');
 const signal = document.getElementById('signal');
 const plan = document.getElementById('plan');
 const planItems = document.getElementById('plan-items');
-const azureSettings = document.getElementById('azure-settings');
-const azureEndpoint = document.getElementById('azure-endpoint');
-const azureDeployment = document.getElementById('azure-deployment');
-const azureApiVersion = document.getElementById('azure-api-version');
-const azureApiKey = document.getElementById('azure-api-key');
-const azureSettingsError = document.getElementById('azure-settings-error');
+const liteLlmSettings = document.getElementById('litellm-settings');
+const liteLlmEndpoint = document.getElementById('litellm-endpoint');
+const liteLlmModel = document.getElementById('litellm-model');
+const liteLlmApiKey = document.getElementById('litellm-api-key');
+const liteLlmSettingsError = document.getElementById('litellm-settings-error');
 const newThreadButton = document.getElementById('new-thread');
 let busy = false;
 
@@ -588,35 +550,32 @@ function submit() {
   prompt.value = '';
 }
 
-function fillAzureSettings(azure) {
-  azureEndpoint.value = azure.endpoint || '';
-  azureDeployment.value = azure.deployment || '';
-  azureApiVersion.value = azure.apiVersion || '2025-04-01-preview';
-  azureApiKey.value = '';
-  document.getElementById('azure-key-state').textContent = azure.hasApiKey ? '· stored securely' : '· required';
-  document.getElementById('model-catalog-path').textContent = azure.modelCatalogPath || 'No local catalog';
-  document.getElementById('clear-model-catalog').classList.toggle('hidden', !azure.modelCatalogPath);
+function fillLiteLlmSettings(liteLlm) {
+  liteLlmEndpoint.value = liteLlm.endpoint || '';
+  liteLlmModel.value = liteLlm.model || '';
+  liteLlmApiKey.value = '';
+  document.getElementById('litellm-key-state').textContent = liteLlm.hasApiKey ? '· stored securely' : '· required';
+  document.getElementById('model-catalog-path').textContent = liteLlm.modelCatalogPath || 'No local catalog';
+  document.getElementById('clear-model-catalog').classList.toggle('hidden', !liteLlm.modelCatalogPath);
   const details = [];
-  if (azure.corporateGateway) details.push('Corporate gateway');
-  if (azure.caCertificatePath) details.push('CA: ' + azure.caCertificatePath);
-  details.push(azure.modelCatalogPath ? 'custom model metadata enabled' : 'fallback metadata may be used for custom aliases');
-  document.getElementById('azure-details').textContent = details.join(' · ');
-  azureSettingsError.classList.add('hidden');
+  if (liteLlm.caCertificatePath) details.push('CA: ' + liteLlm.caCertificatePath);
+  details.push(liteLlm.modelCatalogPath ? 'custom model metadata enabled' : 'fallback metadata may be used for custom aliases');
+  document.getElementById('litellm-details').textContent = details.join(' · ');
+  liteLlmSettingsError.classList.add('hidden');
 }
 
-function openAzureSettings() {
-  azureSettings.classList.remove('hidden');
-  azureDeployment.focus();
+function openLiteLlmSettings() {
+  liteLlmSettings.classList.remove('hidden');
+  liteLlmModel.focus();
 }
 
-function saveAzureSettings() {
-  azureSettingsError.classList.add('hidden');
+function saveLiteLlmSettings() {
+  liteLlmSettingsError.classList.add('hidden');
   vscode.postMessage({
-    type: 'saveAzure',
-    endpoint: azureEndpoint.value,
-    deployment: azureDeployment.value,
-    apiVersion: azureApiVersion.value,
-    apiKey: azureApiKey.value
+    type: 'saveLiteLlm',
+    endpoint: liteLlmEndpoint.value,
+    model: liteLlmModel.value,
+    apiKey: liteLlmApiKey.value
   });
 }
 
@@ -647,10 +606,10 @@ newThreadButton.addEventListener('click', () => {
   vscode.postMessage({ type: 'newThread' });
 });
 document.getElementById('memory').addEventListener('click', () => vscode.postMessage({ type: 'openMemory' }));
-document.getElementById('azure').addEventListener('click', () => azureSettings.classList.contains('hidden') ? openAzureSettings() : azureSettings.classList.add('hidden'));
-document.getElementById('azure-close').addEventListener('click', () => azureSettings.classList.add('hidden'));
-document.getElementById('azure-save').addEventListener('click', saveAzureSettings);
-document.getElementById('azure-advanced').addEventListener('click', () => vscode.postMessage({ type: 'configureAzure' }));
+document.getElementById('litellm').addEventListener('click', () => liteLlmSettings.classList.contains('hidden') ? openLiteLlmSettings() : liteLlmSettings.classList.add('hidden'));
+document.getElementById('litellm-close').addEventListener('click', () => liteLlmSettings.classList.add('hidden'));
+document.getElementById('litellm-save').addEventListener('click', saveLiteLlmSettings);
+document.getElementById('litellm-advanced').addEventListener('click', () => vscode.postMessage({ type: 'configureLiteLlm' }));
 document.getElementById('select-model-catalog').addEventListener('click', () => vscode.postMessage({ type: 'selectModelCatalog' }));
 document.getElementById('clear-model-catalog').addEventListener('click', () => vscode.postMessage({ type: 'clearModelCatalog' }));
 prompt.addEventListener('keydown', event => {
@@ -663,19 +622,19 @@ window.addEventListener('message', ({ data }) => {
     case 'hydrate':
       document.getElementById('workspace').textContent = data.workspace;
       document.getElementById('active-file').textContent = data.activeFile || 'No active file';
-      fillAzureSettings(data.azure || {});
+      fillLiteLlmSettings(data.liteLlm || {});
       (data.history || []).forEach(appendMessage);
       break;
-    case 'azureSettings': fillAzureSettings(data.azure); break;
-    case 'azureSaved':
-      fillAzureSettings(data.azure);
-      azureSettings.classList.add('hidden');
+    case 'liteLlmSettings': fillLiteLlmSettings(data.liteLlm); break;
+    case 'liteLlmSaved':
+      fillLiteLlmSettings(data.liteLlm);
+      liteLlmSettings.classList.add('hidden');
       status.textContent = data.message;
       break;
-    case 'azureSaveError':
-      azureSettingsError.textContent = data.message;
-      azureSettingsError.classList.remove('hidden');
-      openAzureSettings();
+    case 'liteLlmSaveError':
+      liteLlmSettingsError.textContent = data.message;
+      liteLlmSettingsError.classList.remove('hidden');
+      openLiteLlmSettings();
       break;
     case 'user': case 'assistant': appendMessage(data.message); break;
     case 'busy': setBusy(data.value); break;

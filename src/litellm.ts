@@ -1,20 +1,12 @@
 import * as path from "node:path";
 
-export const AZURE_API_KEY_SECRET = "codexDevCompanion.azureOpenAIApiKey";
+export const LITELLM_API_KEY_SECRET = "codexDevCompanion.liteLlmApiKey";
 
-export type AzureConnection = {
+export type LiteLlmConnection = {
   endpoint: string;
-  deployment: string;
-  apiVersion: string;
+  model: string;
   apiKey: string;
-  allowCorporateGateway?: boolean;
 };
-
-const AZURE_HOST_SUFFIXES = [
-  ".openai.azure.com",
-  ".services.ai.azure.com",
-  ".cognitiveservices.azure.com"
-];
 
 const SAFE_ENVIRONMENT_KEYS = [
   "HOME",
@@ -37,72 +29,42 @@ const SAFE_ENVIRONMENT_KEYS = [
   "PATHEXT"
 ] as const;
 
-export function isRecognizedAzureOpenAIHost(value: string): boolean {
-  try {
-    const hostname = new URL(value).hostname.toLowerCase();
-    return AZURE_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
-  } catch {
-    return false;
-  }
-}
-
-export function normalizeAzureEndpoint(value: string, allowCorporateGateway = false): string {
+export function normalizeLiteLlmEndpoint(value: string): string {
   const raw = value.trim();
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw new Error("Azure OpenAI endpoint must be a valid HTTPS URL.");
+    throw new Error("LiteLLM endpoint must be a valid HTTPS URL.");
   }
   if (url.protocol !== "https:") {
-    throw new Error("Azure OpenAI endpoint must use HTTPS.");
+    throw new Error("LiteLLM endpoint must use HTTPS.");
   }
   if (url.username || url.password) {
-    throw new Error("OpenAI API Base must not contain credentials in the URL.");
-  }
-  const hostname = url.hostname.toLowerCase();
-  const isAzureHost = AZURE_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
-  if (!isAzureHost && !allowCorporateGateway) {
-    throw new Error(
-      "Endpoint is not a recognized Azure OpenAI host. Reconfigure it and explicitly approve the corporate gateway."
-    );
+    throw new Error("LiteLLM base URL must not contain credentials.");
   }
   const pathname = url.pathname.replace(/\/+$/, "");
-  if (isAzureHost && !pathname) {
-    url.pathname = "/openai";
-  } else if (isAzureHost && pathname.toLowerCase() === "/openai") {
-    url.pathname = "/openai";
-  } else if (isAzureHost) {
-    throw new Error(
-      "OpenAI API Base must end at /openai and must not include /deployments/<id>, /responses, or another API route."
-    );
-  } else if (!pathname) {
-    throw new Error("Corporate gateway OpenAI API Base must include its API path.");
-  } else {
-    url.pathname = pathname;
+  if (!pathname.endsWith("/v1")) {
+    throw new Error("LiteLLM base URL must end at /v1 and must not include /responses.");
   }
+  url.pathname = pathname;
   url.search = "";
   url.hash = "";
   return url.toString().replace(/\/$/, "");
 }
 
-export function validateAzureConnection(connection: AzureConnection): AzureConnection {
-  const deployment = connection.deployment.trim();
-  const apiVersion = connection.apiVersion.trim();
+export function validateLiteLlmConnection(connection: LiteLlmConnection): LiteLlmConnection {
+  const model = connection.model.trim();
   const apiKey = connection.apiKey.trim();
-  if (!deployment) {
-    throw new Error("Azure OpenAI deployment name is required.");
-  }
-  if (!apiVersion) {
-    throw new Error("Azure OpenAI API version is required.");
+  if (!model) {
+    throw new Error("LiteLLM model alias is required.");
   }
   if (!apiKey) {
-    throw new Error("Azure OpenAI API key is required.");
+    throw new Error("LiteLLM virtual key is required.");
   }
   return {
-    endpoint: normalizeAzureEndpoint(connection.endpoint, connection.allowCorporateGateway),
-    deployment,
-    apiVersion,
+    endpoint: normalizeLiteLlmEndpoint(connection.endpoint),
+    model,
     apiKey
   };
 }
@@ -121,7 +83,7 @@ export function buildIsolatedEnvironment(
     }
   }
   environment.CODEX_HOME = path.resolve(codexHome);
-  environment.AZURE_OPENAI_API_KEY = apiKey;
+  environment.LITELLM_API_KEY = apiKey;
   if (caCertificatePath) {
     environment.CODEX_CA_CERTIFICATE = path.resolve(caCertificatePath);
   }
@@ -136,10 +98,10 @@ export function resolveWorkspaceCertificatePath(
   const certificate = path.resolve(root, configuredPath.trim());
   const relative = path.relative(root, certificate);
   if (!configuredPath.trim() || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("Corporate CA certificate must be a .pem file inside the opened workspace.");
+    throw new Error("Gateway CA certificate must be a .pem file inside the opened workspace.");
   }
   if (path.extname(certificate).toLowerCase() !== ".pem") {
-    throw new Error("Corporate CA certificate must use the .pem extension.");
+    throw new Error("Gateway CA certificate must use the .pem extension.");
   }
   return certificate;
 }
@@ -160,11 +122,10 @@ export function resolveWorkspaceModelCatalogPath(
   return catalog;
 }
 
-export function buildAzureCodexConfig(connection: AzureConnection, modelCatalogPath?: string) {
-  const usesCorporateGateway = !isRecognizedAzureOpenAIHost(connection.endpoint);
+export function buildLiteLlmCodexConfig(connection: LiteLlmConnection, modelCatalogPath?: string) {
   return {
-    model: connection.deployment,
-    model_provider: "azure",
+    model: connection.model,
+    model_provider: "litellm",
     ...(modelCatalogPath ? { model_catalog_json: modelCatalogPath } : {}),
     web_search: "disabled",
     check_for_update_on_startup: false,
@@ -206,13 +167,10 @@ export function buildAzureCodexConfig(connection: AzureConnection, modelCatalogP
       workspace_dependencies: false
     },
     model_providers: {
-      azure: {
-        name: "Azure OpenAI",
+      litellm: {
+        name: "LiteLLM Gateway",
         base_url: connection.endpoint,
-        ...(usesCorporateGateway
-          ? { env_http_headers: { "api-key": "AZURE_OPENAI_API_KEY" } }
-          : { env_key: "AZURE_OPENAI_API_KEY" }),
-        query_params: { "api-version": connection.apiVersion },
+        env_key: "LITELLM_API_KEY",
         wire_api: "responses",
         requires_openai_auth: false,
         supports_websockets: false,

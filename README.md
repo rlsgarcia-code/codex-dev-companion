@@ -2,7 +2,7 @@
 
 Uma extensão de Visual Studio Code que transforma o **OpenAI Codex agent harness** em um agente de suporte ao desenvolvimento com contexto do editor, planejamento, leitura e edição de arquivos, execução de comandos, memória persistente e retomada de conversas.
 
-O projeto usa o SDK oficial `@openai/codex-sdk`. O harness, shell, ferramentas, memória, contexto e histórico executam inteiramente na máquina do usuário. A única comunicação externa permitida em runtime é a inferência enviada diretamente ao endpoint Azure OpenAI configurado pelo usuário.
+O projeto usa o SDK oficial `@openai/codex-sdk`. O harness, shell, ferramentas, memória, contexto e histórico executam inteiramente na máquina do usuário. A única comunicação externa permitida em runtime é a inferência enviada ao endpoint LiteLLM configurado pelo usuário.
 
 ## O que já funciona
 
@@ -17,18 +17,18 @@ O projeto usa o SDK oficial `@openai/codex-sdk`. O harness, shell, ferramentas, 
 - Cancelamento de turnos em andamento.
 - Memória auditável em `.codex-agent/memory.md`.
 - Sandbox `workspace-write`, rede desativada e comandos limitados ao workspace por padrão.
-- Provider Azure OpenAI forçado pelo runtime, sem login ChatGPT ou OpenAI Platform.
+- Provider LiteLLM Responses forçado pelo runtime, sem login ChatGPT ou OpenAI Platform.
 - Estado do Codex isolado em um `CODEX_HOME` privado da extensão.
 - Telemetria, analytics, feedback, update checks, apps, plugins e servidores MCP externos desativados por configuração de runtime.
 - Binário Codex oficial fornecido pelo SDK, sem caminho de executável substituível por configuração.
-- Chave Azure armazenada exclusivamente no Secret Storage do VS Code.
+- Chave virtual LiteLLM armazenada exclusivamente no Secret Storage do VS Code.
 
 ## Pré-requisitos
 
 - Node.js 18 ou superior.
 - Visual Studio Code 1.106 ou superior.
-- Um deployment Azure OpenAI compatível com a Responses API.
-- Endpoint, nome do deployment, versão da API e chave do Azure OpenAI.
+- Um gateway LiteLLM HTTPS compatível com a Responses API.
+- URL base terminando em `/v1`, alias do modelo e chave virtual scoped do LiteLLM.
 
 ## Clonou o repositório? Instale assim
 
@@ -40,7 +40,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.4.1.vsix
+code --install-extension ./codex-dev-companion-0.5.0.vsix
 ```
 
 Execute esses comandos na própria máquina em que a extensão será usada. O `npm ci` instala o runtime nativo do Codex correspondente ao sistema operacional e à arquitetura atuais; por isso, um VSIX gerado no macOS não deve ser reutilizado no Windows ou Linux.
@@ -50,41 +50,39 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.4.1.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.5.0.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 ### Primeiro uso
 
 1. Abra uma pasta de projeto no VS Code.
-2. Pressione `Ctrl/Cmd + Shift + P` e execute **Codex Companion: Configure Azure OpenAI**.
+2. Pressione `Ctrl/Cmd + Shift + P` e execute **Codex Companion: Configure LiteLLM**.
 3. Complete as quatro etapas numeradas usando o mapeamento abaixo.
 4. Abra o ícone **Codex Companion** na barra lateral direita, junto do Chat/Copilot.
 
 Em instalações novas, o Companion abre por padrão na **Secondary Sidebar**, à direita do editor. O VS Code preserva layouts personalizados; portanto, ao atualizar uma instalação anterior, use `View: Move View` na Command Palette e mova **Development Agent** para **Secondary Side Bar** caso ele continue à esquerda.
 
-Depois do primeiro setup, clique em **Azure** no rodapé da própria sidebar para alterar rapidamente **Deployment ID**, **API Version**, base e chave. Deixar o campo da chave vazio preserva o valor já guardado no Secret Storage. Use **Setup wizard / PEM** somente quando precisar trocar a CA corporativa ou revisar a configuração completa.
+Depois do primeiro setup, clique em **LiteLLM** no rodapé da sidebar para alterar rapidamente a URL base, o alias do modelo e a chave virtual. Deixar a chave vazia preserva o valor já guardado no Secret Storage. Use **Setup wizard / PEM** quando precisar trocar a CA corporativa ou revisar a configuração completa.
 
-| Variável que você já possui | Campo da extensão | Formato esperado |
+| Valor fornecido pelo administrador | Campo da extensão | Formato esperado |
 | --- | --- | --- |
-| `OPENAI_API_BASE` | **OpenAI API Base** | `https://seu-recurso.openai.azure.com/openai` |
-| Deployment ID | **Deployment ID** | Nome exato do deployment, sem URL |
-| API Version | **API version** | Por exemplo, `2025-04-01-preview` |
-| API Key | **API key** | Chave do recurso Azure OpenAI |
+| Base URL | **Gateway Base URL** | `https://gateway.example.com/v1` |
+| Model alias | **Model Alias** | Alias exato liberado no LiteLLM |
+| Virtual key | **Virtual Key** | Chave individual/scoped, nunca a master key |
+| CA bundle, se necessário | **Setup wizard / PEM** | Arquivo `.pem` dentro do workspace |
 
-Se seu `OPENAI_API_BASE` terminar em `/openai/deployments/<id>`, informe somente a parte até `/openai`; o Deployment ID é preenchido separadamente. A extensão não instancia nem recebe um objeto `AzureChatOpenAI`: ela aplica esses mesmos quatro valores diretamente ao provider Azure do Codex SDK.
+O gateway precisa expor `POST <BASE_URL>/responses`, fazer streaming sem buffering e preservar follow-up turns e tool calls. Compatibilidade apenas com Chat Completions não é suficiente. A chave virtual é enviada como `Authorization: Bearer ...`; credenciais do provider upstream permanecem no servidor LiteLLM.
 
-Gateways corporativos HTTPS também são aceitos. Quando o host não pertence diretamente ao Azure, a extensão exige uma confirmação explícita, preserva o caminho completo configurado e envia a chave no cabeçalho `api-key`. O gateway precisa expor `POST <OPENAI_API_BASE>/responses` com streaming e tool calls; compatibilidade apenas com Chat Completions não é suficiente.
-
-Se o cliente `httpx`/`AzureChatOpenAI` usa `verify="arquivo.pem"`, selecione o mesmo bundle PEM na quinta etapa. O arquivo deve estar dentro do workspace. A extensão guarda apenas seu caminho relativo e passa o caminho absoluto ao processo local por `CODEX_CA_CERTIFICATE`, conforme o suporte oficial do Codex; o conteúdo do certificado não é copiado, enviado ao modelo ou incluído no VSIX.
+Se o gateway usa uma CA corporativa, selecione o bundle PEM na quarta etapa. A extensão guarda somente o caminho relativo e passa o caminho absoluto ao processo local por `CODEX_CA_CERTIFICATE`; o conteúdo do certificado não é copiado, enviado ao modelo ou incluído no VSIX.
 
 ### Aviso `Model metadata not found`
 
-Esse aviso indica que o Deployment ID não foi encontrado no catálogo de modelos conhecido pelo Codex. O runtime continua com metadados de fallback, mas recursos como limites de contexto, opções de raciocínio e suporte a ferramentas podem ficar imprecisos.
+Esse aviso indica que o alias do LiteLLM não foi encontrado no catálogo de modelos conhecido pelo Codex. O runtime continua com metadados de fallback, mas recursos como limites de contexto, opções de raciocínio e suporte a ferramentas podem ficar imprecisos.
 
-- Se o deployment usa o nome real de um modelo suportado, corrija o **Deployment ID** no formulário **Azure**.
-- Se ele é um alias criado pelo gateway corporativo, peça à equipe responsável um catálogo JSON compatível com a versão instalada do Codex e com o modelo real por trás do alias. No formulário **Azure**, use **Select JSON** em **Model metadata**. O arquivo permanece local e precisa estar dentro do workspace.
+- Confirme o alias exato no campo **Model Alias** do formulário **LiteLLM**.
+- Para um alias personalizado, peça à equipe do gateway um catálogo JSON compatível com a versão instalada do Codex e com o modelo upstream real. Use **Select JSON** em **Model metadata**. O arquivo permanece local e precisa estar dentro do workspace.
 
-Não invente os metadados do alias: eles devem corresponder ao modelo upstream. A estrutura e o processo de geração são descritos na documentação oficial em [Roll out a gateway — Add model metadata](https://learn.chatgpt.com/docs/enterprise/roll-out-a-gateway#add-model-metadata).
+Não invente os metadados do alias: eles devem corresponder ao modelo upstream. Consulte [Bedrock through LiteLLM](https://learn.chatgpt.com/docs/enterprise/bedrock-through-litellm) e [Roll out a gateway — Add model metadata](https://learn.chatgpt.com/docs/enterprise/roll-out-a-gateway#add-model-metadata).
 
 A chave é solicitada como senha e guardada somente no Secret Storage do VS Code. Ela não é escrita em `settings.json`, `.env`, `config.toml`, logs ou arquivos do projeto.
 
@@ -109,7 +107,7 @@ npm run watch
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.4.1.vsix
+code --install-extension codex-dev-companion-0.5.0.vsix
 ```
 
 ## Memória
@@ -132,9 +130,9 @@ Não armazene credenciais, tokens, dados pessoais, hipóteses ou status transit�
 - Comandos e ferramentas executados pelo agente não recebem acesso de rede.
 - Web search, serviços hospedados, atualização automática, login ChatGPT e credenciais OpenAI são desativados.
 - Analytics, exportadores OpenTelemetry, feedback, apps, plugins e servidores MCP são desativados explicitamente.
-- O processo Codex recebe um ambiente mínimo: variáveis essenciais do sistema, um `CODEX_HOME` isolado e somente a chave Azure.
-- O endpoint é validado como HTTPS; hosts Azure são aceitos diretamente e gateways corporativos exigem confirmação explícita.
-- A única chamada externa em runtime é `Codex local → Azure OpenAI Responses API`.
+- O processo Codex recebe um ambiente mínimo: variáveis essenciais do sistema, um `CODEX_HOME` isolado e somente a chave virtual LiteLLM.
+- A URL do gateway é validada como HTTPS e deve terminar exatamente na base `/v1`, sem `/responses`.
+- A única chamada externa em runtime é `Codex local → LiteLLM Responses API`.
 - A política de aprovação é `never` porque o SDK em modo não interativo não oferece uma interface de aprovação no meio do turno; o sandbox do workspace continua sendo a fronteira de execução.
 - Revise alterações antes de fazer commit e mantenha segredos fora do workspace.
 
@@ -142,12 +140,10 @@ Não armazene credenciais, tokens, dados pessoais, hipóteses ou status transit�
 
 | Configuração | Padrão | Finalidade |
 | --- | --- | --- |
-| `codexDevCompanion.azureEndpoint` | vazio | OpenAI API Base HTTPS do Azure terminando em `/openai`. |
-| `codexDevCompanion.azureDeployment` | vazio | Deployment ID Azure usado como modelo. |
-| `codexDevCompanion.azureApiVersion` | `2025-04-01-preview` | Versão da Responses API no Azure. |
-| `codexDevCompanion.allowCorporateGateway` | `false` | Autoriza o host HTTPS configurado como gateway corporativo após confirmação explícita. |
-| `codexDevCompanion.corporateCaCertificatePath` | vazio | Caminho relativo, dentro do workspace, para o bundle CA `.pem` corporativo. |
-| `codexDevCompanion.modelCatalogPath` | vazio | Caminho relativo para um catálogo JSON local usado por aliases de deployment. |
+| `codexDevCompanion.liteLlmEndpoint` | vazio | Base HTTPS do gateway LiteLLM terminando em `/v1`. |
+| `codexDevCompanion.liteLlmModel` | vazio | Alias exato do modelo configurado no LiteLLM. |
+| `codexDevCompanion.gatewayCaCertificatePath` | vazio | Caminho relativo, dentro do workspace, para o bundle CA `.pem` do gateway. |
+| `codexDevCompanion.modelCatalogPath` | vazio | Caminho relativo para um catálogo JSON local usado pelo alias LiteLLM. |
 | `codexDevCompanion.reasoningEffort` | `high` | Define o esforço de raciocínio. |
 | `codexDevCompanion.autoContext` | `true` | Inclui contexto atual do editor. |
 | `codexDevCompanion.maxContextCharacters` | `24000` | Limita o contexto coletado pela extensão. |
@@ -169,14 +165,14 @@ Extension host
             ├── shell + file inspection
             ├── apply patches
             ├── persistent local threads
-            └── HTTPS ──► Azure OpenAI Responses API
+            └── HTTPS ──► LiteLLM Responses API
 ```
 
-As responsabilidades ficam separadas: o VS Code fornece contexto, segredos e interface; o Codex harness local mantém o loop agente, as ferramentas, a thread e a execução sandboxed; a memória continua transparente e editável. O Azure OpenAI recebe apenas as requisições de inferência necessárias para o modelo decidir o próximo passo.
+As responsabilidades ficam separadas: o VS Code fornece contexto, segredos e interface; o Codex harness local mantém o loop agente, as ferramentas, a thread e a execução sandboxed; a memória continua transparente e editável. O LiteLLM recebe apenas as requisições de inferência necessárias e encaminha ao provider upstream configurado pelo administrador.
 
 ## Limitações atuais
 
 - O painel mostra o resultado final da resposta, não deltas de texto token a token, pois o SDK expõe mensagens concluídas nesse fluxo.
 - Aprovações interativas exigiriam um cliente direto do Codex App Server; esta versão usa o SDK com sandbox restrito.
 - O VSIX inclui o runtime nativo do Codex e, por isso, pode ser grande e específico da plataforma usada no empacotamento.
-- Deployments Chat Completions-only não são compatíveis; o harness exige a Responses API com streaming e tool calls.
+- Rotas Chat Completions-only não são compatíveis; o harness exige a Responses API com streaming, continuidade e tool calls.

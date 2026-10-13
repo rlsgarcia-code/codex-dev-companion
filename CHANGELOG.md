@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Replaced the Azure-specific provider with a LiteLLM Responses gateway provider.
+- Added setup for HTTPS `/v1` base URL, model alias, scoped virtual key, optional CA PEM, and model catalog.
+- Send the LiteLLM virtual key as a Bearer token from VS Code Secret Storage.
+- Removed Azure deployment ID, API version, Azure hostname checks, and `api-key` header configuration.
+
 ## 0.2.4
 
 - Added workspace-scoped corporate CA PEM selection for Azure gateways.

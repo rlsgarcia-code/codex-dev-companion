@@ -2,7 +2,7 @@
   "name": "codex-dev-companion",
   "displayName": "Codex Dev Companion",
   "description": "A context-aware development support agent powered by the OpenAI Codex harness.",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -21,7 +21,7 @@
     "onView:codexDevCompanion.chat",
     "onCommand:codexDevCompanion.open",
     "onCommand:codexDevCompanion.newThread",
-    "onCommand:codexDevCompanion.configureAzure"
+    "onCommand:codexDevCompanion.configureLiteLlm"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -61,12 +61,12 @@
         "title": "Codex Companion: Remember Note"
       },
       {
-        "command": "codexDevCompanion.configureAzure",
-        "title": "Codex Companion: Configure Azure OpenAI"
+        "command": "codexDevCompanion.configureLiteLlm",
+        "title": "Codex Companion: Configure LiteLLM"
       },
       {
-        "command": "codexDevCompanion.clearAzureKey",
-        "title": "Codex Companion: Remove Azure OpenAI Key"
+        "command": "codexDevCompanion.clearLiteLlmKey",
+        "title": "Codex Companion: Remove LiteLLM Key"
       }
     ],
     "menus": {
@@ -88,37 +88,27 @@
     "configuration": {
       "title": "Codex Dev Companion",
       "properties": {
-        "codexDevCompanion.azureEndpoint": {
+        "codexDevCompanion.liteLlmEndpoint": {
           "type": "string",
           "default": "",
-          "description": "Azure OpenAI API base ending at /openai. Do not include /deployments/<id> or /responses."
+          "description": "HTTPS LiteLLM gateway base URL ending at /v1. Do not include /responses."
         },
-        "codexDevCompanion.azureDeployment": {
+        "codexDevCompanion.liteLlmModel": {
           "type": "string",
           "default": "",
-          "description": "Azure OpenAI deployment ID used by the Responses API."
+          "description": "Exact client-facing model alias configured by the LiteLLM gateway administrator."
         },
-        "codexDevCompanion.azureApiVersion": {
-          "type": "string",
-          "default": "2025-04-01-preview",
-          "description": "Azure OpenAI Responses API version."
-        },
-        "codexDevCompanion.allowCorporateGateway": {
-          "type": "boolean",
-          "default": false,
-          "description": "Allow the explicitly configured non-Azure HTTPS host as a corporate gateway to Azure OpenAI. Set automatically only after user confirmation."
-        },
-        "codexDevCompanion.corporateCaCertificatePath": {
+        "codexDevCompanion.gatewayCaCertificatePath": {
           "type": "string",
           "default": "",
           "scope": "resource",
-          "description": "Workspace-relative path to a corporate CA PEM bundle passed locally to Codex as CODEX_CA_CERTIFICATE."
+          "description": "Workspace-relative path to an optional gateway CA PEM bundle passed locally to Codex as CODEX_CA_CERTIFICATE."
         },
         "codexDevCompanion.modelCatalogPath": {
           "type": "string",
           "default": "",
           "scope": "resource",
-          "description": "Workspace-relative path to an optional Codex model catalog JSON for custom deployment aliases."
+          "description": "Workspace-relative path to an optional Codex model catalog JSON for custom LiteLLM aliases."
         },
         "codexDevCompanion.reasoningEffort": {
           "type": "string",
@@ -146,8 +136,8 @@
     "watch": "node esbuild.mjs --watch",
     "check": "tsc --noEmit",
     "test": "npm run compile:tests && node --test dist-tests/test/**/*.test.js",
-    "compile:tests": "tsc -p tsconfig.test.json",
-    "smoke:azure": "npm run compile:tests && node scripts/smoke-azure-routing.mjs",
+    "compile:tests": "node scripts/clean-test-output.mjs && tsc -p tsconfig.test.json",
+    "smoke:litellm": "npm run compile:tests && node scripts/smoke-litellm-routing.mjs",
     "package": "npm run check && npm run build && vsce package"
   },
   "dependencies": {
