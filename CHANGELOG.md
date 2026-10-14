@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1
+
+- Docked the live agent status and current plan directly above the composer so they remain visible at the active end of long conversations.
+- Made the conversation timeline independently scrollable and bounded long plans and settings panels to the available sidebar height.
+- Clear the previous plan when a new request is sent and keep the newest conversation activity in view as the plan changes.
+
 ## 0.9.0
 
 - Added documented GPT and Claude compatibility presets with model-aware reasoning, tool-calling, and sampling validation.

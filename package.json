@@ -2,7 +2,7 @@
   "name": "codex-dev-companion",
   "displayName": "Local Dev Companion",
   "description": "A local LangChain development agent connected only to user-configured LiteLLM endpoints.",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "publisher": "local",
   "license": "MIT",
   "repository": {

@@ -366,17 +366,6 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       <button class="icon-button" id="new-thread" title="New thread" aria-label="New thread">↺</button>
     </header>
 
-    <section class="presence" aria-live="polite">
-      <span class="signal" id="signal"></span>
-      <span id="status">Ready</span>
-      <span class="workspace" id="workspace"></span>
-    </section>
-
-    <section class="plan hidden" id="plan">
-      <div class="section-label">CURRENT PLAN</div>
-      <ol id="plan-items"></ol>
-    </section>
-
     <section class="settings-panel hidden" id="litellm-settings" aria-label="LiteLLM settings">
       <div class="settings-heading">
         <div>
@@ -473,6 +462,17 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       </div>
     </section>
 
+    <section class="plan hidden" id="plan">
+      <div class="section-label">CURRENT PLAN</div>
+      <ol id="plan-items"></ol>
+    </section>
+
+    <section class="presence" aria-live="polite">
+      <span class="signal" id="signal"></span>
+      <span id="status">Ready</span>
+      <span class="workspace" id="workspace"></span>
+    </section>
+
     <footer class="composer-wrap">
       <div class="context-row">
         <span class="context-chip" id="active-file">No active file</span>
@@ -505,27 +505,27 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 const styles = String.raw`
 :root { color-scheme: light dark; --accent: #d6ff45; --muted: var(--vscode-descriptionForeground); --line: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); }
 * { box-sizing: border-box; }
-body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font: 13px/1.5 var(--vscode-font-family); }
+body { height: 100vh; margin: 0; overflow: hidden; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font: 13px/1.5 var(--vscode-font-family); }
 button, textarea, select { font: inherit; }
 button { color: inherit; }
-.shell { min-height: 100vh; display: grid; grid-template-rows: auto auto auto auto 1fr auto; }
+.shell { height: 100vh; min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; }
 .topbar { display: flex; align-items: flex-start; justify-content: space-between; padding: 20px 18px 13px; border-bottom: 1px solid var(--line); }
 .eyebrow, .section-label { color: var(--muted); font: 600 9px/1.2 var(--vscode-editor-font-family); letter-spacing: .16em; }
 h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; }
 .icon-button { border: 0; background: transparent; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 18px; opacity: .7; transition: opacity .15s, background .15s; }
 .icon-button:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .icon-button:disabled { cursor: default; opacity: .3; }
-.presence { display: flex; align-items: center; gap: 8px; padding: 9px 18px; color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--line); }
+.presence { display: flex; align-items: center; gap: 8px; padding: 8px 18px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); }
 .signal { width: 7px; height: 7px; border-radius: 50%; background: #6ddc72; box-shadow: 0 0 0 3px color-mix(in srgb, #6ddc72 16%, transparent); }
 .signal.busy { background: var(--accent); animation: pulse 1.2s infinite; }
 .workspace { margin-left: auto; max-width: 45%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.plan { padding: 13px 18px 10px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 90%, var(--accent)); animation: reveal .2s ease-out; }
+.plan { max-height: 32vh; overflow-y: auto; padding: 11px 18px 9px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 90%, var(--accent)); animation: reveal .2s ease-out; }
 .plan ol { list-style: none; margin: 9px 0 0; padding: 0; display: grid; gap: 7px; }
 .plan li { position: relative; padding-left: 18px; color: var(--muted); font-size: 11px; }
 .plan li::before { content: ''; position: absolute; left: 0; top: .45em; width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
 .plan li.done { color: var(--vscode-foreground); text-decoration: line-through; opacity: .66; }
 .plan li.done::before { background: var(--accent); border-color: var(--accent); }
-.settings-panel { padding: 14px 18px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); animation: reveal .2s ease-out; }
+.settings-panel { max-height: 68vh; overflow-y: auto; padding: 14px 18px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); animation: reveal .2s ease-out; }
 .settings-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
 .settings-heading h2 { margin: 3px 0 0; font-size: 16px; line-height: 1.1; letter-spacing: -.025em; }
 .settings-close { margin-top: -5px; }
@@ -546,7 +546,7 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .settings-note { min-height: 1.4em; margin: 8px 0 0; color: var(--muted); font-size: 10px; }
 .settings-error { margin: 8px 0 0; color: var(--vscode-errorForeground); font-size: 10px; white-space: pre-wrap; }
 .settings-actions { margin-top: 12px; }
-.timeline { min-height: 0; overflow-y: auto; padding: 0 18px 32px; }
+.timeline { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 18px 20px; }
 .welcome { padding: 48px 0 24px; animation: reveal .35s ease-out; }
 .monogram { display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 24px; border-radius: 10px; background: var(--accent); color: #111; font-weight: 800; font-size: 18px; transform: rotate(-3deg); }
 .welcome h2 { margin: 0; font-size: 22px; line-height: 1.12; letter-spacing: -.035em; }
@@ -564,7 +564,7 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .activity strong { color: var(--vscode-foreground); font-weight: 500; }
 .activity details pre { white-space: pre-wrap; max-height: 160px; overflow: auto; }
 .error { margin: 12px 0; padding: 10px 0 10px 12px; border-left: 2px solid var(--vscode-errorForeground); color: var(--vscode-errorForeground); white-space: pre-wrap; }
-.composer-wrap { position: sticky; bottom: 0; padding: 9px 12px 12px; background: linear-gradient(transparent, var(--vscode-sideBar-background) 14%); }
+.composer-wrap { padding: 5px 12px 12px; background: var(--vscode-sideBar-background); }
 .context-row { display: flex; align-items: center; justify-content: space-between; min-height: 25px; padding: 0 5px; }
 .context-chip { max-width: 70%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font: 10px var(--vscode-editor-font-family); }
 .memory-link { border: 0; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
@@ -635,6 +635,12 @@ function renderText(value) {
   }).join('');
 }
 
+function scrollConversationToBottom() {
+  requestAnimationFrame(() => {
+    timeline.scrollTop = timeline.scrollHeight;
+  });
+}
+
 function appendMessage(message) {
   document.getElementById('welcome')?.remove();
   const element = document.createElement('article');
@@ -642,7 +648,7 @@ function appendMessage(message) {
   element.innerHTML = '<div class="message-role">' + (message.role === 'user' ? 'YOU' : 'AGENT') + '</div>' +
     '<div class="message-body">' + renderText(message.text) + '</div>';
   timeline.appendChild(element);
-  timeline.scrollTop = timeline.scrollHeight;
+  scrollConversationToBottom();
 }
 
 function appendActivity(kind, title, detail) {
@@ -651,7 +657,7 @@ function appendActivity(kind, title, detail) {
   const details = detail ? '<details><summary>output</summary><pre>' + escapeHtml(detail) + '</pre></details>' : '';
   element.innerHTML = '<strong>' + escapeHtml(kind.toUpperCase()) + '</strong> · ' + escapeHtml(title) + details;
   timeline.appendChild(element);
-  timeline.scrollTop = timeline.scrollHeight;
+  scrollConversationToBottom();
 }
 
 function setBusy(value) {
@@ -661,11 +667,14 @@ function setBusy(value) {
   signal.classList.toggle('busy', value);
   agentRuntime.disabled = value;
   if (!value && status.textContent !== 'Ready') status.textContent = 'Ready';
+  if (value) scrollConversationToBottom();
 }
 
 function submit() {
   const text = prompt.value.trim();
   if (!text || busy) return;
+  plan.classList.add('hidden');
+  planItems.innerHTML = '';
   vscode.postMessage({ type: 'send', text, mode: document.getElementById('mode').value });
   prompt.value = '';
 }
@@ -878,11 +887,12 @@ window.addEventListener('message', ({ data }) => {
     case 'plan':
       plan.classList.remove('hidden');
       planItems.innerHTML = data.items.map(item => '<li class="' + (item.completed ? 'done' : '') + '">' + escapeHtml(item.text) + '</li>').join('');
+      scrollConversationToBottom();
       break;
     case 'activity': appendActivity(data.kind, data.title, data.detail); break;
     case 'usage': status.textContent = 'Ready · ' + data.input + ' in / ' + data.output + ' out'; break;
     case 'error':
-      const error = document.createElement('div'); error.className = 'error'; error.textContent = data.message; timeline.appendChild(error); break;
+      const error = document.createElement('div'); error.className = 'error'; error.textContent = data.message; timeline.appendChild(error); scrollConversationToBottom(); break;
     case 'reset': resetConversation(); break;
     case 'newThreadError':
       newThreadButton.disabled = false;
@@ -891,6 +901,7 @@ window.addEventListener('message', ({ data }) => {
       threadError.className = 'error';
       threadError.textContent = data.message;
       timeline.appendChild(threadError);
+      scrollConversationToBottom();
       break;
     case 'contextPinned':
       document.getElementById('active-file').textContent = 'Pinned: ' + data.filename; break;

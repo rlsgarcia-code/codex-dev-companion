@@ -49,7 +49,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.9.0.vsix
+code --install-extension ./codex-dev-companion-0.9.1.vsix
 ```
 
 Se o comando `code` não estiver disponível:
@@ -57,7 +57,7 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.9.0.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.9.1.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 O VSIX não contém binário nativo e pode ser instalado em macOS, Windows ou Linux compatíveis com a versão do VS Code indicada.
@@ -164,7 +164,7 @@ Para gerar e reinstalar o pacote:
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.9.0.vsix
+code --install-extension codex-dev-companion-0.9.1.vsix
 ```
 
 ## Memória
