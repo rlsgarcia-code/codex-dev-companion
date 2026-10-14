@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { copyFile, mkdir, readdir } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rm } from "node:fs/promises";
 import * as path from "node:path";
 
 const watch = process.argv.includes("--watch");
@@ -44,14 +44,9 @@ async function copyNativeAssets() {
   await copyFile(path.join(chromaDirectory, chromaBinary), path.join("dist", "chroma", "chromadb.node"));
   await copyFile(path.join("scripts", "chroma-server.cjs"), path.join("dist", "chroma", "server.cjs"));
 
-  await mkdir(path.join("dist", "build", "Release"), { recursive: true });
-  await copyFile(
-    path.join("node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node"),
-    path.join("dist", "build", "Release", "better_sqlite3.node")
-  );
-
   await mkdir(path.join("dist", "licenses"), { recursive: true });
+  await rm(path.join("dist", "build"), { recursive: true, force: true });
+  await rm(path.join("dist", "licenses", "better-sqlite3-mit.txt"), { force: true });
   await copyFile(path.join("node_modules", "chromadb", "LICENSE"), path.join("dist", "licenses", "chromadb-apache-2.0.txt"));
-  await copyFile(path.join("node_modules", "better-sqlite3", "LICENSE"), path.join("dist", "licenses", "better-sqlite3-mit.txt"));
   await copyFile(path.join("node_modules", "@langchain", "community", "LICENSE"), path.join("dist", "licenses", "langchain-community-mit.txt"));
 }

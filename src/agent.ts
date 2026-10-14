@@ -1,4 +1,3 @@
-import { mkdirSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import * as path from "node:path";
 import { rootCertificates } from "node:tls";
@@ -6,7 +5,6 @@ import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import { BaseMessage, HumanMessage, RemoveMessage } from "@langchain/core/messages";
 import type { LLMResult } from "@langchain/core/outputs";
 import { MemorySaver, REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
-import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { ChatOpenAICompletions } from "@langchain/openai";
 import {
   CompositeBackend,
@@ -51,8 +49,7 @@ type ConversationState = { id: string; messages: PersistedMessage[] };
 
 export class DevelopmentAgent implements vscode.Disposable {
   private abortController: AbortController | undefined;
-  private readonly checkpointer: SqliteSaver | MemorySaver;
-  private readonly persistentCheckpoints: boolean;
+  private readonly checkpointer = new MemorySaver();
   private readonly semanticMemory: SemanticProjectMemory;
   private readonly hydratedThreads = new Set<string>();
   private isRunning = false;
@@ -64,16 +61,6 @@ export class DevelopmentAgent implements vscode.Disposable {
   ) {
     disableExternalLangChainTracing();
     this.semanticMemory = new SemanticProjectMemory(extensionContext);
-    try {
-      mkdirSync(extensionContext.globalStorageUri.fsPath, { recursive: true });
-      this.checkpointer = SqliteSaver.fromConnString(
-        path.join(extensionContext.globalStorageUri.fsPath, "agent-checkpoints.sqlite")
-      );
-      this.persistentCheckpoints = true;
-    } catch {
-      this.checkpointer = new MemorySaver();
-      this.persistentCheckpoints = false;
-    }
   }
 
   public get running(): boolean {
@@ -265,25 +252,21 @@ export class DevelopmentAgent implements vscode.Disposable {
         throw new Error(`${agentRuntimeLabel(runtime)} completed without a final assistant message.`);
       }
       this.hydratedThreads.add(threadId);
-      if (!this.persistentCheckpoints) {
-        conversation.messages.push(
-          { role: "user", content: request },
-          { role: "assistant", content: answer }
-        );
-        conversation.messages = this.compactPersistedConversation(
-          conversation.messages,
-          maxConversationCharacters
-        );
-        await this.extensionContext.workspaceState.update(this.conversationStorageKey(), conversation);
-      } else if (conversation.messages.length) {
-        await this.extensionContext.workspaceState.update(this.conversationStorageKey(), threadId);
-      }
+      conversation.messages.push(
+        { role: "user", content: request },
+        { role: "assistant", content: answer }
+      );
+      conversation.messages = this.compactPersistedConversation(
+        conversation.messages,
+        maxConversationCharacters
+      );
+      await this.extensionContext.workspaceState.update(this.conversationStorageKey(), conversation);
       onEvent({ type: "assistant", text: answer });
       onEvent({ type: "usage", input: usage.input, output: usage.output });
       onEvent({ type: "status", label: "Ready" });
     } catch (error) {
       const threadId = this.storedThreadId();
-      if (!this.persistentCheckpoints && threadId) {
+      if (threadId) {
         await this.checkpointer.deleteThread(threadId).catch(() => undefined);
         this.hydratedThreads.delete(threadId);
       }
@@ -324,7 +307,6 @@ export class DevelopmentAgent implements vscode.Disposable {
 
   public dispose(): void {
     this.cancel();
-    if (this.checkpointer instanceof SqliteSaver) this.checkpointer.db.close();
   }
 
   private storedThreadId(): string | undefined {
@@ -337,10 +319,7 @@ export class DevelopmentAgent implements vscode.Disposable {
     if (typeof stored === "string") return { id: stored, messages: [] };
     if (stored?.id && Array.isArray(stored.messages)) return stored;
     const conversation = { id: crypto.randomUUID(), messages: [] };
-    await this.extensionContext.workspaceState.update(
-      this.conversationStorageKey(),
-      this.persistentCheckpoints ? conversation.id : conversation
-    );
+    await this.extensionContext.workspaceState.update(this.conversationStorageKey(), conversation);
     return conversation;
   }
 

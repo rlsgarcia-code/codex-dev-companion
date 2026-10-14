@@ -2,7 +2,7 @@
 
 Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente e conectados somente a endpoints configurados pelo usuário no gateway LiteLLM.
 
-O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e previsível, e **Deep Agent** (`createDeepAgent`), preparado para tarefas longas com planejamento, compactação de contexto e subagentes locais. Modelo (`ChatOpenAICompletions`), ferramentas (`tool` + Zod), estado/checkpoints (`SqliteSaver`, com fallback para `MemorySaver`), callbacks, vector store e middleware continuam sendo do ecossistema LangChain. Contexto, histórico, ChromaDB, memória e ferramentas rodam na máquina do usuário. As únicas chamadas externas feitas pela extensão são:
+O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e previsível, e **Deep Agent** (`createDeepAgent`), preparado para tarefas longas com planejamento, compactação de contexto e subagentes locais. Modelo (`ChatOpenAICompletions`), ferramentas (`tool` + Zod), estado (`MemorySaver`), callbacks, vector store e middleware continuam sendo do ecossistema LangChain. Contexto, histórico, ChromaDB, memória e ferramentas rodam na máquina do usuário. As únicas chamadas externas feitas pela extensão são:
 
 ```text
 POST <LITELLM_BASE_URL>/chat/completions
@@ -18,7 +18,7 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Seletor visível entre **LangChain Agent** e **Deep Agent**, persistido por workspace.
 - Contexto automático do arquivo ativo, seleção, cursor, diagnósticos, arquivos abertos e amostra da árvore.
 - Contexto fixado pelo menu **Local Companion: Add Selection to Context**.
-- Checkpoints de conversa persistidos em SQLite local pelo `SqliteSaver` do LangGraph, com fallback seguro para `MemorySaver`.
+- Checkpoints da thread ativa gerenciados por `MemorySaver`, com uma projeção limitada de usuário/assistente no armazenamento local do workspace para restauração.
 - Memória durável e auditável em `.codex-agent/memory.md`, com recuperação semântica opcional pelo ChromaDB local.
 - Planejamento apresentado na própria sidebar.
 - Ferramentas locais para listar, pesquisar e ler arquivos sob demanda.
@@ -50,7 +50,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.10.0.vsix
+code --install-extension ./codex-dev-companion-0.10.1.vsix
 ```
 
 Se o comando `code` não estiver disponível:
@@ -58,10 +58,10 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.10.0.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.10.1.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
-O VSIX contém os binários locais do ChromaDB e SQLite para a plataforma em que foi gerado. Gere o pacote no mesmo sistema/arquitetura em que ele será instalado (macOS arm64/x64, Linux arm64/x64 ou Windows x64). Não é necessário Docker nem instalar um servidor Chroma separadamente.
+O VSIX contém o binário local do ChromaDB para a plataforma em que foi gerado. Gere o pacote no mesmo sistema/arquitetura em que ele será instalado (macOS arm64/x64, Linux arm64/x64 ou Windows x64). Não é necessário Docker nem instalar um servidor Chroma separadamente. Os binários necessários são fornecidos por pacotes npm específicos da plataforma e o projeto desabilita scripts de lifecycle durante a instalação de dependências.
 
 ## Primeiro uso
 
@@ -132,7 +132,7 @@ Em cada turno, o runtime local:
 
 1. coleta o contexto atual do editor;
 2. lê a memória durável do projeto;
-3. recupera a thread pelo checkpoint SQLite local e aplica o middleware de janela de contexto;
+3. recupera a thread ativa pelo `MemorySaver` ou restaura sua projeção local limitada e aplica o middleware de janela de contexto;
 4. quando configurado, indexa e consulta a memória do projeto no ChromaDB local por meio do vector store LangChain;
 5. instancia `ChatOpenAICompletions` sobre a base URL do LiteLLM;
 6. entrega mensagens e ferramentas ao `createAgent` ou `createDeepAgent`, conforme a escolha do usuário;
@@ -169,7 +169,7 @@ Para gerar e reinstalar o pacote:
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.10.0.vsix
+code --install-extension codex-dev-companion-0.10.1.vsix
 ```
 
 ## Memória
@@ -188,7 +188,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 - Comandos são executados diretamente, sem shell, depois de confirmação do usuário.
 - Clientes de rede e operações de download, publicação e Git remoto são bloqueados nas ferramentas do agente.
 - O histórico do agente fica no armazenamento local do workspace do VS Code; não é copiado para `memory.md`.
-- Checkpoints SQLite e vetores Chroma ficam no armazenamento privado local da extensão, fora do repositório.
+- A projeção limitada da conversa fica no estado local do workspace; os vetores Chroma ficam no armazenamento privado local da extensão, fora do repositório.
 - O LiteLLM recebe apenas as mensagens necessárias para inferência, incluindo trechos de arquivos e resultados de ferramentas usados naquele turno.
 - Revise as alterações antes de fazer commit.
 
@@ -227,7 +227,7 @@ VS Code Secondary Sidebar
             ├── runtime escolhido por workspace
             │     ├── createAgent · enxuto e explícito
             │     └── createDeepAgent · planejamento, compactação e subagentes
-            ├── SqliteSaver + middleware (fallback MemorySaver)
+            ├── MemorySaver + projeção local limitada
             ├── Chroma vector store local ──► 127.0.0.1 (opcional)
             ├── ChatOpenAICompletions
             ├── LocalToolHost (`tool()` + Zod)
@@ -248,5 +248,5 @@ VS Code Secondary Sidebar
 - A extensão não executa um sandbox de sistema operacional. Por isso, comandos exigem confirmação explícita e recebem um ambiente mínimo.
 - O LangChain Agent mantém turnos recentes inteiros dentro do limite configurado. O Deep Agent pode compactar conversas antigas usando o mesmo modelo via LiteLLM.
 - A memória semântica requer que o gateway disponibilize um modelo compatível com a API OpenAI de embeddings.
-- O pacote VSIX é específico de plataforma por conter os binários locais de ChromaDB e SQLite.
+- O pacote VSIX é específico de plataforma por conter o binário local do ChromaDB.
 - Não há suporte a ferramentas hospedadas, web search, MCP remoto ou execução em nuvem.
