@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.8.0
+
+- Added a workspace-level choice between the focused `createAgent` runtime and the advanced `createDeepAgent` runtime.
+- Added the runtime selector directly to the sidebar composer and to the first step of the setup wizard.
+- Restricted Deep Agent filesystem access to the opened workspace and made its built-in filesystem tools read-only in Plan mode.
+- Kept command execution behind the existing local confirmation flow and kept both runtimes on the same LiteLLM Chat Completions client.
+- Added read-only local routing smoke coverage for both runtimes.
+
+## 0.7.0
+
+- Rebuilt the complete agent runtime with LangChain primitives: `ChatOpenAICompletions`, `createAgent`, `tool`, Zod schemas, callbacks, middleware, and `MemorySaver`.
+- Removed the custom HTTP/SSE client, hand-written tool-call loop, and custom model-message/tool definitions.
+- Forced Chat Completions routing through the LangChain OpenAI integration and kept optional corporate CA support through its configured transport.
+- Added LangChain context-window middleware, checkpointed thread state, and per-run token-usage callbacks.
+- Explicitly disabled LangSmith/LangChain external tracing so LiteLLM remains the only external request destination.
+
+## 0.6.0
+
+- Replaced the Codex SDK runtime with a custom local agent loop over LiteLLM Chat Completions.
+- Added local function tools for workspace search, bounded file reads, exact edits, file creation, planning, project memory, and approved command execution.
+- Added streamed Chat Completions parsing, including fragmented tool calls, usage, cancellation, and non-streaming fallback.
+- Persist recent user/assistant context locally with bounded conversation compaction.
+- Removed Responses API, Codex model catalogs, Codex binaries, and the `@openai/codex-sdk` dependency.
+- Kept the LiteLLM virtual key exclusively in VS Code Secret Storage and corporate CA support inside the workspace.
+
 ## 0.5.0
 
 - Replaced the Azure-specific provider with a LiteLLM Responses gateway provider.

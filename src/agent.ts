@@ -1,41 +1,58 @@
-import { realpath } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import * as path from "node:path";
-import * as vscode from "vscode";
-import type {
-  Codex as CodexType,
-  CodexOptions,
-  Thread,
-  ThreadEvent,
-  ThreadItem,
-  ThreadOptions
-} from "@openai/codex-sdk";
+import { rootCertificates } from "node:tls";
+import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import { BaseMessage, HumanMessage, RemoveMessage } from "@langchain/core/messages";
+import type { LLMResult } from "@langchain/core/outputs";
+import { MemorySaver, REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
+import { ChatOpenAICompletions } from "@langchain/openai";
 import {
+  createDeepAgent,
+  createFilesystemMiddleware,
+  createSummarizationMiddleware,
+  FilesystemBackend,
+  StateBackend
+} from "deepagents";
+import { createAgent, createMiddleware } from "langchain";
+import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
+import * as vscode from "vscode";
+import { ContextCollector, renderContext } from "./context";
+import {
+  chatCompletionsBaseUrl,
   LITELLM_API_KEY_SECRET,
-  buildLiteLlmCodexConfig,
-  buildIsolatedEnvironment,
   resolveWorkspaceCertificatePath,
-  resolveWorkspaceModelCatalogPath,
   validateLiteLlmConnection
 } from "./litellm";
-import { ContextCollector, renderContext } from "./context";
 import { ProjectMemory } from "./memory";
-import type { AgentUiEvent, RunMode } from "./types";
+import { agentRuntimeLabel, parseAgentRuntime } from "./runtime";
+import { LocalToolHost } from "./tools";
+import type { AgentRuntime, AgentUiEvent, RunMode } from "./types";
 
-const THREAD_KEY_PREFIX = "codexDevCompanion.thread";
+const CONVERSATION_KEY_PREFIX = "codexDevCompanion.localConversation";
 
-type CodexConstructor = typeof import("@openai/codex-sdk").Codex;
+type PersistedMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string };
+
+type ConversationState = {
+  id: string;
+  messages: PersistedMessage[];
+};
 
 export class DevelopmentAgent implements vscode.Disposable {
-  private codex: CodexType | undefined;
-  private thread: Thread | undefined;
   private abortController: AbortController | undefined;
+  private checkpointer = new MemorySaver();
+  private readonly hydratedThreads = new Set<string>();
   private isRunning = false;
+  private activeRuntime: AgentRuntime | undefined;
 
   public constructor(
     private readonly extensionContext: vscode.ExtensionContext,
     private readonly contextCollector: ContextCollector,
     private readonly memory: ProjectMemory
-  ) {}
+  ) {
+    disableExternalLangChainTracing();
+  }
 
   public get running(): boolean {
     return this.isRunning;
@@ -55,36 +72,154 @@ export class DevelopmentAgent implements vscode.Disposable {
     }
 
     this.isRunning = true;
-    this.abortController = new AbortController();
+    const controller = new AbortController();
+    this.abortController = controller;
+    let dispatcher: UndiciAgent | undefined;
+    let activeThreadId: string | undefined;
     onEvent({ type: "status", label: "Collecting workspace context" });
 
     try {
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-      const maxCharacters = configuration.get<number>("maxContextCharacters", 24_000);
-      const autoContext = configuration.get<boolean>("autoContext", true);
-      const memoryText = await this.memory.read();
-      const snapshot = autoContext ? await this.contextCollector.collect(maxCharacters) : undefined;
-      const prompt = this.buildPrompt(
-        request,
-        mode,
-        memoryText,
-        snapshot ? renderContext(snapshot, maxCharacters) : "Automatic editor context is disabled."
-      );
-
-      onEvent({ type: "status", label: "Starting Codex harness" });
-      const thread = await this.getThread();
-      const streamed = await thread.runStreamed(prompt, { signal: this.abortController.signal });
-      for await (const event of streamed.events) {
-        await this.handleEvent(event, onEvent);
+      const runtime = parseAgentRuntime(configuration.get("agentRuntime"));
+      if (this.activeRuntime && this.activeRuntime !== runtime) {
+        this.checkpointer = new MemorySaver();
+        this.hydratedThreads.clear();
       }
+      this.activeRuntime = runtime;
+      const apiKey = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
+      const connection = validateLiteLlmConnection({
+        endpoint: configuration.get<string>("liteLlmEndpoint", ""),
+        model: configuration.get<string>("liteLlmModel", ""),
+        apiKey: apiKey ?? ""
+      });
+      const maxContextCharacters = configuration.get<number>("maxContextCharacters", 24_000);
+      const maxConversationCharacters = configuration.get<number>("maxConversationCharacters", 48_000);
+      const autoContext = configuration.get<boolean>("autoContext", true);
+      const [memoryText, snapshot, certificateAuthorities] = await Promise.all([
+        this.memory.read(),
+        autoContext ? this.contextCollector.collect(maxContextCharacters) : Promise.resolve(undefined),
+        this.certificateAuthorities(workspace.uri.fsPath)
+      ]);
+      const context = snapshot
+        ? renderContext(snapshot, maxContextCharacters)
+        : "Automatic editor context is disabled.";
+
+      const conversation = this.conversation();
+      activeThreadId = conversation.id;
+      onEvent({ type: "thread", threadId: conversation.id });
+
+      if (certificateAuthorities) {
+        dispatcher = new UndiciAgent({ connect: { ca: certificateAuthorities } });
+      }
+      const model = new ChatOpenAICompletions({
+        model: connection.model,
+        apiKey: connection.apiKey,
+        temperature: 0,
+        streaming: true,
+        streamUsage: true,
+        maxRetries: 2,
+        configuration: {
+          baseURL: chatCompletionsBaseUrl(connection),
+          ...(dispatcher ? {
+            fetch: undiciFetch as unknown as typeof globalThis.fetch,
+            fetchOptions: { dispatcher } as never
+          } : {})
+        }
+      });
+      const toolHost = new LocalToolHost(workspace.uri.fsPath, this.memory, onEvent);
+      const usage = new TokenUsageHandler();
+
+      const firstInvocation = !this.hydratedThreads.has(conversation.id);
+      const messages = firstInvocation
+        ? [
+            ...this.compactPersistedConversation(conversation.messages, maxConversationCharacters),
+            new HumanMessage(this.userMessage(request, context))
+          ]
+        : [new HumanMessage(this.userMessage(request, context))];
+
+      onEvent({ type: "status", label: `${agentRuntimeLabel(runtime)} is thinking` });
+      const invocationConfig = {
+        configurable: { thread_id: conversation.id },
+        recursionLimit: runtime === "deep" ? 50 : 30,
+        signal: controller.signal,
+        callbacks: [usage]
+      };
+      let resultMessages: BaseMessage[];
+      if (runtime === "deep") {
+        const workspaceBackend = new FilesystemBackend({
+          rootDir: workspace.uri.fsPath,
+          virtualMode: true,
+          maxFileSizeMb: 1.5
+        });
+        const permissions = mode === "plan"
+          ? [{ operations: ["write"] as const, paths: ["/**"], mode: "deny" as const }]
+          : [];
+        const filesystemMiddleware = createFilesystemMiddleware({
+          backend: workspaceBackend,
+          permissions,
+          tools: mode === "plan"
+            ? ["read_file", "ls", "glob", "grep"]
+            : ["read_file", "ls", "glob", "grep", "write_file", "edit_file"],
+          toolTokenLimitBeforeEvict: null,
+          humanMessageTokenLimitBeforeEvict: null
+        });
+        const summarizationMiddleware = createSummarizationMiddleware({
+          model,
+          backend: new StateBackend(),
+          trigger: { type: "messages", value: 28 },
+          keep: { type: "messages", value: 14 }
+        });
+        const agent = createDeepAgent({
+          model,
+          tools: toolHost.deepTools(mode, controller.signal),
+          systemPrompt: this.systemPrompt(mode, memoryText, runtime),
+          middleware: [filesystemMiddleware, summarizationMiddleware],
+          backend: workspaceBackend,
+          permissions,
+          checkpointer: this.checkpointer
+        });
+        const result = await agent.invoke({ messages }, invocationConfig);
+        resultMessages = result.messages as BaseMessage[];
+      } else {
+        const agent = createAgent({
+          model,
+          tools: toolHost.tools(mode, controller.signal),
+          systemPrompt: this.systemPrompt(mode, memoryText, runtime),
+          middleware: [conversationWindowMiddleware(maxConversationCharacters)],
+          checkpointer: this.checkpointer
+        });
+        const result = await agent.invoke({ messages }, invocationConfig);
+        resultMessages = result.messages as BaseMessage[];
+      }
+      this.hydratedThreads.add(conversation.id);
+
+      const answer = finalAssistantText(resultMessages);
+      if (!answer) {
+        throw new Error(`${agentRuntimeLabel(runtime)} completed without a final assistant message.`);
+      }
+      conversation.messages.push(
+        { role: "user", content: request },
+        { role: "assistant", content: answer }
+      );
+      conversation.messages = this.compactPersistedConversation(
+        conversation.messages,
+        maxConversationCharacters
+      );
+      await this.saveConversation(conversation);
+      onEvent({ type: "assistant", text: answer });
+      onEvent({ type: "usage", input: usage.input, output: usage.output });
+      onEvent({ type: "status", label: "Ready" });
     } catch (error) {
-      if (this.abortController.signal.aborted) {
+      if (activeThreadId) this.hydratedThreads.delete(activeThreadId);
+      this.checkpointer = new MemorySaver();
+      if (controller.signal.aborted) {
         onEvent({ type: "status", label: "Run cancelled" });
       } else {
         const message = error instanceof Error ? error.message : String(error);
         onEvent({ type: "error", message: this.explainError(message) });
       }
     } finally {
+      await dispatcher?.close();
       this.isRunning = false;
       this.abortController = undefined;
       onEvent({ type: "done" });
@@ -97,141 +232,103 @@ export class DevelopmentAgent implements vscode.Disposable {
 
   public async newThread(): Promise<void> {
     this.cancel();
-    this.thread = undefined;
     this.contextCollector.clearPinned();
-    await this.extensionContext.workspaceState.update(this.threadStorageKey(), undefined);
+    this.checkpointer = new MemorySaver();
+    this.hydratedThreads.clear();
+    this.activeRuntime = undefined;
+    await this.extensionContext.workspaceState.update(this.conversationStorageKey(), undefined);
   }
 
   public async reloadProviderConfiguration(): Promise<void> {
     await this.newThread();
-    this.codex = undefined;
+  }
+
+  public reloadRuntimeConfiguration(): void {
+    this.cancel();
+    this.checkpointer = new MemorySaver();
+    this.hydratedThreads.clear();
+    this.activeRuntime = undefined;
   }
 
   public dispose(): void {
     this.cancel();
   }
 
-  private async getThread(): Promise<Thread> {
-    if (this.thread) {
-      return this.thread;
-    }
-    if (!this.codex) {
-      const module = await import("@openai/codex-sdk");
-      const Codex: CodexConstructor = module.Codex;
-      const options = await this.codexOptions();
-      this.codex = new Codex(options);
-    }
-
-    const storedThreadId = this.extensionContext.workspaceState.get<string>(this.threadStorageKey());
-    const options = this.threadOptions();
-    this.thread = storedThreadId
-      ? this.codex.resumeThread(storedThreadId, options)
-      : this.codex.startThread(options);
-    return this.thread;
+  private conversation(): ConversationState {
+    const stored = this.extensionContext.workspaceState.get<ConversationState>(this.conversationStorageKey());
+    if (stored?.id && Array.isArray(stored.messages)) return stored;
+    return { id: crypto.randomUUID(), messages: [] };
   }
 
-  private threadOptions(): ThreadOptions {
+  private async saveConversation(conversation: ConversationState): Promise<void> {
+    await this.extensionContext.workspaceState.update(this.conversationStorageKey(), conversation);
+  }
+
+  private compactPersistedConversation(
+    messages: PersistedMessage[],
+    maximumCharacters: number
+  ): PersistedMessage[] {
+    const retained: PersistedMessage[] = [];
+    let characters = 0;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (!message) continue;
+      if (retained.length >= 30 || characters + message.content.length > maximumCharacters) break;
+      retained.unshift(message);
+      characters += message.content.length;
+    }
+    while (retained[0]?.role === "assistant") retained.shift();
+    return retained;
+  }
+
+  private async certificateAuthorities(workspaceRoot: string): Promise<Array<string | Buffer> | undefined> {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const model = configuration.get<string>("liteLlmModel", "").trim();
-    return {
-      model,
-      threadSource: "vscode-codex-dev-companion",
-      workingDirectory: root,
-      skipGitRepoCheck: true,
-      sandboxMode: "workspace-write",
-      approvalPolicy: "never",
-      networkAccessEnabled: false,
-      modelReasoningEffort: configuration.get("reasoningEffort", "high")
-    };
+    const configuredPath = configuration.get<string>("gatewayCaCertificatePath", "").trim();
+    if (!configuredPath) return undefined;
+    const candidate = resolveWorkspaceCertificatePath(workspaceRoot, configuredPath);
+    const [realWorkspace, realCertificate] = await Promise.all([
+      realpath(workspaceRoot),
+      realpath(candidate)
+    ]);
+    const relative = path.relative(realWorkspace, realCertificate);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error("Gateway CA certificate must resolve to a file inside the opened workspace.");
+    }
+    return [...rootCertificates, await readFile(realCertificate)];
   }
 
-  private async codexOptions(): Promise<CodexOptions> {
-    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-    const apiKey = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
-    const connection = validateLiteLlmConnection({
-      endpoint: configuration.get<string>("liteLlmEndpoint", ""),
-      model: configuration.get<string>("liteLlmModel", ""),
-      apiKey: apiKey ?? ""
-    });
-    const codexHome = vscode.Uri.joinPath(
-      this.extensionContext.globalStorageUri,
-      "local-codex-home"
-    );
-    await vscode.workspace.fs.createDirectory(codexHome);
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    let caCertificatePath: string | undefined;
-    let modelCatalogPath: string | undefined;
-    const configuredCertificate = configuration.get<string>("gatewayCaCertificatePath", "").trim();
-    if (configuredCertificate) {
-      if (!workspaceRoot) {
-        throw new Error("Open the workspace containing the gateway CA certificate.");
-      }
-      const candidate = resolveWorkspaceCertificatePath(workspaceRoot, configuredCertificate);
-      const [realWorkspace, realCertificate] = await Promise.all([
-        realpath(workspaceRoot),
-        realpath(candidate)
-      ]);
-      const relative = path.relative(realWorkspace, realCertificate);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
-        throw new Error("Gateway CA certificate must resolve to a file inside the opened workspace.");
-      }
-      const certificateStat = await vscode.workspace.fs.stat(vscode.Uri.file(realCertificate));
-      if ((certificateStat.type & vscode.FileType.File) === 0) {
-        throw new Error("Gateway CA certificate must be a .pem file.");
-      }
-      caCertificatePath = realCertificate;
-    }
-
-    const configuredCatalog = configuration.get<string>("modelCatalogPath", "").trim();
-    if (configuredCatalog) {
-      if (!workspaceRoot) {
-        throw new Error("Open the workspace containing the model catalog.");
-      }
-      const candidate = resolveWorkspaceModelCatalogPath(workspaceRoot, configuredCatalog);
-      const [realWorkspace, realCatalog] = await Promise.all([
-        realpath(workspaceRoot),
-        realpath(candidate)
-      ]);
-      const relative = path.relative(realWorkspace, realCatalog);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
-        throw new Error("Model catalog must resolve to a file inside the opened workspace.");
-      }
-      const catalogStat = await vscode.workspace.fs.stat(vscode.Uri.file(realCatalog));
-      if ((catalogStat.type & vscode.FileType.File) === 0) {
-        throw new Error("Model catalog must be a JSON file.");
-      }
-      modelCatalogPath = realCatalog;
-    }
-
-    return {
-      config: buildLiteLlmCodexConfig(connection, modelCatalogPath),
-      env: buildIsolatedEnvironment(connection.apiKey, codexHome.fsPath, process.env, caCertificatePath)
-    };
-  }
-
-  private buildPrompt(request: string, mode: RunMode, memory: string, context: string): string {
+  private systemPrompt(mode: RunMode, memory: string, runtime: AgentRuntime): string {
     const operatingMode = mode === "plan"
-      ? "PLAN MODE: inspect and reason, but do not edit files or run mutating commands. Return a concrete implementation plan."
+      ? "PLAN MODE: inspect and reason, but do not edit files or run commands. Return a concrete implementation plan."
       : "EXECUTE MODE: solve the request end-to-end. Make scoped edits and run proportionate checks when useful.";
+    const toolGuidance = runtime === "deep"
+      ? `- Use ls, glob, grep, and read_file to inspect the workspace before making claims or edits.
+- Use write_file and edit_file only for scoped workspace changes.
+- Delegate bounded research or analysis to a local subagent when it materially reduces context pressure.`
+      : `- Work from evidence. Inspect relevant workspace files before making claims or edits; use search_text before broad reading.
+- Manage context actively. Read only relevant files and use bounded line ranges.
+- Use edit_file for small exact replacements and create_file only for new files.`;
+    return `You are a senior development-support agent embedded locally in Visual Studio Code.
 
-    return `<agent_contract>
-You are a senior development-support agent running through the OpenAI Codex harness inside Visual Studio Code.
-- Work from evidence. Inspect relevant repository files before making claims or edits; use rg/ripgrep first for search.
-- Manage context actively: read only the files needed for the current task, summarize what matters, and avoid dumping large files.
-- For non-trivial work, create and maintain a concise plan using the harness todo list before implementation.
-- Respect the workspace sandbox. Never access secrets or paths outside the opened workspace unless the user explicitly authorizes it.
-- Preserve unrelated user changes. Prefer minimal, reviewable patches and verify important behavior.
+Operating rules:
+${toolGuidance}
+- For non-trivial work, call update_plan before implementation and keep it current.
+- All file operations must remain inside the opened workspace.
+- Commands run without a shell, require user approval, and must not initiate network access.
+- Preserve unrelated user changes. Prefer minimal, reviewable edits and verify important behavior.
 - Reply in the user's language.
-- Project memory lives at .codex-agent/memory.md. Read it as advisory context. Update it only for durable, confirmed decisions or conventions; never store secrets, guesses, transient status, or raw conversation logs.
+- Project memory is advisory. Save only durable, confirmed decisions with remember_project_fact; never save secrets, guesses, transient status, or raw conversation logs.
+- If a tool returns an error, diagnose it and retry only with a materially corrected call.
+- Never claim a tool action succeeded unless its result confirms success.
+
 ${operatingMode}
-</agent_contract>
 
-<project_memory>
-${memory}
-</project_memory>
+Project memory:
+${memory}`;
+  }
 
-<editor_context>
+  private userMessage(request: string, context: string): string {
+    return `<editor_context>
 ${context}
 </editor_context>
 
@@ -240,96 +337,80 @@ ${request}
 </user_request>`;
   }
 
-  private async handleEvent(
-    event: ThreadEvent,
-    onEvent: (event: AgentUiEvent) => void
-  ): Promise<void> {
-    switch (event.type) {
-      case "thread.started":
-        await this.extensionContext.workspaceState.update(this.threadStorageKey(), event.thread_id);
-        onEvent({ type: "thread", threadId: event.thread_id });
-        break;
-      case "turn.started":
-        onEvent({ type: "status", label: "Agent is working" });
-        break;
-      case "item.started":
-      case "item.updated":
-      case "item.completed":
-        this.handleItem(event.item, event.type === "item.completed", onEvent);
-        break;
-      case "turn.completed":
-        onEvent({
-          type: "usage",
-          input: event.usage.input_tokens,
-          output: event.usage.output_tokens
-        });
-        onEvent({ type: "status", label: "Ready" });
-        break;
-      case "turn.failed":
-        onEvent({ type: "error", message: event.error.message });
-        break;
-      case "error":
-        onEvent({ type: "error", message: event.message });
-        break;
-    }
-  }
-
-  private handleItem(
-    item: ThreadItem,
-    completed: boolean,
-    onEvent: (event: AgentUiEvent) => void
-  ): void {
-    switch (item.type) {
-      case "todo_list":
-        onEvent({ type: "plan", items: item.items });
-        break;
-      case "agent_message":
-        if (completed) {
-          onEvent({ type: "assistant", text: item.text });
-        }
-        break;
-      case "reasoning":
-        onEvent({ type: "status", label: item.text || "Reasoning" });
-        break;
-      case "command_execution":
-        onEvent({
-          type: "activity",
-          kind: "command",
-          title: item.command,
-          detail: completed ? item.aggregated_output.slice(-1800) : undefined
-        });
-        break;
-      case "file_change":
-        onEvent({
-          type: "activity",
-          kind: "files",
-          title: item.changes.map((change) => `${change.kind}: ${change.path}`).join("\n")
-        });
-        break;
-      case "mcp_tool_call":
-        onEvent({ type: "activity", kind: "tool", title: `${item.server} / ${item.tool}` });
-        break;
-      case "web_search":
-        onEvent({ type: "activity", kind: "search", title: item.query });
-        break;
-      case "error":
-        onEvent({ type: "error", message: item.message });
-        break;
-    }
-  }
-
-  private threadStorageKey(): string {
+  private conversationStorageKey(): string {
     const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.toString() ?? "no-workspace";
-    return `${THREAD_KEY_PREFIX}:${workspace}`;
+    return `${CONVERSATION_KEY_PREFIX}:${workspace}`;
   }
 
   private explainError(message: string): string {
-    if (/login|auth|unauthorized|401/i.test(message)) {
-      return `${message}\n\nCheck the LiteLLM base URL, model alias, virtual key, and optional CA in “Codex Companion: Configure LiteLLM”.`;
+    if (/auth|unauthorized|forbidden|\b401\b|\b403\b/i.test(message)) {
+      return `${message}\n\nCheck the LiteLLM base URL, Chat Completions model alias, virtual key, and optional CA in “Local Companion: Configure LiteLLM”.`;
     }
-    if (/ENOENT|not found|spawn/i.test(message)) {
-      return `${message}\n\nThe bundled Codex runtime was not found. Reinstall the extension or its dependencies.`;
+    if (/certificate|self[- ]signed|unable to verify|CERT_/i.test(message)) {
+      return `${message}\n\nSelect the corporate CA PEM using “Local Companion: Configure LiteLLM”.`;
+    }
+    if (/404|not found|method not allowed|405/i.test(message)) {
+      return `${message}\n\nThe configured gateway must expose POST /chat/completions. You may enter either its base URL or the complete Chat Completions URL.`;
     }
     return message;
   }
+}
+
+class TokenUsageHandler extends BaseCallbackHandler {
+  public name = "local_token_usage";
+  public input = 0;
+  public output = 0;
+
+  public handleLLMEnd(result: LLMResult): void {
+    for (const generation of result.generations.flat()) {
+      const message = (generation as { message?: unknown }).message as {
+        usage_metadata?: { input_tokens?: number; output_tokens?: number };
+      } | undefined;
+      if (message?.usage_metadata) {
+        this.input += message.usage_metadata.input_tokens ?? 0;
+        this.output += message.usage_metadata.output_tokens ?? 0;
+      }
+    }
+  }
+}
+
+function conversationWindowMiddleware(maximumCharacters: number) {
+  return createMiddleware({
+    name: "LocalConversationWindow",
+    beforeModel: (state) => {
+      const messages = state.messages as BaseMessage[];
+      const total = messages.reduce((sum, message) => sum + message.text.length, 0);
+      if (messages.length <= 30 && total <= maximumCharacters) return undefined;
+
+      let characters = 0;
+      let start = Math.max(0, messages.length - 30);
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (!message) continue;
+        characters += message.text.length;
+        if (message.type === "human") start = index;
+        if ((characters >= maximumCharacters || messages.length - index >= 30) && message.type === "human") break;
+      }
+      return {
+        messages: [new RemoveMessage({ id: REMOVE_ALL_MESSAGES }), ...messages.slice(start)]
+      };
+    }
+  });
+}
+
+function finalAssistantText(messages: BaseMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.type === "ai" && message.text.trim()) return message.text.trim();
+  }
+  return "";
+}
+
+function disableExternalLangChainTracing(): void {
+  process.env.LANGSMITH_TRACING = "false";
+  process.env.LANGSMITH_TRACING_V2 = "false";
+  process.env.LANGCHAIN_TRACING_V2 = "false";
+  process.env.LANGSMITH_OTEL_ENABLED = "false";
+  process.env.OTEL_ENABLED = "false";
+  delete process.env.LANGCHAIN_TRACING;
 }

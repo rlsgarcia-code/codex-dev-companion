@@ -8,6 +8,7 @@ import {
 } from "./litellm";
 import { ContextCollector } from "./context";
 import { ProjectMemory } from "./memory";
+import { agentRuntimeLabel, parseAgentRuntime } from "./runtime";
 import { AgentViewProvider } from "./webview";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -36,16 +37,44 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (!note) return;
       const uri = await memory.append(note);
-      void vscode.window.showInformationMessage(`Codex memory updated: ${vscode.workspace.asRelativePath(uri)}`);
+      void vscode.window.showInformationMessage(`Project memory updated: ${vscode.workspace.asRelativePath(uri)}`);
     }),
     vscode.commands.registerCommand("codexDevCompanion.configureLiteLlm", async () => {
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       const existingApiKey = await context.secrets.get(LITELLM_API_KEY_SECRET);
+      const currentRuntime = parseAgentRuntime(configuration.get("agentRuntime"));
+      const runtimeChoice = await vscode.window.showQuickPick(
+        [
+          {
+            label: "LangChain Agent",
+            description: "Focused and predictable for day-to-day changes",
+            detail: "createAgent with explicit local tools and bounded recent context",
+            value: "standard" as const,
+            picked: currentRuntime === "standard"
+          },
+          {
+            label: "Deep Agent",
+            description: "More autonomous for larger, multi-step work",
+            detail: "createDeepAgent with planning, context compaction and local subagents",
+            value: "deep" as const,
+            picked: currentRuntime === "deep"
+          }
+        ],
+        {
+          title: "LiteLLM setup (1/5) — Agent runtime",
+          placeHolder: "Choose how the local development agent should work",
+          ignoreFocusOut: true
+        }
+      );
+      if (!runtimeChoice) {
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 1/5. No changes were saved.");
+        return;
+      }
       const endpointInput = await vscode.window.showInputBox({
-        title: "LiteLLM setup (1/4) — Gateway base URL",
-        prompt: "Enter the HTTPS client-facing URL ending in /v1. Do not include /responses.",
+        title: "LiteLLM setup (2/5) — Gateway base URL",
+        prompt: "Enter the HTTPS gateway base URL or the complete URL ending in /chat/completions.",
         value: configuration.get<string>("liteLlmEndpoint", ""),
-        placeHolder: "https://gateway.example.com/v1",
+        placeHolder: "https://gateway.example.com/v1 or …/chat/completions",
         ignoreFocusOut: true,
         validateInput: (value) => {
           try {
@@ -57,12 +86,12 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       });
       if (endpointInput === undefined) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 1/4. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 2/5. No changes were saved.");
         return;
       }
       const endpoint = normalizeLiteLlmEndpoint(endpointInput);
       const model = await vscode.window.showInputBox({
-        title: "LiteLLM setup (2/4) — Model alias",
+        title: "LiteLLM setup (3/5) — Model alias",
         prompt: "Enter the exact client-facing alias configured by the LiteLLM administrator.",
         value: configuration.get<string>("liteLlmModel", ""),
         placeHolder: "company-coding-model",
@@ -70,11 +99,11 @@ export function activate(context: vscode.ExtensionContext): void {
         validateInput: (value) => value.trim() ? undefined : "LiteLLM model alias is required."
       });
       if (model === undefined) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 2/4. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 3/5. No changes were saved.");
         return;
       }
       const apiKey = await vscode.window.showInputBox({
-        title: "LiteLLM setup (3/4) — Virtual key",
+        title: "LiteLLM setup (4/5) — Virtual key",
         prompt: existingApiKey
           ? "Enter a replacement virtual key, or leave blank to keep the stored key."
           : "Use a scoped LiteLLM virtual key. It is stored only in VS Code Secret Storage.",
@@ -85,7 +114,7 @@ export function activate(context: vscode.ExtensionContext): void {
           : "LiteLLM virtual key is required."
       });
       if (apiKey === undefined) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 3/4. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 4/5. No changes were saved.");
         return;
       }
       const resolvedApiKey = apiKey.trim() || existingApiKey;
@@ -114,13 +143,13 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         ],
         {
-          title: "LiteLLM setup (4/4) — Gateway CA certificate",
-          placeHolder: "Choose how Codex should verify the LiteLLM gateway certificate",
+          title: "LiteLLM setup (5/5) — Gateway CA certificate",
+          placeHolder: "Choose how the local agent should verify the LiteLLM gateway certificate",
           ignoreFocusOut: true
         }
       );
       if (!trustChoice) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 4/4. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 5/5. No changes were saved.");
         return;
       }
       if (trustChoice.value === "pem") {
@@ -150,12 +179,13 @@ export function activate(context: vscode.ExtensionContext): void {
       await Promise.all([
         configuration.update("liteLlmEndpoint", endpoint, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModel", model.trim(), vscode.ConfigurationTarget.Global),
+        configuration.update("agentRuntime", runtimeChoice.value, vscode.ConfigurationTarget.Workspace),
         configuration.update("gatewayCaCertificatePath", caCertificateRelativePath, vscode.ConfigurationTarget.Workspace),
         context.secrets.store(LITELLM_API_KEY_SECRET, resolvedApiKey)
       ]);
       await agent.reloadProviderConfiguration();
       void vscode.window.showInformationMessage(
-        `LiteLLM configured for model alias “${model.trim()}”. Codex will use the isolated local runtime.`
+        `${agentRuntimeLabel(runtimeChoice.value)} configured with LiteLLM model alias “${model.trim()}”.`
       );
     }),
     vscode.commands.registerCommand("codexDevCompanion.clearLiteLlmKey", async () => {

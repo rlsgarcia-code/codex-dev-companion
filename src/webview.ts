@@ -1,16 +1,14 @@
-import { realpath } from "node:fs/promises";
-import * as path from "node:path";
 import * as vscode from "vscode";
 import { DevelopmentAgent } from "./agent";
 import {
   LITELLM_API_KEY_SECRET,
   normalizeLiteLlmEndpoint,
-  resolveWorkspaceModelCatalogPath,
   validateLiteLlmConnection
 } from "./litellm";
 import { ContextCollector } from "./context";
 import { ProjectMemory } from "./memory";
-import type { AgentUiEvent, ChatMessage, RunMode } from "./types";
+import { agentRuntimeLabel, parseAgentRuntime } from "./runtime";
+import type { AgentRuntime, AgentUiEvent, ChatMessage, RunMode } from "./types";
 
 const HISTORY_KEY = "codexDevCompanion.history";
 const MAX_HISTORY = 60;
@@ -23,16 +21,15 @@ type IncomingMessage =
   | { type: "remember"; text: string }
   | { type: "openMemory" }
   | { type: "configureLiteLlm" }
-  | { type: "saveLiteLlm"; endpoint: string; model: string; apiKey: string }
-  | { type: "selectModelCatalog" }
-  | { type: "clearModelCatalog" };
+  | { type: "selectRuntime"; runtime: AgentRuntime }
+  | { type: "saveLiteLlm"; endpoint: string; model: string; apiKey: string };
 
 type LiteLlmSettingsSnapshot = {
   endpoint: string;
   model: string;
   hasApiKey: boolean;
   caCertificatePath: string;
-  modelCatalogPath: string;
+  runtime: AgentRuntime;
 };
 
 export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -62,7 +59,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   public async addSelection(): Promise<void> {
     const filename = this.collector.pinSelection();
     if (!filename) {
-      void vscode.window.showInformationMessage("Select code before adding it to Codex context.");
+      void vscode.window.showInformationMessage("Select code before adding it to the local agent context.");
       return;
     }
     this.post({ type: "contextPinned", filename });
@@ -118,14 +115,11 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         await vscode.commands.executeCommand("codexDevCompanion.configureLiteLlm");
         this.post({ type: "liteLlmSettings", liteLlm: await this.liteLlmSettingsSnapshot() });
         break;
+      case "selectRuntime":
+        await this.selectRuntime(message.runtime);
+        break;
       case "saveLiteLlm":
         await this.saveLiteLlmSettings(message);
-        break;
-      case "selectModelCatalog":
-        await this.selectModelCatalog();
-        break;
-      case "clearModelCatalog":
-        await this.clearModelCatalog();
         break;
     }
   }
@@ -137,8 +131,28 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       model: configuration.get<string>("liteLlmModel", ""),
       hasApiKey: Boolean(await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET)),
       caCertificatePath: configuration.get<string>("gatewayCaCertificatePath", ""),
-      modelCatalogPath: configuration.get<string>("modelCatalogPath", "")
+      runtime: parseAgentRuntime(configuration.get("agentRuntime"))
     };
+  }
+
+  private async selectRuntime(value: unknown): Promise<void> {
+    try {
+      const runtime = parseAgentRuntime(value);
+      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      await configuration.update("agentRuntime", runtime, vscode.ConfigurationTarget.Workspace);
+      this.agent.reloadRuntimeConfiguration();
+      this.post({
+        type: "runtimeChanged",
+        runtime,
+        message: `${agentRuntimeLabel(runtime)} selected for this workspace`
+      });
+    } catch (error) {
+      this.post({
+        type: "runtimeChangeError",
+        liteLlm: await this.liteLlmSettingsSnapshot(),
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   private async saveLiteLlmSettings(message: Extract<IncomingMessage, { type: "saveLiteLlm" }>): Promise<void> {
@@ -170,55 +184,6 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         message: error instanceof Error ? error.message : String(error)
       });
     }
-  }
-
-  private async selectModelCatalog(): Promise<void> {
-    try {
-      const workspace = vscode.workspace.workspaceFolders?.[0];
-      if (!workspace) {
-        throw new Error("Open the workspace that contains the model catalog JSON.");
-      }
-      const selected = await vscode.window.showOpenDialog({
-        title: "Select a Codex model catalog inside this workspace",
-        defaultUri: workspace.uri,
-        canSelectFiles: true,
-        canSelectFolders: false,
-        canSelectMany: false,
-        filters: { "JSON model catalog": ["json"] },
-        openLabel: "Use this catalog"
-      });
-      if (!selected?.[0]) return;
-
-      const candidate = resolveWorkspaceModelCatalogPath(workspace.uri.fsPath, selected[0].fsPath);
-      const [realWorkspace, realCatalog] = await Promise.all([
-        realpath(workspace.uri.fsPath),
-        realpath(candidate)
-      ]);
-      const relative = path.relative(realWorkspace, realCatalog);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
-        throw new Error("Model catalog must resolve to a JSON file inside the opened workspace.");
-      }
-      const contents = await vscode.workspace.fs.readFile(vscode.Uri.file(realCatalog));
-      if (contents.byteLength > 5_000_000) {
-        throw new Error("Model catalog is unexpectedly large (maximum 5 MB).");
-      }
-      JSON.parse(Buffer.from(contents).toString("utf8"));
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-      await configuration.update("modelCatalogPath", relative, vscode.ConfigurationTarget.Workspace);
-      await this.agent.reloadProviderConfiguration();
-      this.post({ type: "liteLlmSettings", liteLlm: await this.liteLlmSettingsSnapshot() });
-      this.post({ type: "toast", message: `Model catalog selected · ${relative}` });
-    } catch (error) {
-      this.post({ type: "liteLlmSaveError", message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  private async clearModelCatalog(): Promise<void> {
-    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-    await configuration.update("modelCatalogPath", undefined, vscode.ConfigurationTarget.Workspace);
-    await this.agent.reloadProviderConfiguration();
-    this.post({ type: "liteLlmSettings", liteLlm: await this.liteLlmSettingsSnapshot() });
-    this.post({ type: "toast", message: "Model catalog removed" });
   }
 
   private async send(text: string, mode: RunMode): Promise<void> {
@@ -302,7 +267,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   <main class="shell">
     <header class="topbar">
       <div>
-        <div class="eyebrow">CODEX / DEVELOPMENT</div>
+        <div class="eyebrow">LOCAL / DEVELOPMENT</div>
         <h1>Companion</h1>
       </div>
       <button class="icon-button" id="new-thread" title="New thread" aria-label="New thread">↺</button>
@@ -329,7 +294,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       </div>
       <label class="field">
         <span>Gateway Base URL</span>
-        <input id="litellm-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/v1" />
+        <input id="litellm-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/v1 or …/chat/completions" />
       </label>
       <label class="field">
         <span>Model Alias</span>
@@ -339,16 +304,6 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         <span>Virtual Key <small id="litellm-key-state"></small></span>
         <input id="litellm-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the stored key" />
       </label>
-      <div class="local-setting">
-        <div>
-          <span>Model metadata <small>optional</small></span>
-          <code id="model-catalog-path">No local catalog</code>
-        </div>
-        <div class="inline-actions">
-          <button id="select-model-catalog">Select JSON</button>
-          <button class="hidden" id="clear-model-catalog">Clear</button>
-        </div>
-      </div>
       <p class="settings-note" id="litellm-details"></p>
       <p class="settings-error hidden" id="litellm-settings-error"></p>
       <div class="settings-actions">
@@ -378,6 +333,10 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       <div class="composer">
         <textarea id="prompt" rows="3" placeholder="Ask about the code, request a change, or explore an idea…"></textarea>
         <div class="composer-actions">
+          <select id="runtime" aria-label="Agent runtime" title="Choose the agent runtime">
+            <option value="standard">LangChain Agent</option>
+            <option value="deep">Deep Agent</option>
+          </select>
           <select id="mode" aria-label="Agent mode">
             <option value="execute">Execute</option>
             <option value="plan">Plan only</option>
@@ -495,6 +454,7 @@ const liteLlmModel = document.getElementById('litellm-model');
 const liteLlmApiKey = document.getElementById('litellm-api-key');
 const liteLlmSettingsError = document.getElementById('litellm-settings-error');
 const newThreadButton = document.getElementById('new-thread');
+const agentRuntime = document.getElementById('runtime');
 let busy = false;
 
 function escapeHtml(value) {
@@ -520,7 +480,7 @@ function appendMessage(message) {
   document.getElementById('welcome')?.remove();
   const element = document.createElement('article');
   element.className = 'message ' + message.role;
-  element.innerHTML = '<div class="message-role">' + (message.role === 'user' ? 'YOU' : 'CODEX') + '</div>' +
+  element.innerHTML = '<div class="message-role">' + (message.role === 'user' ? 'YOU' : 'AGENT') + '</div>' +
     '<div class="message-body">' + renderText(message.text) + '</div>';
   timeline.appendChild(element);
   timeline.scrollTop = timeline.scrollHeight;
@@ -540,6 +500,7 @@ function setBusy(value) {
   send.disabled = value;
   cancel.classList.toggle('hidden', !value);
   signal.classList.toggle('busy', value);
+  agentRuntime.disabled = value;
   if (!value && status.textContent !== 'Ready') status.textContent = 'Ready';
 }
 
@@ -554,12 +515,11 @@ function fillLiteLlmSettings(liteLlm) {
   liteLlmEndpoint.value = liteLlm.endpoint || '';
   liteLlmModel.value = liteLlm.model || '';
   liteLlmApiKey.value = '';
+  agentRuntime.value = liteLlm.runtime === 'deep' ? 'deep' : 'standard';
   document.getElementById('litellm-key-state').textContent = liteLlm.hasApiKey ? '· stored securely' : '· required';
-  document.getElementById('model-catalog-path').textContent = liteLlm.modelCatalogPath || 'No local catalog';
-  document.getElementById('clear-model-catalog').classList.toggle('hidden', !liteLlm.modelCatalogPath);
   const details = [];
   if (liteLlm.caCertificatePath) details.push('CA: ' + liteLlm.caCertificatePath);
-  details.push(liteLlm.modelCatalogPath ? 'custom model metadata enabled' : 'fallback metadata may be used for custom aliases');
+  details.push('POST /chat/completions');
   document.getElementById('litellm-details').textContent = details.join(' · ');
   liteLlmSettingsError.classList.add('hidden');
 }
@@ -610,8 +570,9 @@ document.getElementById('litellm').addEventListener('click', () => liteLlmSettin
 document.getElementById('litellm-close').addEventListener('click', () => liteLlmSettings.classList.add('hidden'));
 document.getElementById('litellm-save').addEventListener('click', saveLiteLlmSettings);
 document.getElementById('litellm-advanced').addEventListener('click', () => vscode.postMessage({ type: 'configureLiteLlm' }));
-document.getElementById('select-model-catalog').addEventListener('click', () => vscode.postMessage({ type: 'selectModelCatalog' }));
-document.getElementById('clear-model-catalog').addEventListener('click', () => vscode.postMessage({ type: 'clearModelCatalog' }));
+agentRuntime.addEventListener('change', () => {
+  vscode.postMessage({ type: 'selectRuntime', runtime: agentRuntime.value });
+});
 prompt.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
 });
@@ -630,6 +591,18 @@ window.addEventListener('message', ({ data }) => {
       fillLiteLlmSettings(data.liteLlm);
       liteLlmSettings.classList.add('hidden');
       status.textContent = data.message;
+      break;
+    case 'runtimeChanged':
+      agentRuntime.value = data.runtime;
+      status.textContent = data.message;
+      break;
+    case 'runtimeChangeError':
+      fillLiteLlmSettings(data.liteLlm || {});
+      status.textContent = 'Could not change agent runtime';
+      const runtimeError = document.createElement('div');
+      runtimeError.className = 'error';
+      runtimeError.textContent = data.message;
+      timeline.appendChild(runtimeError);
       break;
     case 'liteLlmSaveError':
       liteLlmSettingsError.textContent = data.message;

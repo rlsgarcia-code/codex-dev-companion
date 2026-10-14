@@ -6,9 +6,9 @@ const context = await esbuild.context({
   bundle: true,
   platform: "node",
   format: "cjs",
-  target: "node18",
+  target: "node22",
   outfile: "dist/extension.js",
-  external: ["vscode", "@openai/codex-sdk"],
+  external: ["vscode"],
   sourcemap: true,
   minify: false,
   logLevel: "info"

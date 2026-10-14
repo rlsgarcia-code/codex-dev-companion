@@ -1,4 +1,5 @@
 export type RunMode = "execute" | "plan";
+export type AgentRuntime = "standard" | "deep";
 
 export type ChatMessage = {
   id: string;

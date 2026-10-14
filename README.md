@@ -1,38 +1,45 @@
-# Codex Dev Companion
+# Local Dev Companion
 
-Uma extensão de Visual Studio Code que transforma o **OpenAI Codex agent harness** em um agente de suporte ao desenvolvimento com contexto do editor, planejamento, leitura e edição de arquivos, execução de comandos, memória persistente e retomada de conversas.
+Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente e conectados somente ao endpoint **Chat Completions** de um gateway LiteLLM.
 
-O projeto usa o SDK oficial `@openai/codex-sdk`. O harness, shell, ferramentas, memória, contexto e histórico executam inteiramente na máquina do usuário. A única comunicação externa permitida em runtime é a inferência enviada ao endpoint LiteLLM configurado pelo usuário.
+O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e previsível, e **Deep Agent** (`createDeepAgent`), preparado para tarefas longas com planejamento, compactação de contexto e subagentes locais. Modelo (`ChatOpenAICompletions`), ferramentas (`tool` + Zod), estado (`MemorySaver`), callbacks e middleware continuam sendo do ecossistema LangChain. Contexto, histórico, memória e ferramentas rodam na máquina do usuário. A única chamada externa feita pela extensão é:
 
-## O que já funciona
+```text
+POST <LITELLM_BASE_URL>/chat/completions
+```
 
-- Chat na Secondary Sidebar, à direita do editor, ao lado de Copilot Chat e outros agentes.
-- Thread persistente por workspace, retomada automaticamente entre sessões.
-- Contexto automático: arquivo ativo, seleção, cursor, diagnósticos, arquivos abertos e amostra da árvore do projeto.
-- Contexto fixado pelo menu **Codex Companion: Add Selection to Context**.
-- Leitura sob demanda de arquivos pelo próprio harness, sem enviar o repositório inteiro a cada turno.
-- Planejamento visível por meio dos eventos `todo_list` do Codex.
-- Timeline de comandos, alterações de arquivos e ferramentas locais.
+Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, ferramentas hospedadas, web search, MCP externo, LangSmith, telemetria ou verificação de atualização.
+
+## Capacidades
+
+- Chat na Secondary Sidebar, à direita do editor.
+- Seletor visível entre **LangChain Agent** e **Deep Agent**, persistido por workspace.
+- Contexto automático do arquivo ativo, seleção, cursor, diagnósticos, arquivos abertos e amostra da árvore.
+- Contexto fixado pelo menu **Local Companion: Add Selection to Context**.
+- Estado de curto prazo gerenciado por `MemorySaver`, com histórico recente preservado localmente por workspace.
+- Memória durável e auditável em `.codex-agent/memory.md`.
+- Planejamento apresentado na própria sidebar.
+- Ferramentas locais para listar, pesquisar e ler arquivos sob demanda.
+- Edição por substituição exata e criação de arquivos, sempre dentro do workspace.
+- Execução de comandos sem shell, com confirmação modal do usuário e ambiente sem a chave LiteLLM.
 - Modos **Execute** e **Plan only**.
-- Cancelamento de turnos em andamento.
-- Memória auditável em `.codex-agent/memory.md`.
-- Sandbox `workspace-write`, rede desativada e comandos limitados ao workspace por padrão.
-- Provider LiteLLM Responses forçado pelo runtime, sem login ChatGPT ou OpenAI Platform.
-- Estado do Codex isolado em um `CODEX_HOME` privado da extensão.
-- Telemetria, analytics, feedback, update checks, apps, plugins e servidores MCP externos desativados por configuração de runtime.
-- Binário Codex oficial fornecido pelo SDK, sem caminho de executável substituível por configuração.
+- Cancelamento de turnos e de comandos em andamento.
+- Streaming de Chat Completions e function calling gerenciados por `ChatOpenAICompletions` e pelo runtime escolhido.
 - Chave virtual LiteLLM armazenada exclusivamente no Secret Storage do VS Code.
+- Bundle PEM corporativo opcional, mantido dentro do workspace.
+
+O modelo disponibilizado no LiteLLM precisa suportar **Chat Completions function calling**. A arquitetura segue a [documentação de Agents do LangChain](https://docs.langchain.com/oss/javascript/langchain/agents), a [documentação oficial de Deep Agents](https://docs.langchain.com/oss/javascript/deepagents/overview), a [memória de curto prazo](https://docs.langchain.com/oss/javascript/langchain/short-term-memory) e a referência de [`ChatOpenAI`](https://reference.langchain.com/javascript/langchain-openai/ChatOpenAI).
 
 ## Pré-requisitos
 
-- Node.js 18 ou superior.
+- Node.js 22 ou superior.
 - Visual Studio Code 1.106 ou superior.
-- Um gateway LiteLLM HTTPS compatível com a Responses API.
-- URL base terminando em `/v1`, alias do modelo e chave virtual scoped do LiteLLM.
+- Gateway LiteLLM acessível por HTTPS.
+- URL base HTTPS do gateway ou URL completa terminando em `/chat/completions`.
+- Alias de modelo com suporte a function calling.
+- Chave virtual scoped do LiteLLM.
 
 ## Clonou o repositório? Instale assim
-
-Este é o fluxo para usar a extensão normalmente, sem abrir o ambiente de desenvolvimento do VS Code:
 
 ```bash
 git clone https://github.com/rlsgarcia-code/codex-dev-companion.git
@@ -40,139 +47,146 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.5.0.vsix
+code --install-extension ./codex-dev-companion-0.8.0.vsix
 ```
-
-Execute esses comandos na própria máquina em que a extensão será usada. O `npm ci` instala o runtime nativo do Codex correspondente ao sistema operacional e à arquitetura atuais; por isso, um VSIX gerado no macOS não deve ser reutilizado no Windows ou Linux.
 
 Se o comando `code` não estiver disponível:
 
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.5.0.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.8.0.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
-### Primeiro uso
+O VSIX não contém binário nativo e pode ser instalado em macOS, Windows ou Linux compatíveis com a versão do VS Code indicada.
+
+## Primeiro uso
 
 1. Abra uma pasta de projeto no VS Code.
-2. Pressione `Ctrl/Cmd + Shift + P` e execute **Codex Companion: Configure LiteLLM**.
-3. Complete as quatro etapas numeradas usando o mapeamento abaixo.
-4. Abra o ícone **Codex Companion** na barra lateral direita, junto do Chat/Copilot.
+2. Pressione `Ctrl/Cmd + Shift + P`.
+3. Execute **Local Companion: Configure LiteLLM**.
+4. Escolha o runtime e informe os quatro valores de conexão abaixo.
+5. Abra **Local Companion** na barra lateral direita.
 
-Em instalações novas, o Companion abre por padrão na **Secondary Sidebar**, à direita do editor. O VS Code preserva layouts personalizados; portanto, ao atualizar uma instalação anterior, use `View: Move View` na Command Palette e mova **Development Agent** para **Secondary Side Bar** caso ele continue à esquerda.
-
-Depois do primeiro setup, clique em **LiteLLM** no rodapé da sidebar para alterar rapidamente a URL base, o alias do modelo e a chave virtual. Deixar a chave vazia preserva o valor já guardado no Secret Storage. Use **Setup wizard / PEM** quando precisar trocar a CA corporativa ou revisar a configuração completa.
-
-| Valor fornecido pelo administrador | Campo da extensão | Formato esperado |
+| Valor | Campo | Exemplo |
 | --- | --- | --- |
-| Base URL | **Gateway Base URL** | `https://gateway.example.com/v1` |
-| Model alias | **Model Alias** | Alias exato liberado no LiteLLM |
-| Virtual key | **Virtual Key** | Chave individual/scoped, nunca a master key |
-| CA bundle, se necessário | **Setup wizard / PEM** | Arquivo `.pem` dentro do workspace |
+| Runtime local | **Agent runtime** | `LangChain Agent` ou `Deep Agent` |
+| Base ou rota completa | **Gateway Base URL** | `https://gateway.empresa.com/v1` ou `https://gateway.empresa.com/ia/chat/completions` |
+| Alias liberado | **Model Alias** | `modelo-corporativo` |
+| Chave virtual | **Virtual Key** | chave individual/scoped |
+| CA opcional | **Gateway CA certificate** | `.pem` dentro do workspace |
 
-O gateway precisa expor `POST <BASE_URL>/responses`, fazer streaming sem buffering e preservar follow-up turns e tool calls. Compatibilidade apenas com Chat Completions não é suficiente. A chave virtual é enviada como `Authorization: Bearer ...`; credenciais do provider upstream permanecem no servidor LiteLLM.
+Se for informada uma URL base, a extensão acrescenta `/chat/completions`. Se a rota completa já for informada, ela será usada sem duplicação. Caminhos corporativos intermediários são aceitos; query parameters são recusados para evitar que segredos sejam gravados em settings.
 
-Se o gateway usa uma CA corporativa, selecione o bundle PEM na quarta etapa. A extensão guarda somente o caminho relativo e passa o caminho absoluto ao processo local por `CODEX_CA_CERTIFICATE`; o conteúdo do certificado não é copiado, enviado ao modelo ou incluído no VSIX.
+Também é possível trocar o runtime no seletor ao lado de **Execute / Plan only**. A escolha vale para o workspace atual. Clique em **LiteLLM** no rodapé para alterar URL, alias ou chave. Se a chave ficar vazia, o valor já armazenado no Secret Storage é preservado. Use **Setup wizard / PEM** para selecionar ou trocar o certificado corporativo.
 
-### Aviso `Model metadata not found`
+## Como o agente trabalha
 
-Esse aviso indica que o alias do LiteLLM não foi encontrado no catálogo de modelos conhecido pelo Codex. O runtime continua com metadados de fallback, mas recursos como limites de contexto, opções de raciocínio e suporte a ferramentas podem ficar imprecisos.
+Em cada turno, o runtime local:
 
-- Confirme o alias exato no campo **Model Alias** do formulário **LiteLLM**.
-- Para um alias personalizado, peça à equipe do gateway um catálogo JSON compatível com a versão instalada do Codex e com o modelo upstream real. Use **Select JSON** em **Model metadata**. O arquivo permanece local e precisa estar dentro do workspace.
+1. coleta o contexto atual do editor;
+2. lê a memória durável do projeto;
+3. recupera a thread pelo `MemorySaver` e aplica o middleware de janela de contexto;
+4. instancia `ChatOpenAICompletions` sobre a base URL do LiteLLM;
+5. entrega mensagens e ferramentas ao `createAgent` ou `createDeepAgent`, conforme a escolha do usuário;
+6. valida cada chamada por schema Zod e executa a ferramenta local correspondente;
+7. deixa o runtime LangChain devolver resultados como `ToolMessage` e repetir o ciclo até a resposta final;
+8. persiste somente os turnos de usuário/assistente necessários para retomar a conversa após reiniciar o VS Code.
 
-Não invente os metadados do alias: eles devem corresponder ao modelo upstream. Consulte [Bedrock through LiteLLM](https://learn.chatgpt.com/docs/enterprise/bedrock-through-litellm) e [Roll out a gateway — Add model metadata](https://learn.chatgpt.com/docs/enterprise/roll-out-a-gateway#add-model-metadata).
+No **LangChain Agent**, a janela de conversa é limitada por middleware e todas as ferramentas são as implementações locais explícitas do projeto. No **Deep Agent**, a orquestração de tarefas longas, a compactação, o filesystem e a delegação para subagentes vêm de `deepagents`; o plano visível continua sendo publicado pela ferramenta LangChain local `update_plan`. O backend de arquivos usa modo virtual preso à raiz do workspace. A compactação mantém seu estado no checkpoint em memória e não grava transcrições no projeto.
 
-A chave é solicitada como senha e guardada somente no Secret Storage do VS Code. Ela não é escrita em `settings.json`, `.env`, `config.toml`, logs ou arquivos do projeto.
+Não existe cliente HTTP alternativo nem loop manual de function calling no projeto. A classe `ChatOpenAICompletions` força o caminho Chat Completions e não usa Responses API. O tracing externo do LangChain/LangSmith é explicitamente desativado pelo runtime.
 
-## Executar em desenvolvimento
+As ferramentas de leitura usam caminhos relativos e validam caminhos reais para impedir escape por `..` ou links simbólicos. Os comandos não passam por um shell, exigem confirmação e recebem somente um conjunto mínimo de variáveis do sistema — nunca a chave do LiteLLM.
+
+No modo **Plan only**, ferramentas de escrita, memória e execução de comandos não são disponibilizadas. No Deep Agent, o middleware de filesystem também aplica permissão de escrita negada como defesa adicional.
+
+## Desenvolvimento
 
 ```bash
 npm install
 npm run check
 npm run build
 npm test
+npm run smoke:litellm
 ```
 
-Abra esta pasta no VS Code e pressione `F5`. Na janela **Extension Development Host**, abra uma pasta de código e clique no ícone **Codex Companion** na Secondary Sidebar.
+Abra esta pasta no VS Code e pressione `F5`. Na janela **Extension Development Host**, abra uma pasta de código e clique em **Local Companion** na Secondary Sidebar.
 
-Para recompilar enquanto edita:
+Para recompilar continuamente:
 
 ```bash
 npm run watch
 ```
 
-## Reinstalar o VSIX após alterações
+Para gerar e reinstalar o pacote:
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.5.0.vsix
+code --install-extension codex-dev-companion-0.8.0.vsix
 ```
 
 ## Memória
 
-A memória é intencionalmente simples e verificável. O arquivo `.codex-agent/memory.md` pertence ao projeto e pode ser revisado ou versionado como qualquer outro documento.
+O arquivo `.codex-agent/memory.md` foi preservado para compatibilidade com instalações anteriores. Ele deve conter somente decisões, fatos e convenções duráveis e verificáveis.
 
-Use **Codex Companion: Remember Note** para registrar uma decisão durável. Exemplos adequados:
-
-- convenções de arquitetura;
-- comandos oficiais de teste e build;
-- decisões técnicas confirmadas;
-- restrições permanentes do projeto.
-
-Não armazene credenciais, tokens, dados pessoais, hipóteses ou status transitório.
+Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status transitório ou transcrições do chat.
 
 ## Segurança e privacidade
 
-- O agente recebe somente o contexto de editor descrito acima e pode ler outros arquivos quando forem relevantes para a tarefa.
-- O sandbox padrão permite escrita apenas no workspace.
-- Comandos e ferramentas executados pelo agente não recebem acesso de rede.
-- Web search, serviços hospedados, atualização automática, login ChatGPT e credenciais OpenAI são desativados.
-- Analytics, exportadores OpenTelemetry, feedback, apps, plugins e servidores MCP são desativados explicitamente.
-- O processo Codex recebe um ambiente mínimo: variáveis essenciais do sistema, um `CODEX_HOME` isolado e somente a chave virtual LiteLLM.
-- A URL do gateway é validada como HTTPS e deve terminar exatamente na base `/v1`, sem `/responses`.
-- A única chamada externa em runtime é `Codex local → LiteLLM Responses API`.
-- A política de aprovação é `never` porque o SDK em modo não interativo não oferece uma interface de aprovação no meio do turno; o sandbox do workspace continua sendo a fronteira de execução.
-- Revise alterações antes de fazer commit e mantenha segredos fora do workspace.
+- A chave LiteLLM fica exclusivamente no Secret Storage do VS Code.
+- A chave não é escrita em settings, logs, prompts, memória ou arquivos do projeto.
+- O endpoint precisa usar HTTPS.
+- O certificado PEM opcional precisa resolver para um arquivo dentro do workspace.
+- Arquivos só podem ser lidos ou alterados dentro do workspace aberto.
+- Comandos são executados diretamente, sem shell, depois de confirmação do usuário.
+- Clientes de rede e operações de download, publicação e Git remoto são bloqueados nas ferramentas do agente.
+- O histórico do agente fica no armazenamento local do workspace do VS Code; não é copiado para `memory.md`.
+- O LiteLLM recebe apenas as mensagens necessárias para inferência, incluindo trechos de arquivos e resultados de ferramentas usados naquele turno.
+- Revise as alterações antes de fazer commit.
 
 ## Configurações
 
 | Configuração | Padrão | Finalidade |
 | --- | --- | --- |
-| `codexDevCompanion.liteLlmEndpoint` | vazio | Base HTTPS do gateway LiteLLM terminando em `/v1`. |
-| `codexDevCompanion.liteLlmModel` | vazio | Alias exato do modelo configurado no LiteLLM. |
-| `codexDevCompanion.gatewayCaCertificatePath` | vazio | Caminho relativo, dentro do workspace, para o bundle CA `.pem` do gateway. |
-| `codexDevCompanion.modelCatalogPath` | vazio | Caminho relativo para um catálogo JSON local usado pelo alias LiteLLM. |
-| `codexDevCompanion.reasoningEffort` | `high` | Define o esforço de raciocínio. |
+| `codexDevCompanion.agentRuntime` | `standard` | Escolhe `LangChain Agent` (`standard`) ou `Deep Agent` (`deep`) por workspace. |
+| `codexDevCompanion.liteLlmEndpoint` | vazio | Base HTTPS do LiteLLM ou URL completa de Chat Completions. |
+| `codexDevCompanion.liteLlmModel` | vazio | Alias exato do modelo liberado. |
+| `codexDevCompanion.gatewayCaCertificatePath` | vazio | Caminho relativo para o bundle CA `.pem`. |
 | `codexDevCompanion.autoContext` | `true` | Inclui contexto atual do editor. |
-| `codexDevCompanion.maxContextCharacters` | `24000` | Limita o contexto coletado pela extensão. |
+| `codexDevCompanion.maxContextCharacters` | `24000` | Limite do contexto coletado por turno. |
+| `codexDevCompanion.maxConversationCharacters` | `48000` | Limite do histórico recente enviado ao modelo. |
+
+O prefixo `codexDevCompanion` foi mantido para que configurações e segredos de instalações anteriores continuem válidos.
 
 ## Arquitetura
 
 ```text
-VS Code Secondary Sidebar (direita)
-    │  prompt + editor context
-    ▼
-Extension host
-    ├── ContextCollector ── active file / selection / diagnostics
-    ├── ProjectMemory ───── .codex-agent/memory.md
-    └── Codex SDK
-            │  streamed thread events
-            ▼
-       Codex harness
-            ├── planning / context compaction
-            ├── shell + file inspection
-            ├── apply patches
-            ├── persistent local threads
-            └── HTTPS ──► LiteLLM Responses API
+VS Code Secondary Sidebar
+    │
+    ├── AgentViewProvider ── chat, timeline, plano e configurações
+    ├── ContextCollector ─── editor, seleção, diagnósticos e arquivos
+    ├── ProjectMemory ────── .codex-agent/memory.md
+    └── DevelopmentAgent ─── orquestra primitivas LangChain
+            │
+            ├── runtime escolhido por workspace
+            │     ├── createAgent · enxuto e explícito
+            │     └── createDeepAgent · planejamento, compactação e subagentes
+            ├── MemorySaver + middleware
+            ├── ChatOpenAICompletions
+            ├── LocalToolHost (`tool()` + Zod)
+            │     ├── list/search/read
+            │     ├── edit/create
+            │     ├── approved command execution
+            │     └── plan/memory
+            │
+            └── HTTPS ──► LiteLLM POST /v1/chat/completions
 ```
 
-As responsabilidades ficam separadas: o VS Code fornece contexto, segredos e interface; o Codex harness local mantém o loop agente, as ferramentas, a thread e a execução sandboxed; a memória continua transparente e editável. O LiteLLM recebe apenas as requisições de inferência necessárias e encaminha ao provider upstream configurado pelo administrador.
+## Limitações
 
-## Limitações atuais
-
-- O painel mostra o resultado final da resposta, não deltas de texto token a token, pois o SDK expõe mensagens concluídas nesse fluxo.
-- Aprovações interativas exigiriam um cliente direto do Codex App Server; esta versão usa o SDK com sandbox restrito.
-- O VSIX inclui o runtime nativo do Codex e, por isso, pode ser grande e específico da plataforma usada no empacotamento.
-- Rotas Chat Completions-only não são compatíveis; o harness exige a Responses API com streaming, continuidade e tool calls.
+- A qualidade do planejamento e do uso de ferramentas depende do modelo disponibilizado pelo gateway.
+- Modelos sem function calling podem conversar, mas não conseguem inspecionar ou modificar o workspace autonomamente.
+- A extensão não executa um sandbox de sistema operacional. Por isso, comandos exigem confirmação explícita e recebem um ambiente mínimo.
+- O LangChain Agent mantém turnos recentes inteiros dentro do limite configurado. O Deep Agent pode compactar conversas antigas usando o mesmo modelo via LiteLLM.
+- Não há suporte a ferramentas hospedadas, web search, MCP remoto ou execução em nuvem.

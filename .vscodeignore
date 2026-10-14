@@ -15,3 +15,4 @@ dist-tests/**
 .gitignore
 node_modules/@openai/codex-*/vendor/**/bin/codex-code-mode-host*
 node_modules/@openai/codex-*/vendor/**/codex-resources/**
+node_modules/**

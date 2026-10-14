@@ -1,8 +1,8 @@
 {
   "name": "codex-dev-companion",
-  "displayName": "Codex Dev Companion",
-  "description": "A context-aware development support agent powered by the OpenAI Codex harness.",
-  "version": "0.5.0",
+  "displayName": "Local Dev Companion",
+  "description": "A local LangChain development agent connected only to a user-configured LiteLLM Chat Completions endpoint.",
+  "version": "0.8.0",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -11,7 +11,7 @@
   },
   "engines": {
     "vscode": "^1.106.0",
-    "node": ">=18"
+    "node": ">=22"
   },
   "categories": [
     "AI",
@@ -29,7 +29,7 @@
       "secondarySidebar": [
         {
           "id": "codexDevCompanion",
-          "title": "Codex Companion",
+          "title": "Local Companion",
           "icon": "media/codex-companion.svg"
         }
       ]
@@ -46,27 +46,27 @@
     "commands": [
       {
         "command": "codexDevCompanion.open",
-        "title": "Codex Companion: Open Agent"
+        "title": "Local Companion: Open Agent"
       },
       {
         "command": "codexDevCompanion.newThread",
-        "title": "Codex Companion: New Thread"
+        "title": "Local Companion: New Thread"
       },
       {
         "command": "codexDevCompanion.addSelection",
-        "title": "Codex Companion: Add Selection to Context"
+        "title": "Local Companion: Add Selection to Context"
       },
       {
         "command": "codexDevCompanion.remember",
-        "title": "Codex Companion: Remember Note"
+        "title": "Local Companion: Remember Note"
       },
       {
         "command": "codexDevCompanion.configureLiteLlm",
-        "title": "Codex Companion: Configure LiteLLM"
+        "title": "Local Companion: Configure LiteLLM"
       },
       {
         "command": "codexDevCompanion.clearLiteLlmKey",
-        "title": "Codex Companion: Remove LiteLLM Key"
+        "title": "Local Companion: Remove LiteLLM Key"
       }
     ],
     "menus": {
@@ -86,12 +86,26 @@
       ]
     },
     "configuration": {
-      "title": "Codex Dev Companion",
+      "title": "Local Dev Companion",
       "properties": {
+        "codexDevCompanion.agentRuntime": {
+          "type": "string",
+          "enum": [
+            "standard",
+            "deep"
+          ],
+          "enumDescriptions": [
+            "Focused LangChain createAgent runtime with explicit local tools and bounded context.",
+            "Advanced createDeepAgent runtime with planning support, context compaction, workspace filesystem tools, and local subagents."
+          ],
+          "default": "standard",
+          "scope": "resource",
+          "description": "Agent runtime used for this workspace. Both options use the same local LiteLLM Chat Completions connection."
+        },
         "codexDevCompanion.liteLlmEndpoint": {
           "type": "string",
           "default": "",
-          "description": "HTTPS LiteLLM gateway base URL ending at /v1. Do not include /responses."
+          "description": "HTTPS LiteLLM gateway base URL or complete Chat Completions URL."
         },
         "codexDevCompanion.liteLlmModel": {
           "type": "string",
@@ -102,19 +116,7 @@
           "type": "string",
           "default": "",
           "scope": "resource",
-          "description": "Workspace-relative path to an optional gateway CA PEM bundle passed locally to Codex as CODEX_CA_CERTIFICATE."
-        },
-        "codexDevCompanion.modelCatalogPath": {
-          "type": "string",
-          "default": "",
-          "scope": "resource",
-          "description": "Workspace-relative path to an optional Codex model catalog JSON for custom LiteLLM aliases."
-        },
-        "codexDevCompanion.reasoningEffort": {
-          "type": "string",
-          "enum": ["minimal", "low", "medium", "high", "xhigh"],
-          "default": "high",
-          "description": "Reasoning effort used by the development agent."
+          "description": "Workspace-relative path to an optional corporate CA PEM bundle used for the LiteLLM HTTPS request."
         },
         "codexDevCompanion.autoContext": {
           "type": "boolean",
@@ -127,6 +129,13 @@
           "minimum": 2000,
           "maximum": 100000,
           "description": "Maximum number of characters collected from the editor for one request."
+        },
+        "codexDevCompanion.maxConversationCharacters": {
+          "type": "number",
+          "default": 48000,
+          "minimum": 8000,
+          "maximum": 200000,
+          "description": "Maximum number of recent conversation characters retained as model context."
         }
       }
     }
@@ -141,7 +150,13 @@
     "package": "npm run check && npm run build && vsce package"
   },
   "dependencies": {
-    "@openai/codex-sdk": "0.162.1"
+    "@langchain/core": "^1.2.17",
+    "@langchain/langgraph": "^1.5.0",
+    "@langchain/openai": "^1.6.2",
+    "deepagents": "^1.15.0",
+    "langchain": "^1.5.16",
+    "undici": "^6.29.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
