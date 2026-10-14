@@ -47,7 +47,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.8.1.vsix
+code --install-extension ./codex-dev-companion-0.8.2.vsix
 ```
 
 Se o comando `code` não estiver disponível:
@@ -55,7 +55,7 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.8.1.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.8.2.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 O VSIX não contém binário nativo e pode ser instalado em macOS, Windows ou Linux compatíveis com a versão do VS Code indicada.
@@ -65,7 +65,7 @@ O VSIX não contém binário nativo e pode ser instalado em macOS, Windows ou Li
 1. Abra uma pasta de projeto no VS Code.
 2. Pressione `Ctrl/Cmd + Shift + P`.
 3. Execute **Local Companion: Configure LiteLLM**.
-4. Escolha o runtime e informe os cinco valores de conexão abaixo.
+4. Escolha o runtime e informe os valores de conexão e as capacidades do modelo abaixo.
 5. Abra **Local Companion** na barra lateral direita.
 
 | Valor | Campo | Exemplo |
@@ -73,13 +73,15 @@ O VSIX não contém binário nativo e pode ser instalado em macOS, Windows ou Li
 | Runtime local | **Agent runtime** | `LangChain Agent` ou `Deep Agent` |
 | Base ou rota completa | **Gateway Base URL** | `https://gateway.empresa.com/v1` ou `https://gateway.empresa.com/ia/chat/completions` |
 | Alias liberado | **Model Alias** | `modelo-corporativo` |
+| Reasoning opcional | **Reasoning effort** | omitir ou `none`, `minimal`, `low`, `medium`, `high`, `xhigh` |
+| Temperatura opcional | **Temperature** | vazio para omitir, ou um número aceito pelo modelo |
 | Cabeçalho da chave | **Key Header** | `Authorization: Bearer`, `api-key` ou `Ocp-Apim-Subscription-Key` |
 | Chave | **Gateway Key** | chave individual/scoped ou subscription key |
 | CA opcional | **Gateway CA certificate** | `.pem` dentro do workspace |
 
 Se for informada uma URL base, a extensão acrescenta `/chat/completions`. Se a rota completa já for informada, ela será usada sem duplicação. Caminhos corporativos intermediários são aceitos; query parameters são recusados para evitar que segredos sejam gravados em settings.
 
-Também é possível trocar o runtime no seletor ao lado de **Execute / Plan only**. A escolha vale para o workspace atual. Clique em **LiteLLM** no rodapé para alterar URL, alias, cabeçalho ou chave. Se a chave ficar vazia, o valor já armazenado no Secret Storage é preservado. Use **Setup wizard / PEM** para selecionar ou trocar o certificado corporativo.
+Também é possível trocar o runtime no seletor ao lado de **Execute / Plan only**. A escolha vale para o workspace atual. Clique em **LiteLLM** no rodapé para alterar URL, alias, capacidades, cabeçalho ou chave. Reasoning e temperatura são lembrados separadamente para cada alias exato; ao trocar de alias, o formulário recupera seu perfil salvo. Se a chave ficar vazia, o valor já armazenado no Secret Storage é preservado. Use **Setup wizard / PEM** para selecionar ou trocar o certificado corporativo.
 
 ### Erro “missing subscription key”
 
@@ -90,6 +92,12 @@ Esse erro normalmente vem do Azure API Management e significa que a chave chegou
 - **Ocp-Apim-Subscription-Key** quando o gateway exige o cabeçalho padrão de subscription key do Azure API Management.
 
 A escolha muda somente o cabeçalho HTTPS enviado ao gateway configurado. A chave continua armazenada exclusivamente no Secret Storage.
+
+### Erro “Function tools with reasoning_effort are not supported”
+
+Algumas implantações usam reasoning por padrão, mas não aceitam reasoning junto de function tools no endpoint Chat Completions. Como o agente precisa das ferramentas locais e este projeto não usa Responses API, abra **LiteLLM** e selecione `none` em **Reasoning effort** para o alias afetado.
+
+Não há inferência por nome de modelo: `reasoning_effort` e `temperature` são omitidos por padrão. Se aparecer erro de temperatura incompatível, deixe **Temperature** em branco. Cada alias mantém seu próprio perfil porque gateways e deployments diferentes podem aceitar combinações diferentes.
 
 ## Como o agente trabalha
 
@@ -134,7 +142,7 @@ Para gerar e reinstalar o pacote:
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.8.1.vsix
+code --install-extension codex-dev-companion-0.8.2.vsix
 ```
 
 ## Memória
@@ -164,6 +172,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 | `codexDevCompanion.liteLlmEndpoint` | vazio | Base HTTPS do LiteLLM ou URL completa de Chat Completions. |
 | `codexDevCompanion.liteLlmAuthHeader` | `authorization` | Cabeçalho que transporta a chave até o gateway. |
 | `codexDevCompanion.liteLlmModel` | vazio | Alias exato do modelo liberado. |
+| `codexDevCompanion.liteLlmModelProfiles` | `{}` | Parâmetros opcionais de reasoning e temperatura por alias; campos ausentes não são enviados. |
 | `codexDevCompanion.gatewayCaCertificatePath` | vazio | Caminho relativo para o bundle CA `.pem`. |
 | `codexDevCompanion.autoContext` | `true` | Inclui contexto atual do editor. |
 | `codexDevCompanion.maxContextCharacters` | `24000` | Limite do contexto coletado por turno. |

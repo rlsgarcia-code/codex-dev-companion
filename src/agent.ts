@@ -19,7 +19,9 @@ import * as vscode from "vscode";
 import { ContextCollector, renderContext } from "./context";
 import {
   chatCompletionsBaseUrl,
+  chatCompletionsModelOptions,
   LITELLM_API_KEY_SECRET,
+  liteLlmModelProfile,
   openAiClientAuthentication,
   parseLiteLlmAuthHeader,
   resolveWorkspaceCertificatePath,
@@ -118,10 +120,12 @@ export class DevelopmentAgent implements vscode.Disposable {
       const model = new ChatOpenAICompletions({
         model: connection.model,
         apiKey: authentication.apiKey,
-        temperature: 0,
         streaming: true,
         streamUsage: true,
         maxRetries: 2,
+        ...chatCompletionsModelOptions(
+          liteLlmModelProfile(configuration.get("liteLlmModelProfiles"), connection.model)
+        ),
         configuration: {
           baseURL: chatCompletionsBaseUrl(connection),
           ...(authentication.defaultHeaders
@@ -349,6 +353,12 @@ ${request}
   }
 
   private explainError(message: string): string {
+    if (/function tools with reasoning_effort/i.test(message)) {
+      return `${message}\n\nThis deployment defaults to reasoning that cannot be combined with function tools on Chat Completions. Open LiteLLM settings and set Reasoning effort to “none” for this model alias.`;
+    }
+    if (/temperature.+(?:not supported|unsupported)|(?:not supported|unsupported).+temperature/i.test(message)) {
+      return `${message}\n\nOpen LiteLLM settings and leave Temperature blank so the parameter is omitted for this model alias.`;
+    }
     if (/missing subscription key/i.test(message)) {
       return `${message}\n\nThe gateway did not receive the key in its expected header. Open “Local Companion: Configure LiteLLM” and choose “api-key” for an AzureChatOpenAI-compatible hub or “Ocp-Apim-Subscription-Key” for standard Azure API Management.`;
     }

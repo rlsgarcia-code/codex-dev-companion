@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.2
+
+- Added model-specific Chat Completions profiles for optional `reasoning_effort` and `temperature` values.
+- Omit both parameters by default instead of inferring capabilities from a model name or forcing `temperature: 0`.
+- Added sidebar and setup-wizard controls that remember distinct capabilities for each exact LiteLLM model alias.
+- Added regression coverage for an explicitly configured `gpt-6-luna` tool call with `reasoning_effort: "none"` and no temperature.
+
 ## 0.8.1
 
 - Added selectable gateway authentication headers: `Authorization: Bearer`, `api-key`, and `Ocp-Apim-Subscription-Key`.

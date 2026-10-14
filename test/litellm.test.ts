@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   chatCompletionsBaseUrl,
+  chatCompletionsModelOptions,
   chatCompletionsUrl,
+  liteLlmModelProfile,
   normalizeLiteLlmEndpoint,
   openAiClientAuthentication,
   parseLiteLlmAuthHeader,
+  parseLiteLlmModelProfiles,
+  parseOptionalTemperature,
   resolveWorkspaceCertificatePath,
+  updateLiteLlmModelProfile,
   validateLiteLlmConnection
 } from "../src/litellm";
 
@@ -79,6 +84,29 @@ test("maps the stored key to the selected gateway authentication header", () => 
     stripAuthorization: true
   });
   assert.equal(parseLiteLlmAuthHeader("unknown"), "authorization");
+});
+
+test("builds only the model parameters explicitly configured for an alias", () => {
+  const profiles = updateLiteLlmModelProfile({}, "gpt-6-Luna", { reasoningEffort: "none" });
+  assert.deepEqual(profiles, { "gpt-6-Luna": { reasoningEffort: "none" } });
+  assert.deepEqual(
+    chatCompletionsModelOptions(liteLlmModelProfile(profiles, "gpt-6-Luna")),
+    { modelKwargs: { reasoning_effort: "none" } }
+  );
+  assert.deepEqual(chatCompletionsModelOptions(liteLlmModelProfile(profiles, "gpt-4o")), {});
+
+  const withTemperature = updateLiteLlmModelProfile(profiles, "creative-model", {
+    temperature: 0.7,
+    reasoningEffort: "low"
+  });
+  assert.deepEqual(chatCompletionsModelOptions(liteLlmModelProfile(withTemperature, "creative-model")), {
+    temperature: 0.7,
+    modelKwargs: { reasoning_effort: "low" }
+  });
+  assert.equal(parseOptionalTemperature(""), undefined);
+  assert.equal(parseOptionalTemperature("0"), 0);
+  assert.throws(() => parseOptionalTemperature("not-a-number"), /finite number/);
+  assert.deepEqual(parseLiteLlmModelProfiles({ broken: { temperature: "nope" } }), {});
 });
 
 test("keeps the gateway CA certificate inside the workspace", () => {

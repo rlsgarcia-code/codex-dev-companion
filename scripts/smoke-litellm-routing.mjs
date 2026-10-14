@@ -83,17 +83,20 @@ try {
   const secondPayload = JSON.parse(requests[1].body);
   assert.equal(firstPayload.model, "smoke-model-alias");
   assert.equal(firstPayload.stream, true);
+  assert.equal(firstPayload.temperature, undefined);
+  assert.equal(firstPayload.reasoning_effort, undefined);
   assert.equal(firstPayload.messages.at(-1).content, "Read the safe marker, then reply with smoke-ok.");
   assert.equal(firstPayload.tools[0].function.name, "read_marker");
   assert.equal(secondPayload.messages.at(-1).role, "tool");
   assert.match(secondPayload.messages.at(-1).content, /readOnly/);
 
   const subscriptionKeyModel = new ChatOpenAICompletions({
-    model: "smoke-model-alias",
+    model: "gpt-6-luna",
     apiKey: "local-gateway-header",
     streaming: true,
     streamUsage: true,
     maxRetries: 0,
+    modelKwargs: { reasoning_effort: "none" },
     configuration: {
       baseURL: `http://127.0.0.1:${address.port}/v1`,
       defaultHeaders: {
@@ -121,8 +124,10 @@ try {
   assert.equal(requests[2].headers.authorization, undefined);
   assert.equal(requests[2].headers["ocp-apim-subscription-key"], "apim-smoke-key");
   const deepPayload = JSON.parse(requests[2].body);
-  assert.equal(deepPayload.model, "smoke-model-alias");
+  assert.equal(deepPayload.model, "gpt-6-luna");
   assert.equal(deepPayload.stream, true);
+  assert.equal(deepPayload.reasoning_effort, "none");
+  assert.equal(deepPayload.temperature, undefined);
   assert.ok(deepPayload.tools.some((entry) => entry.function.name === "read_file"));
   assert.ok(deepPayload.tools.some((entry) => entry.function.name === "task"));
 

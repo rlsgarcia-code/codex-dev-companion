@@ -3,9 +3,13 @@ import * as vscode from "vscode";
 import { DevelopmentAgent } from "./agent";
 import {
   LITELLM_API_KEY_SECRET,
+  liteLlmModelProfile,
   normalizeLiteLlmEndpoint,
   parseLiteLlmAuthHeader,
-  resolveWorkspaceCertificatePath
+  parseLiteLlmModelProfiles,
+  parseOptionalTemperature,
+  resolveWorkspaceCertificatePath,
+  updateLiteLlmModelProfile
 } from "./litellm";
 import { ContextCollector } from "./context";
 import { ProjectMemory } from "./memory";
@@ -62,17 +66,17 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         ],
         {
-          title: "LiteLLM setup (1/6) — Agent runtime",
+          title: "LiteLLM setup (1/8) — Agent runtime",
           placeHolder: "Choose how the local development agent should work",
           ignoreFocusOut: true
         }
       );
       if (!runtimeChoice) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 1/6. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 1/8. No changes were saved.");
         return;
       }
       const endpointInput = await vscode.window.showInputBox({
-        title: "LiteLLM setup (2/6) — Gateway base URL",
+        title: "LiteLLM setup (2/8) — Gateway base URL",
         prompt: "Enter the HTTPS gateway base URL or the complete URL ending in /chat/completions.",
         value: configuration.get<string>("liteLlmEndpoint", ""),
         placeHolder: "https://gateway.example.com/v1 or …/chat/completions",
@@ -87,12 +91,12 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       });
       if (endpointInput === undefined) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 2/6. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 2/8. No changes were saved.");
         return;
       }
       const endpoint = normalizeLiteLlmEndpoint(endpointInput);
       const model = await vscode.window.showInputBox({
-        title: "LiteLLM setup (3/6) — Model alias",
+        title: "LiteLLM setup (3/8) — Model alias",
         prompt: "Enter the exact client-facing alias configured by the LiteLLM administrator.",
         value: configuration.get<string>("liteLlmModel", ""),
         placeHolder: "company-coding-model",
@@ -100,9 +104,54 @@ export function activate(context: vscode.ExtensionContext): void {
         validateInput: (value) => value.trim() ? undefined : "LiteLLM model alias is required."
       });
       if (model === undefined) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 3/6. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 3/8. No changes were saved.");
         return;
       }
+      const existingProfiles = parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"));
+      const existingProfile = liteLlmModelProfile(existingProfiles, model);
+      const reasoningChoice = await vscode.window.showQuickPick(
+        [
+          { label: "Omit reasoning_effort", description: "Send no reasoning parameter", value: undefined, picked: !existingProfile.reasoningEffort },
+          { label: "none", description: "Use function tools when reasoning is incompatible", value: "none" as const, picked: existingProfile.reasoningEffort === "none" },
+          { label: "minimal", description: "Only if this model supports it", value: "minimal" as const, picked: existingProfile.reasoningEffort === "minimal" },
+          { label: "low", description: "Only if this model supports it", value: "low" as const, picked: existingProfile.reasoningEffort === "low" },
+          { label: "medium", description: "Only if this model supports it", value: "medium" as const, picked: existingProfile.reasoningEffort === "medium" },
+          { label: "high", description: "Only if this model supports it", value: "high" as const, picked: existingProfile.reasoningEffort === "high" },
+          { label: "xhigh", description: "Only if this model supports it", value: "xhigh" as const, picked: existingProfile.reasoningEffort === "xhigh" }
+        ],
+        {
+          title: "LiteLLM setup (4/8) — Reasoning effort",
+          placeHolder: "Choose what this exact model alias accepts",
+          ignoreFocusOut: true
+        }
+      );
+      if (!reasoningChoice) {
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 4/8. No changes were saved.");
+        return;
+      }
+      const temperatureInput = await vscode.window.showInputBox({
+        title: "LiteLLM setup (5/8) — Temperature",
+        prompt: "Leave blank to omit temperature, or enter the value accepted by this exact model alias.",
+        value: existingProfile.temperature === undefined ? "" : String(existingProfile.temperature),
+        placeHolder: "Omit from request",
+        ignoreFocusOut: true,
+        validateInput: (value) => {
+          try {
+            parseOptionalTemperature(value);
+            return undefined;
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        }
+      });
+      if (temperatureInput === undefined) {
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 5/8. No changes were saved.");
+        return;
+      }
+      const modelProfiles = updateLiteLlmModelProfile(existingProfiles, model, {
+        reasoningEffort: reasoningChoice.value,
+        temperature: parseOptionalTemperature(temperatureInput)
+      });
       const currentAuthHeader = parseLiteLlmAuthHeader(configuration.get("liteLlmAuthHeader"));
       const authChoice = await vscode.window.showQuickPick(
         [
@@ -126,17 +175,17 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         ],
         {
-          title: "LiteLLM setup (4/6) — Key header",
+          title: "LiteLLM setup (6/8) — Key header",
           placeHolder: "Choose the header expected by the gateway",
           ignoreFocusOut: true
         }
       );
       if (!authChoice) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 4/6. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 6/8. No changes were saved.");
         return;
       }
       const apiKey = await vscode.window.showInputBox({
-        title: "LiteLLM setup (5/6) — Gateway key",
+        title: "LiteLLM setup (7/8) — Gateway key",
         prompt: existingApiKey
           ? "Enter a replacement API/subscription key, or leave blank to keep the stored key."
           : "Enter the key required by the selected header. It is stored only in VS Code Secret Storage.",
@@ -147,7 +196,7 @@ export function activate(context: vscode.ExtensionContext): void {
           : "Gateway API or subscription key is required."
       });
       if (apiKey === undefined) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 5/6. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 7/8. No changes were saved.");
         return;
       }
       const resolvedApiKey = apiKey.trim() || existingApiKey;
@@ -176,13 +225,13 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         ],
         {
-          title: "LiteLLM setup (6/6) — Gateway CA certificate",
+          title: "LiteLLM setup (8/8) — Gateway CA certificate",
           placeHolder: "Choose how the local agent should verify the LiteLLM gateway certificate",
           ignoreFocusOut: true
         }
       );
       if (!trustChoice) {
-        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 6/6. No changes were saved.");
+        void vscode.window.showInformationMessage("LiteLLM setup cancelled at step 8/8. No changes were saved.");
         return;
       }
       if (trustChoice.value === "pem") {
@@ -213,6 +262,7 @@ export function activate(context: vscode.ExtensionContext): void {
         configuration.update("liteLlmEndpoint", endpoint, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModel", model.trim(), vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmAuthHeader", authChoice.value, vscode.ConfigurationTarget.Global),
+        configuration.update("liteLlmModelProfiles", modelProfiles, vscode.ConfigurationTarget.Global),
         configuration.update("agentRuntime", runtimeChoice.value, vscode.ConfigurationTarget.Workspace),
         configuration.update("gatewayCaCertificatePath", caCertificateRelativePath, vscode.ConfigurationTarget.Workspace),
         context.secrets.store(LITELLM_API_KEY_SECRET, resolvedApiKey)

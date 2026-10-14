@@ -2,7 +2,7 @@
   "name": "codex-dev-companion",
   "displayName": "Local Dev Companion",
   "description": "A local LangChain development agent connected only to a user-configured LiteLLM Chat Completions endpoint.",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -126,6 +126,31 @@
           "type": "string",
           "default": "",
           "description": "Exact client-facing model alias configured by the LiteLLM gateway administrator."
+        },
+        "codexDevCompanion.liteLlmModelProfiles": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "reasoningEffort": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ]
+              },
+              "temperature": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Optional Chat Completions parameters stored per exact model alias. Missing fields are omitted from the request. Prefer the LiteLLM form in the Local Companion sidebar."
         },
         "codexDevCompanion.gatewayCaCertificatePath": {
           "type": "string",

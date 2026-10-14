@@ -2,11 +2,16 @@ import * as vscode from "vscode";
 import { DevelopmentAgent } from "./agent";
 import {
   LITELLM_API_KEY_SECRET,
+  liteLlmModelProfile,
   normalizeLiteLlmEndpoint,
   parseLiteLlmAuthHeader,
+  parseLiteLlmModelProfiles,
+  parseLiteLlmReasoningEffort,
+  parseOptionalTemperature,
+  updateLiteLlmModelProfile,
   validateLiteLlmConnection
 } from "./litellm";
-import type { LiteLlmAuthHeader } from "./litellm";
+import type { LiteLlmAuthHeader, LiteLlmModelProfiles, LiteLlmReasoningEffort } from "./litellm";
 import { ContextCollector } from "./context";
 import { ProjectMemory } from "./memory";
 import { agentRuntimeLabel, parseAgentRuntime } from "./runtime";
@@ -24,7 +29,15 @@ type IncomingMessage =
   | { type: "openMemory" }
   | { type: "configureLiteLlm" }
   | { type: "selectRuntime"; runtime: AgentRuntime }
-  | { type: "saveLiteLlm"; endpoint: string; model: string; apiKey: string; authHeader: LiteLlmAuthHeader };
+  | {
+      type: "saveLiteLlm";
+      endpoint: string;
+      model: string;
+      apiKey: string;
+      authHeader: LiteLlmAuthHeader;
+      reasoningEffort: string;
+      temperature: string;
+    };
 
 type LiteLlmSettingsSnapshot = {
   endpoint: string;
@@ -33,6 +46,9 @@ type LiteLlmSettingsSnapshot = {
   caCertificatePath: string;
   runtime: AgentRuntime;
   authHeader: LiteLlmAuthHeader;
+  modelProfiles: LiteLlmModelProfiles;
+  reasoningEffort?: LiteLlmReasoningEffort;
+  temperature?: number;
 };
 
 export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -129,13 +145,19 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async liteLlmSettingsSnapshot(): Promise<LiteLlmSettingsSnapshot> {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const model = configuration.get<string>("liteLlmModel", "");
+    const modelProfiles = parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"));
+    const profile = liteLlmModelProfile(modelProfiles, model);
     return {
       endpoint: configuration.get<string>("liteLlmEndpoint", ""),
-      model: configuration.get<string>("liteLlmModel", ""),
+      model,
       hasApiKey: Boolean(await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET)),
       caCertificatePath: configuration.get<string>("gatewayCaCertificatePath", ""),
       runtime: parseAgentRuntime(configuration.get("agentRuntime")),
-      authHeader: parseLiteLlmAuthHeader(configuration.get("liteLlmAuthHeader"))
+      authHeader: parseLiteLlmAuthHeader(configuration.get("liteLlmAuthHeader")),
+      modelProfiles,
+      reasoningEffort: profile.reasoningEffort,
+      temperature: profile.temperature
     };
   }
 
@@ -170,10 +192,23 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         apiKey,
         authHeader: parseLiteLlmAuthHeader(message.authHeader)
       });
+      const reasoningEffort = message.reasoningEffort === "omit"
+        ? undefined
+        : parseLiteLlmReasoningEffort(message.reasoningEffort);
+      if (message.reasoningEffort !== "omit" && !reasoningEffort) {
+        throw new Error("Choose a supported reasoning effort or omit the parameter.");
+      }
+      const temperature = parseOptionalTemperature(message.temperature);
+      const modelProfiles = updateLiteLlmModelProfile(
+        configuration.get("liteLlmModelProfiles"),
+        connection.model,
+        { reasoningEffort, temperature }
+      );
       await Promise.all([
         configuration.update("liteLlmEndpoint", connection.endpoint, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModel", connection.model, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmAuthHeader", connection.authHeader, vscode.ConfigurationTarget.Global),
+        configuration.update("liteLlmModelProfiles", modelProfiles, vscode.ConfigurationTarget.Global),
         ...(message.apiKey.trim()
           ? [this.extensionContext.secrets.store(LITELLM_API_KEY_SECRET, message.apiKey.trim())]
           : [])
@@ -304,7 +339,24 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       </label>
       <label class="field">
         <span>Model Alias</span>
-        <input id="litellm-model" type="text" autocomplete="off" spellcheck="false" placeholder="company-coding-model" />
+        <input id="litellm-model" type="text" list="litellm-model-aliases" autocomplete="off" spellcheck="false" placeholder="company-coding-model" />
+        <datalist id="litellm-model-aliases"></datalist>
+      </label>
+      <label class="field">
+        <span>Reasoning effort</span>
+        <select id="litellm-reasoning-effort">
+          <option value="omit">Omit from request</option>
+          <option value="none">none · function tools compatibility</option>
+          <option value="minimal">minimal</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+          <option value="xhigh">xhigh</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Temperature <small>optional</small></span>
+        <input id="litellm-temperature" type="number" step="any" inputmode="decimal" placeholder="Omit from request" />
       </label>
       <label class="field">
         <span>Key Header</span>
@@ -465,12 +517,16 @@ const planItems = document.getElementById('plan-items');
 const liteLlmSettings = document.getElementById('litellm-settings');
 const liteLlmEndpoint = document.getElementById('litellm-endpoint');
 const liteLlmModel = document.getElementById('litellm-model');
+const liteLlmModelAliases = document.getElementById('litellm-model-aliases');
+const liteLlmReasoningEffort = document.getElementById('litellm-reasoning-effort');
+const liteLlmTemperature = document.getElementById('litellm-temperature');
 const liteLlmAuthHeader = document.getElementById('litellm-auth-header');
 const liteLlmApiKey = document.getElementById('litellm-api-key');
 const liteLlmSettingsError = document.getElementById('litellm-settings-error');
 const newThreadButton = document.getElementById('new-thread');
 const agentRuntime = document.getElementById('runtime');
 let busy = false;
+let liteLlmModelProfiles = {};
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -527,8 +583,14 @@ function submit() {
 }
 
 function fillLiteLlmSettings(liteLlm) {
+  liteLlmModelProfiles = liteLlm.modelProfiles || {};
   liteLlmEndpoint.value = liteLlm.endpoint || '';
   liteLlmModel.value = liteLlm.model || '';
+  liteLlmModelAliases.innerHTML = Object.keys(liteLlmModelProfiles)
+    .sort()
+    .map(model => '<option value="' + escapeHtml(model) + '"></option>')
+    .join('');
+  fillModelProfile(liteLlm.model || '', liteLlm);
   liteLlmAuthHeader.value = liteLlm.authHeader || 'authorization';
   liteLlmApiKey.value = '';
   agentRuntime.value = liteLlm.runtime === 'deep' ? 'deep' : 'standard';
@@ -539,6 +601,12 @@ function fillLiteLlmSettings(liteLlm) {
   details.push('POST /chat/completions');
   document.getElementById('litellm-details').textContent = details.join(' · ');
   liteLlmSettingsError.classList.add('hidden');
+}
+
+function fillModelProfile(model, fallback) {
+  const profile = liteLlmModelProfiles[String(model).trim()] || fallback || {};
+  liteLlmReasoningEffort.value = profile.reasoningEffort || 'omit';
+  liteLlmTemperature.value = profile.temperature === undefined ? '' : String(profile.temperature);
 }
 
 function openLiteLlmSettings() {
@@ -553,7 +621,9 @@ function saveLiteLlmSettings() {
     endpoint: liteLlmEndpoint.value,
     model: liteLlmModel.value,
     apiKey: liteLlmApiKey.value,
-    authHeader: liteLlmAuthHeader.value
+    authHeader: liteLlmAuthHeader.value,
+    reasoningEffort: liteLlmReasoningEffort.value,
+    temperature: liteLlmTemperature.value
   });
 }
 
@@ -588,6 +658,7 @@ document.getElementById('litellm').addEventListener('click', () => liteLlmSettin
 document.getElementById('litellm-close').addEventListener('click', () => liteLlmSettings.classList.add('hidden'));
 document.getElementById('litellm-save').addEventListener('click', saveLiteLlmSettings);
 document.getElementById('litellm-advanced').addEventListener('click', () => vscode.postMessage({ type: 'configureLiteLlm' }));
+liteLlmModel.addEventListener('change', () => fillModelProfile(liteLlmModel.value, {}));
 agentRuntime.addEventListener('change', () => {
   vscode.postMessage({ type: 'selectRuntime', runtime: agentRuntime.value });
 });
