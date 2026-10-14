@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0
+
+- Added optional LangChain Chroma vector-store retrieval for `.codex-agent/memory.md`, backed by a bundled local-only ChromaDB service with no Docker requirement.
+- Added an embedding-model selector populated by the same authenticated LiteLLM model catalog used by the chat model, plus an optional embeddings URL, while reusing the Secret Storage key, gateway header, and imported corporate CA.
+- Persist LangGraph checkpoints in a local SQLite database and keep `MemorySaver` as the startup fallback.
+- Keep transient editor context out of persisted human messages and inject only semantically relevant durable memory when embeddings are configured.
+- Removed the Deep Agent recursion limit of 50 and enabled its native high-limit compaction/offload path with a composite state/workspace backend.
+- Package platform-specific ChromaDB and SQLite native binaries in the VSIX.
+
 ## 0.9.2
 
 - Added one-time corporate CA PEM import into the extension's global local storage so every workspace in the same VS Code profile and environment can reuse it.

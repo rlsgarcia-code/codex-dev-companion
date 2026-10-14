@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import * as path from "node:path";
 import { rootCertificates } from "node:tls";
@@ -5,11 +6,11 @@ import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import { BaseMessage, HumanMessage, RemoveMessage } from "@langchain/core/messages";
 import type { LLMResult } from "@langchain/core/outputs";
 import { MemorySaver, REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
+import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { ChatOpenAICompletions } from "@langchain/openai";
 import {
+  CompositeBackend,
   createDeepAgent,
-  createFilesystemMiddleware,
-  createSummarizationMiddleware,
   FilesystemBackend,
   StateBackend
 } from "deepagents";
@@ -18,9 +19,11 @@ import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import * as vscode from "vscode";
 import { readImportedGatewayCa, storeImportedGatewayCa } from "./certificate";
 import { ContextCollector, renderContext } from "./context";
+import { gatewayFetch } from "./gateway";
 import {
   chatCompletionsBaseUrl,
   chatCompletionsModelOptions,
+  embeddingsBaseUrl,
   LITELLM_API_KEY_SECRET,
   liteLlmModelProfile,
   liteLlmModelsRequestHeaders,
@@ -34,6 +37,7 @@ import {
 } from "./litellm";
 import { ProjectMemory } from "./memory";
 import { agentRuntimeLabel, parseAgentRuntime } from "./runtime";
+import { SemanticProjectMemory } from "./semantic-memory";
 import { LocalToolHost } from "./tools";
 import type { AgentRuntime, AgentUiEvent, RunMode } from "./types";
 
@@ -43,17 +47,15 @@ type PersistedMessage =
   | { role: "user"; content: string }
   | { role: "assistant"; content: string };
 
-type ConversationState = {
-  id: string;
-  messages: PersistedMessage[];
-};
+type ConversationState = { id: string; messages: PersistedMessage[] };
 
 export class DevelopmentAgent implements vscode.Disposable {
   private abortController: AbortController | undefined;
-  private checkpointer = new MemorySaver();
+  private readonly checkpointer: SqliteSaver | MemorySaver;
+  private readonly persistentCheckpoints: boolean;
+  private readonly semanticMemory: SemanticProjectMemory;
   private readonly hydratedThreads = new Set<string>();
   private isRunning = false;
-  private activeRuntime: AgentRuntime | undefined;
 
   public constructor(
     private readonly extensionContext: vscode.ExtensionContext,
@@ -61,6 +63,17 @@ export class DevelopmentAgent implements vscode.Disposable {
     private readonly memory: ProjectMemory
   ) {
     disableExternalLangChainTracing();
+    this.semanticMemory = new SemanticProjectMemory(extensionContext);
+    try {
+      mkdirSync(extensionContext.globalStorageUri.fsPath, { recursive: true });
+      this.checkpointer = SqliteSaver.fromConnString(
+        path.join(extensionContext.globalStorageUri.fsPath, "agent-checkpoints.sqlite")
+      );
+      this.persistentCheckpoints = true;
+    } catch {
+      this.checkpointer = new MemorySaver();
+      this.persistentCheckpoints = false;
+    }
   }
 
   public get running(): boolean {
@@ -116,17 +129,11 @@ export class DevelopmentAgent implements vscode.Disposable {
     const controller = new AbortController();
     this.abortController = controller;
     let dispatcher: UndiciAgent | undefined;
-    let activeThreadId: string | undefined;
     onEvent({ type: "status", label: "Collecting workspace context" });
 
     try {
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       const runtime = parseAgentRuntime(configuration.get("agentRuntime"));
-      if (this.activeRuntime && this.activeRuntime !== runtime) {
-        this.checkpointer = new MemorySaver();
-        this.hydratedThreads.clear();
-      }
-      this.activeRuntime = runtime;
       const apiKey = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
       const connection = validateLiteLlmConnection({
         endpoint: configuration.get<string>("liteLlmEndpoint", ""),
@@ -139,7 +146,7 @@ export class DevelopmentAgent implements vscode.Disposable {
       const maxConversationCharacters = configuration.get<number>("maxConversationCharacters", 48_000);
       const autoContext = configuration.get<boolean>("autoContext", true);
       const [memoryText, snapshot, certificateAuthorities] = await Promise.all([
-        this.memory.read(),
+        this.memory.read(200_000),
         autoContext ? this.contextCollector.collect(maxContextCharacters) : Promise.resolve(undefined),
         this.certificateAuthorities(workspace.uri.fsPath)
       ]);
@@ -147,9 +154,9 @@ export class DevelopmentAgent implements vscode.Disposable {
         ? renderContext(snapshot, maxContextCharacters)
         : "Automatic editor context is disabled.";
 
-      const conversation = this.conversation();
-      activeThreadId = conversation.id;
-      onEvent({ type: "thread", threadId: conversation.id });
+      const conversation = await this.conversation();
+      const threadId = conversation.id;
+      onEvent({ type: "thread", threadId });
 
       if (certificateAuthorities) {
         dispatcher = new UndiciAgent({ connect: { ca: certificateAuthorities } });
@@ -175,19 +182,47 @@ export class DevelopmentAgent implements vscode.Disposable {
       });
       const toolHost = new LocalToolHost(workspace.uri.fsPath, this.memory, onEvent);
       const usage = new TokenUsageHandler();
+      let projectMemory = memoryText.slice(-12_000);
+      const semanticMemoryEnabled = configuration.get<boolean>("semanticMemoryEnabled", true);
+      const embeddingModel = configuration.get<string>("embeddingModel", "").trim();
+      if (semanticMemoryEnabled && embeddingModel) {
+        try {
+          const recalled = await this.semanticMemory.recall({
+            query: request,
+            memoryText,
+            embeddingModel,
+            embeddingsBaseUrl: embeddingsBaseUrl(
+              connection,
+              configuration.get<string>("embeddingsEndpoint", "")
+            ),
+            apiKey: authentication.apiKey,
+            defaultHeaders: authentication.defaultHeaders,
+            fetch: dispatcher || authentication.stripAuthorization
+              ? gatewayFetch(authentication.stripAuthorization, dispatcher)
+              : undefined,
+            results: configuration.get<number>("semanticMemoryResults", 5)
+          });
+          if (recalled.length) projectMemory = recalled.join("\n\n---\n\n");
+        } catch {
+          onEvent({ type: "status", label: "Semantic memory unavailable; using memory.md" });
+        }
+      }
 
-      const firstInvocation = !this.hydratedThreads.has(conversation.id);
-      const messages = firstInvocation
+      const firstInvocation = !this.hydratedThreads.has(threadId);
+      const messages = firstInvocation && conversation.messages.length
         ? [
             ...this.compactPersistedConversation(conversation.messages, maxConversationCharacters),
-            new HumanMessage(this.userMessage(request, context))
+            new HumanMessage(request)
           ]
-        : [new HumanMessage(this.userMessage(request, context))];
+        : [new HumanMessage(request)];
+      const systemPrompt = this.systemPrompt(mode, projectMemory, runtime, context);
 
       onEvent({ type: "status", label: `${agentRuntimeLabel(runtime)} is thinking` });
       const invocationConfig = {
-        configurable: { thread_id: conversation.id },
-        recursionLimit: runtime === "deep" ? 50 : 30,
+        configurable: { thread_id: threadId },
+        ...(runtime === "standard"
+          ? { recursionLimit: configuration.get<number>("standardRecursionLimit", 200) }
+          : {}),
         signal: controller.signal,
         callbacks: [usage]
       };
@@ -199,29 +234,16 @@ export class DevelopmentAgent implements vscode.Disposable {
           maxFileSizeMb: 1.5
         });
         const permissions = mode === "plan"
-          ? [{ operations: ["write"] as const, paths: ["/**"], mode: "deny" as const }]
+          ? [{ operations: ["write"] as const, paths: ["/workspace/**"], mode: "deny" as const }]
           : [];
-        const filesystemMiddleware = createFilesystemMiddleware({
-          backend: workspaceBackend,
-          permissions,
-          tools: mode === "plan"
-            ? ["read_file", "ls", "glob", "grep"]
-            : ["read_file", "ls", "glob", "grep", "write_file", "edit_file"],
-          toolTokenLimitBeforeEvict: null,
-          humanMessageTokenLimitBeforeEvict: null
-        });
-        const summarizationMiddleware = createSummarizationMiddleware({
-          model,
-          backend: new StateBackend(),
-          trigger: { type: "messages", value: 28 },
-          keep: { type: "messages", value: 14 }
+        const backend = new CompositeBackend(new StateBackend(), {
+          "/workspace/": workspaceBackend
         });
         const agent = createDeepAgent({
           model,
           tools: toolHost.deepTools(mode, controller.signal),
-          systemPrompt: this.systemPrompt(mode, memoryText, runtime),
-          middleware: [filesystemMiddleware, summarizationMiddleware],
-          backend: workspaceBackend,
+          systemPrompt,
+          backend,
           permissions,
           checkpointer: this.checkpointer
         });
@@ -231,34 +253,40 @@ export class DevelopmentAgent implements vscode.Disposable {
         const agent = createAgent({
           model,
           tools: toolHost.tools(mode, controller.signal),
-          systemPrompt: this.systemPrompt(mode, memoryText, runtime),
+          systemPrompt,
           middleware: [conversationWindowMiddleware(maxConversationCharacters)],
           checkpointer: this.checkpointer
         });
         const result = await agent.invoke({ messages }, invocationConfig);
         resultMessages = result.messages as BaseMessage[];
       }
-      this.hydratedThreads.add(conversation.id);
-
       const answer = finalAssistantText(resultMessages);
       if (!answer) {
         throw new Error(`${agentRuntimeLabel(runtime)} completed without a final assistant message.`);
       }
-      conversation.messages.push(
-        { role: "user", content: request },
-        { role: "assistant", content: answer }
-      );
-      conversation.messages = this.compactPersistedConversation(
-        conversation.messages,
-        maxConversationCharacters
-      );
-      await this.saveConversation(conversation);
+      this.hydratedThreads.add(threadId);
+      if (!this.persistentCheckpoints) {
+        conversation.messages.push(
+          { role: "user", content: request },
+          { role: "assistant", content: answer }
+        );
+        conversation.messages = this.compactPersistedConversation(
+          conversation.messages,
+          maxConversationCharacters
+        );
+        await this.extensionContext.workspaceState.update(this.conversationStorageKey(), conversation);
+      } else if (conversation.messages.length) {
+        await this.extensionContext.workspaceState.update(this.conversationStorageKey(), threadId);
+      }
       onEvent({ type: "assistant", text: answer });
       onEvent({ type: "usage", input: usage.input, output: usage.output });
       onEvent({ type: "status", label: "Ready" });
     } catch (error) {
-      if (activeThreadId) this.hydratedThreads.delete(activeThreadId);
-      this.checkpointer = new MemorySaver();
+      const threadId = this.storedThreadId();
+      if (!this.persistentCheckpoints && threadId) {
+        await this.checkpointer.deleteThread(threadId).catch(() => undefined);
+        this.hydratedThreads.delete(threadId);
+      }
       if (controller.signal.aborted) {
         onEvent({ type: "status", label: "Run cancelled" });
       } else {
@@ -280,35 +308,40 @@ export class DevelopmentAgent implements vscode.Disposable {
   public async newThread(): Promise<void> {
     this.cancel();
     this.contextCollector.clearPinned();
-    this.checkpointer = new MemorySaver();
+    const previous = this.storedThreadId();
+    if (previous) await this.checkpointer.deleteThread(previous);
     this.hydratedThreads.clear();
-    this.activeRuntime = undefined;
-    await this.extensionContext.workspaceState.update(this.conversationStorageKey(), undefined);
+    await this.extensionContext.workspaceState.update(this.conversationStorageKey(), crypto.randomUUID());
   }
 
   public async reloadProviderConfiguration(): Promise<void> {
-    await this.newThread();
+    this.cancel();
   }
 
   public reloadRuntimeConfiguration(): void {
     this.cancel();
-    this.checkpointer = new MemorySaver();
-    this.hydratedThreads.clear();
-    this.activeRuntime = undefined;
   }
 
   public dispose(): void {
     this.cancel();
+    if (this.checkpointer instanceof SqliteSaver) this.checkpointer.db.close();
   }
 
-  private conversation(): ConversationState {
-    const stored = this.extensionContext.workspaceState.get<ConversationState>(this.conversationStorageKey());
+  private storedThreadId(): string | undefined {
+    const stored = this.extensionContext.workspaceState.get<string | { id?: string }>(this.conversationStorageKey());
+    return typeof stored === "string" ? stored : stored?.id;
+  }
+
+  private async conversation(): Promise<ConversationState> {
+    const stored = this.extensionContext.workspaceState.get<string | ConversationState>(this.conversationStorageKey());
+    if (typeof stored === "string") return { id: stored, messages: [] };
     if (stored?.id && Array.isArray(stored.messages)) return stored;
-    return { id: crypto.randomUUID(), messages: [] };
-  }
-
-  private async saveConversation(conversation: ConversationState): Promise<void> {
-    await this.extensionContext.workspaceState.update(this.conversationStorageKey(), conversation);
+    const conversation = { id: crypto.randomUUID(), messages: [] };
+    await this.extensionContext.workspaceState.update(
+      this.conversationStorageKey(),
+      this.persistentCheckpoints ? conversation.id : conversation
+    );
+    return conversation;
   }
 
   private compactPersistedConversation(
@@ -349,13 +382,13 @@ export class DevelopmentAgent implements vscode.Disposable {
     return [...rootCertificates, certificate];
   }
 
-  private systemPrompt(mode: RunMode, memory: string, runtime: AgentRuntime): string {
+  private systemPrompt(mode: RunMode, memory: string, runtime: AgentRuntime, context: string): string {
     const operatingMode = mode === "plan"
       ? "PLAN MODE: inspect and reason, but do not edit files or run commands. Return a concrete implementation plan."
       : "EXECUTE MODE: solve the request end-to-end. Make scoped edits and run proportionate checks when useful.";
     const toolGuidance = runtime === "deep"
-      ? `- Use ls, glob, grep, and read_file to inspect the workspace before making claims or edits.
-- Use write_file and edit_file only for scoped workspace changes.
+      ? `- The opened project is mounted at /workspace. Use ls, glob, grep, and read_file there before making claims or edits.
+- Use write_file and edit_file only for scoped changes under /workspace.
 - Delegate bounded research or analysis to a local subagent when it materially reduces context pressure.`
       : `- Work from evidence. Inspect relevant workspace files before making claims or edits; use search_text before broad reading.
 - Manage context actively. Read only relevant files and use bounded line ranges.
@@ -375,18 +408,11 @@ ${toolGuidance}
 
 ${operatingMode}
 
+Current editor context (ephemeral; do not treat it as conversation history):
+${context}
+
 Project memory:
 ${memory}`;
-  }
-
-  private userMessage(request: string, context: string): string {
-    return `<editor_context>
-${context}
-</editor_context>
-
-<user_request>
-${request}
-</user_request>`;
   }
 
   private conversationStorageKey(): string {
@@ -477,21 +503,4 @@ function disableExternalLangChainTracing(): void {
   process.env.LANGSMITH_OTEL_ENABLED = "false";
   process.env.OTEL_ENABLED = "false";
   delete process.env.LANGCHAIN_TRACING;
-}
-
-function gatewayFetch(
-  stripAuthorization: boolean,
-  dispatcher: UndiciAgent | undefined
-): typeof globalThis.fetch {
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const headers = new Headers(
-      init?.headers ?? (input instanceof Request ? input.headers : undefined)
-    );
-    if (stripAuthorization) headers.delete("authorization");
-    return await undiciFetch(input as never, {
-      ...init,
-      headers,
-      ...(dispatcher ? { dispatcher } : {})
-    } as never) as unknown as Response;
-  }) as typeof globalThis.fetch;
 }

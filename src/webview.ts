@@ -5,6 +5,7 @@ import {
   LITELLM_API_KEY_SECRET,
   LITELLM_MODEL_CAPABILITIES,
   liteLlmModelProfile,
+  normalizeLiteLlmEmbeddingsEndpoint,
   normalizeLiteLlmEndpoint,
   normalizeLiteLlmModelsEndpoint,
   parseLiteLlmAuthHeader,
@@ -54,6 +55,9 @@ type IncomingMessage =
       reasoningEffort: string;
       temperature: string;
       topP: string;
+      semanticMemoryEnabled: boolean;
+      embeddingModel: string;
+      embeddingsEndpoint: string;
     };
 
 type LiteLlmSettingsSnapshot = {
@@ -71,6 +75,9 @@ type LiteLlmSettingsSnapshot = {
   reasoningEffort?: LiteLlmReasoningEffort;
   temperature?: number;
   topP?: number;
+  semanticMemoryEnabled: boolean;
+  embeddingModel: string;
+  embeddingsEndpoint: string;
 };
 
 export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -194,7 +201,10 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       capabilities: LITELLM_MODEL_CAPABILITIES[resolvedPreset],
       reasoningEffort: profile.reasoningEffort,
       temperature: profile.temperature,
-      topP: profile.topP
+      topP: profile.topP,
+      semanticMemoryEnabled: configuration.get<boolean>("semanticMemoryEnabled", true),
+      embeddingModel: configuration.get<string>("embeddingModel", ""),
+      embeddingsEndpoint: configuration.get<string>("embeddingsEndpoint", "")
     };
   }
 
@@ -247,6 +257,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       const modelsEndpoint = message.modelsEndpoint.trim()
         ? normalizeLiteLlmModelsEndpoint(message.modelsEndpoint)
         : "";
+      const embeddingsEndpoint = message.embeddingsEndpoint.trim()
+        ? normalizeLiteLlmEmbeddingsEndpoint(message.embeddingsEndpoint)
+        : "";
       const preset = parseLiteLlmModelPreset(message.preset);
       const reasoningEffort = message.reasoningEffort === "omit"
         ? undefined
@@ -268,6 +281,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         configuration.update("liteLlmModelsEndpoint", modelsEndpoint, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmAuthHeader", connection.authHeader, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModelProfiles", modelProfiles, vscode.ConfigurationTarget.Global),
+        configuration.update("semanticMemoryEnabled", message.semanticMemoryEnabled, vscode.ConfigurationTarget.Global),
+        configuration.update("embeddingModel", message.embeddingModel.trim(), vscode.ConfigurationTarget.Global),
+        configuration.update("embeddingsEndpoint", embeddingsEndpoint, vscode.ConfigurationTarget.Global),
         ...(message.apiKey.trim()
           ? [this.extensionContext.secrets.store(LITELLM_API_KEY_SECRET, message.apiKey.trim())]
           : [])
@@ -448,6 +464,22 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         <span>Gateway Key <small id="litellm-key-state"></small></span>
         <input id="litellm-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the stored key" />
       </label>
+      <div class="section-label settings-subheading">SEMANTIC MEMORY · LOCAL CHROMADB</div>
+      <label class="toggle-field">
+        <input id="semantic-memory-enabled" type="checkbox" />
+        <span>Retrieve relevant project memory with embeddings</span>
+      </label>
+      <label class="field">
+        <span>Embedding Model <small>optional · from Models URL</small></span>
+        <select id="embedding-model">
+          <option value="">Disabled · use memory.md only</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Embeddings URL <small>optional</small></span>
+        <input id="embeddings-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="Derived from gateway base · or …/embeddings" />
+      </label>
+      <p class="settings-note">Vectors and Chroma data stay on this machine. Only embedding requests use the configured LiteLLM gateway.</p>
       <p class="settings-note" id="litellm-details"></p>
       <p class="settings-error hidden" id="litellm-settings-error"></p>
       <div class="settings-actions">
@@ -543,6 +575,9 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .field input:focus, .field select:focus { border-color: color-mix(in srgb, var(--accent) 62%, transparent); }
 .input-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .field-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.settings-subheading { margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--line); }
+.toggle-field { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: var(--vscode-foreground); font-size: 11px; }
+.toggle-field input { accent-color: var(--accent); }
 .local-setting { display: flex; align-items: end; justify-content: space-between; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .local-setting > div:first-child { min-width: 0; display: grid; gap: 3px; }
 .local-setting code { overflow: hidden; color: var(--vscode-foreground); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
@@ -618,10 +653,14 @@ const liteLlmCapabilities = document.getElementById('litellm-capabilities');
 const liteLlmAuthHeader = document.getElementById('litellm-auth-header');
 const liteLlmApiKey = document.getElementById('litellm-api-key');
 const liteLlmSettingsError = document.getElementById('litellm-settings-error');
+const semanticMemoryEnabled = document.getElementById('semantic-memory-enabled');
+const embeddingModel = document.getElementById('embedding-model');
+const embeddingsEndpoint = document.getElementById('embeddings-endpoint');
 const newThreadButton = document.getElementById('new-thread');
 const agentRuntime = document.getElementById('runtime');
 let busy = false;
 let liteLlmModelProfiles = {};
+let loadedModelCatalog = [];
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -691,8 +730,8 @@ function fillLiteLlmSettings(liteLlm) {
   liteLlmEndpoint.value = liteLlm.endpoint || '';
   liteLlmModelsEndpoint.value = liteLlm.modelsEndpoint || '';
   liteLlmModel.value = liteLlm.model || '';
-  liteLlmModelAliases.innerHTML = Object.keys(liteLlmModelProfiles)
-    .sort()
+  const availableModels = [...new Set([...loadedModelCatalog, ...Object.keys(liteLlmModelProfiles)])].sort();
+  liteLlmModelAliases.innerHTML = availableModels
     .map(model => '<option value="' + escapeHtml(model) + '"></option>')
     .join('');
   fillModelProfile(
@@ -702,6 +741,12 @@ function fillLiteLlmSettings(liteLlm) {
   );
   liteLlmAuthHeader.value = liteLlm.authHeader || 'authorization';
   liteLlmApiKey.value = '';
+  semanticMemoryEnabled.checked = liteLlm.semanticMemoryEnabled !== false;
+  fillEmbeddingModelOptions(
+    [...availableModels, liteLlm.embeddingModel || ''],
+    liteLlm.embeddingModel || ''
+  );
+  embeddingsEndpoint.value = liteLlm.embeddingsEndpoint || '';
   agentRuntime.value = liteLlm.runtime === 'deep' ? 'deep' : 'standard';
   document.getElementById('litellm-key-state').textContent = liteLlm.hasApiKey ? '· stored securely' : '· required';
   const details = [];
@@ -710,6 +755,14 @@ function fillLiteLlmSettings(liteLlm) {
   details.push('POST /chat/completions');
   document.getElementById('litellm-details').textContent = details.join(' · ');
   liteLlmSettingsError.classList.add('hidden');
+}
+
+function fillEmbeddingModelOptions(models, selected) {
+  const aliases = [...new Set((models || []).map(model => String(model).trim()).filter(Boolean))].sort();
+  embeddingModel.innerHTML = '<option value="">Disabled · use memory.md only</option>' + aliases
+    .map(model => '<option value="' + escapeHtml(model) + '">' + escapeHtml(model) + '</option>')
+    .join('');
+  embeddingModel.value = selected || '';
 }
 
 function fillModelProfile(model, fallback, recommendDefaults = false) {
@@ -780,7 +833,10 @@ function saveLiteLlmSettings() {
     preset: liteLlmModelPreset.value,
     reasoningEffort: liteLlmReasoningEffort.value,
     temperature: liteLlmTemperature.value,
-    topP: liteLlmTopP.value
+    topP: liteLlmTopP.value,
+    semanticMemoryEnabled: semanticMemoryEnabled.checked,
+    embeddingModel: embeddingModel.value,
+    embeddingsEndpoint: embeddingsEndpoint.value
   });
 }
 
@@ -854,10 +910,13 @@ window.addEventListener('message', ({ data }) => {
     case 'liteLlmSettings': fillLiteLlmSettings(data.liteLlm); break;
     case 'modelsLoaded':
       liteLlmModelsEndpoint.value = data.endpoint;
-      liteLlmModelAliases.innerHTML = [...new Set([...(data.models || []), ...Object.keys(liteLlmModelProfiles)])]
-        .sort()
+      loadedModelCatalog = data.models || [];
+      const catalogModels = [...new Set([...loadedModelCatalog, ...Object.keys(liteLlmModelProfiles)])]
+        .sort();
+      liteLlmModelAliases.innerHTML = catalogModels
         .map(model => '<option value="' + escapeHtml(model) + '"></option>')
         .join('');
+      fillEmbeddingModelOptions(catalogModels, embeddingModel.value);
       status.textContent = data.message;
       liteLlmModel.focus();
       break;
