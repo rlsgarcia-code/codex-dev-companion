@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2
+
+- Added one-time corporate CA PEM import into the extension's global local storage so every workspace in the same VS Code profile and environment can reuse it.
+- Automatically migrates a previously configured workspace PEM after its first successful local read.
+- Added setup controls to keep, replace, or remove the imported CA and clearer guidance for generic TLS connection errors.
+
 ## 0.9.1
 
 - Docked the live agent status and current plan directly above the composer so they remain visible at the active end of long conversations.

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { DevelopmentAgent } from "./agent";
+import { hasImportedGatewayCa } from "./certificate";
 import {
   LITELLM_API_KEY_SECRET,
   LITELLM_MODEL_CAPABILITIES,
@@ -173,12 +174,18 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     const modelProfiles = parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"));
     const profile = liteLlmModelProfile(modelProfiles, model);
     const resolvedPreset = resolveLiteLlmModelPreset(model, profile.preset);
+    const [hasApiKey, hasGlobalCa] = await Promise.all([
+      this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET).then(Boolean),
+      hasImportedGatewayCa(this.extensionContext)
+    ]);
     return {
       endpoint: configuration.get<string>("liteLlmEndpoint", ""),
       modelsEndpoint: configuration.get<string>("liteLlmModelsEndpoint", ""),
       model,
-      hasApiKey: Boolean(await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET)),
-      caCertificatePath: configuration.get<string>("gatewayCaCertificatePath", ""),
+      hasApiKey,
+      caCertificatePath: hasGlobalCa
+        ? "imported globally"
+        : configuration.get<string>("gatewayCaCertificatePath", ""),
       runtime: parseAgentRuntime(configuration.get("agentRuntime")),
       authHeader: parseLiteLlmAuthHeader(configuration.get("liteLlmAuthHeader")),
       modelProfiles,
@@ -444,7 +451,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       <p class="settings-note" id="litellm-details"></p>
       <p class="settings-error hidden" id="litellm-settings-error"></p>
       <div class="settings-actions">
-        <button class="secondary-action" id="litellm-advanced">Setup wizard / PEM</button>
+        <button class="secondary-action" id="litellm-advanced">Setup wizard / CA</button>
         <button class="primary-action" id="litellm-save">Save connection</button>
       </div>
     </section>

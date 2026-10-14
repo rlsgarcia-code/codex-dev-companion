@@ -16,6 +16,7 @@ import {
 import { createAgent, createMiddleware } from "langchain";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import * as vscode from "vscode";
+import { readImportedGatewayCa, storeImportedGatewayCa } from "./certificate";
 import { ContextCollector, renderContext } from "./context";
 import {
   chatCompletionsBaseUrl,
@@ -328,6 +329,9 @@ export class DevelopmentAgent implements vscode.Disposable {
   }
 
   private async certificateAuthorities(workspaceRoot: string): Promise<Array<string | Buffer> | undefined> {
+    const importedCertificate = await readImportedGatewayCa(this.extensionContext);
+    if (importedCertificate) return [...rootCertificates, importedCertificate];
+
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
     const configuredPath = configuration.get<string>("gatewayCaCertificatePath", "").trim();
     if (!configuredPath) return undefined;
@@ -340,7 +344,9 @@ export class DevelopmentAgent implements vscode.Disposable {
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new Error("Gateway CA certificate must resolve to a file inside the opened workspace.");
     }
-    return [...rootCertificates, await readFile(realCertificate)];
+    const certificate = await readFile(realCertificate);
+    await storeImportedGatewayCa(this.extensionContext, certificate);
+    return [...rootCertificates, certificate];
   }
 
   private systemPrompt(mode: RunMode, memory: string, runtime: AgentRuntime): string {
@@ -402,7 +408,10 @@ ${request}
       return `${message}\n\nCheck the LiteLLM base URL, model alias, key header, stored key, and optional CA in “Local Companion: Configure LiteLLM”.`;
     }
     if (/certificate|self[- ]signed|unable to verify|CERT_/i.test(message)) {
-      return `${message}\n\nSelect the corporate CA PEM using “Local Companion: Configure LiteLLM”.`;
+      return `${message}\n\nImport the corporate CA PEM once using “Local Companion: Configure LiteLLM”. It will be reused by every workspace in this VS Code profile and environment.`;
+    }
+    if (/connection error/i.test(message)) {
+      return `${message}\n\nIf this gateway uses a private corporate CA, import its PEM once using “Local Companion: Configure LiteLLM”.`;
     }
     if (/404|not found|method not allowed|405/i.test(message)) {
       return `${message}\n\nThe configured gateway must expose POST /chat/completions. You may enter either its base URL or the complete Chat Completions URL.`;

@@ -27,7 +27,7 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Cancelamento de turnos e de comandos em andamento.
 - Streaming de Chat Completions e function calling gerenciados por `ChatOpenAICompletions` e pelo runtime escolhido.
 - Chave virtual LiteLLM armazenada exclusivamente no Secret Storage do VS Code.
-- Bundle PEM corporativo opcional, mantido dentro do workspace.
+- Bundle PEM corporativo opcional, importado uma vez para o armazenamento global local da extensão.
 - Catálogo de modelos opcional carregado da URL informada pelo usuário com `Cache-Control: no-cache` e `api-key` usando a chave do Secret Storage.
 
 O modelo disponibilizado no LiteLLM precisa suportar **Chat Completions function calling**. A arquitetura segue a [documentação de Agents do LangChain](https://docs.langchain.com/oss/javascript/langchain/agents), a [documentação oficial de Deep Agents](https://docs.langchain.com/oss/javascript/deepagents/overview), a [memória de curto prazo](https://docs.langchain.com/oss/javascript/langchain/short-term-memory) e a referência de [`ChatOpenAI`](https://reference.langchain.com/javascript/langchain-openai/ChatOpenAI).
@@ -49,7 +49,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.9.1.vsix
+code --install-extension ./codex-dev-companion-0.9.2.vsix
 ```
 
 Se o comando `code` não estiver disponível:
@@ -57,7 +57,7 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.9.1.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.9.2.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 O VSIX não contém binário nativo e pode ser instalado em macOS, Windows ou Linux compatíveis com a versão do VS Code indicada.
@@ -82,11 +82,11 @@ O VSIX não contém binário nativo e pode ser instalado em macOS, Windows ou Li
 | Amostragem opcional | **Top P** | vazio para omitir, ou valor entre `0` e `1` |
 | Cabeçalho da chave | **Key Header** | `Authorization: Bearer`, `api-key` ou `Ocp-Apim-Subscription-Key` |
 | Chave | **Gateway Key** | chave individual/scoped ou subscription key |
-| CA opcional | **Gateway CA certificate** | `.pem` dentro do workspace |
+| CA opcional | **Gateway CA certificate** | importe o `.pem` uma vez para todos os workspaces |
 
 Se for informada uma URL base, a extensão acrescenta `/chat/completions`. Se a rota completa já for informada, ela será usada sem duplicação. Caminhos corporativos intermediários são aceitos; query parameters são recusados para evitar que segredos sejam gravados em settings.
 
-Também é possível trocar o runtime no seletor ao lado de **Execute / Plan only**. A escolha vale para o workspace atual. Clique em **LiteLLM** no rodapé para alterar URL, alias, capacidades, cabeçalho ou chave. Informe **Models URL** e clique em **Load** para preencher os aliases; essa consulta usa `GET`, `Cache-Control: no-cache` e `api-key: <chave>`. Reasoning, temperatura, Top P e preset são lembrados separadamente para cada alias exato. Se a chave ficar vazia, o valor já armazenado no Secret Storage é preservado. Use **Setup wizard / PEM** para selecionar ou trocar o certificado corporativo.
+Também é possível trocar o runtime no seletor ao lado de **Execute / Plan only**. A escolha vale para o workspace atual. Clique em **LiteLLM** no rodapé para alterar URL, alias, capacidades, cabeçalho ou chave. Informe **Models URL** e clique em **Load** para preencher os aliases; essa consulta usa `GET`, `Cache-Control: no-cache` e `api-key: <chave>`. Reasoning, temperatura, Top P e preset são lembrados separadamente para cada alias exato. Se a chave ficar vazia, o valor já armazenado no Secret Storage é preservado. Use **Setup wizard / CA** para importar, trocar ou remover o certificado corporativo. A cópia importada fica somente no armazenamento global local da extensão e é reutilizada por todas as janelas e workspaces do mesmo perfil e ambiente do VS Code.
 
 ### Compatibilidade por modelo
 
@@ -164,7 +164,7 @@ Para gerar e reinstalar o pacote:
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.9.1.vsix
+code --install-extension codex-dev-companion-0.9.2.vsix
 ```
 
 ## Memória
@@ -178,7 +178,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 - A chave LiteLLM fica exclusivamente no Secret Storage do VS Code.
 - A chave não é escrita em settings, logs, prompts, memória ou arquivos do projeto.
 - O endpoint precisa usar HTTPS.
-- O certificado PEM opcional precisa resolver para um arquivo dentro do workspace.
+- O certificado PEM opcional é validado e copiado para o armazenamento global local da extensão; o caminho original não é persistido.
 - Arquivos só podem ser lidos ou alterados dentro do workspace aberto.
 - Comandos são executados diretamente, sem shell, depois de confirmação do usuário.
 - Clientes de rede e operações de download, publicação e Git remoto são bloqueados nas ferramentas do agente.
@@ -196,7 +196,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 | `codexDevCompanion.liteLlmAuthHeader` | `authorization` | Cabeçalho que transporta a chave até o gateway. |
 | `codexDevCompanion.liteLlmModel` | vazio | Alias exato do modelo liberado. |
 | `codexDevCompanion.liteLlmModelProfiles` | `{}` | Preset e parâmetros opcionais de reasoning/sampling por alias; campos ausentes não são enviados. |
-| `codexDevCompanion.gatewayCaCertificatePath` | vazio | Caminho relativo para o bundle CA `.pem`. |
+| `codexDevCompanion.gatewayCaCertificatePath` | vazio | Configuração legada por workspace; certificados existentes são migrados automaticamente para o armazenamento global local. |
 | `codexDevCompanion.autoContext` | `true` | Inclui contexto atual do editor. |
 | `codexDevCompanion.maxContextCharacters` | `24000` | Limite do contexto coletado por turno. |
 | `codexDevCompanion.maxConversationCharacters` | `48000` | Limite do histórico recente enviado ao modelo. |

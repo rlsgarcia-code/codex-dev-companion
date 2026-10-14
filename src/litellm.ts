@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import * as path from "node:path";
 
 export const LITELLM_API_KEY_SECRET = "codexDevCompanion.liteLlmApiKey";
@@ -436,4 +437,17 @@ export function resolveWorkspaceCertificatePath(
     throw new Error("Gateway CA certificate must use the .pem extension.");
   }
   return certificate;
+}
+
+export function validateGatewayCaPem(contents: string | Uint8Array): void {
+  const text = typeof contents === "string" ? contents : new TextDecoder().decode(contents);
+  const certificates = text.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g);
+  if (!certificates?.length) {
+    throw new Error("Gateway CA PEM must contain at least one certificate.");
+  }
+  try {
+    certificates.forEach((certificate) => new X509Certificate(certificate));
+  } catch {
+    throw new Error("Gateway CA PEM contains an invalid certificate.");
+  }
 }

@@ -1,6 +1,10 @@
-import * as path from "node:path";
 import * as vscode from "vscode";
 import { DevelopmentAgent } from "./agent";
+import {
+  clearImportedGatewayCa,
+  hasImportedGatewayCa,
+  importGatewayCa
+} from "./certificate";
 import {
   LITELLM_API_KEY_SECRET,
   liteLlmModelProfile,
@@ -8,7 +12,6 @@ import {
   parseLiteLlmAuthHeader,
   parseLiteLlmModelProfiles,
   parseOptionalTemperature,
-  resolveWorkspaceCertificatePath,
   updateLiteLlmModelProfile
 } from "./litellm";
 import { ContextCollector } from "./context";
@@ -206,23 +209,32 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      let caCertificateRelativePath: string | undefined;
       const workspace = vscode.workspace.workspaceFolders?.[0];
       if (!workspace) {
-        void vscode.window.showErrorMessage("Open the workspace that will contain the optional gateway CA PEM file.");
+        void vscode.window.showErrorMessage("Open a workspace before configuring the local development agent.");
         return;
       }
+      const hasImportedCertificate = await hasImportedGatewayCa(context);
       const trustChoice = await vscode.window.showQuickPick(
         [
+          ...(hasImportedCertificate
+            ? [{
+                label: "Keep the imported corporate CA",
+                description: "Reuse the certificate already available to every workspace",
+                value: "existing" as const
+              }]
+            : []),
           {
             label: "Use the operating system trust store",
-            description: "Recommended when the LiteLLM gateway certificate is already trusted",
-            value: "system"
+            description: hasImportedCertificate
+              ? "Remove the imported CA because the gateway is already trusted"
+              : "Recommended when the LiteLLM gateway certificate is already trusted",
+            value: "system" as const
           },
           {
-            label: "Select a PEM from this workspace",
-            description: "Use a local corporate CA bundle for the gateway certificate",
-            value: "pem"
+            label: "Import a corporate CA PEM",
+            description: "Select it once and reuse it in every workspace in this VS Code environment",
+            value: "pem" as const
           }
         ],
         {
@@ -237,26 +249,26 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       if (trustChoice.value === "pem") {
         const selected = await vscode.window.showOpenDialog({
-          title: "Select the gateway CA PEM inside this workspace",
-          defaultUri: workspace.uri,
+          title: "Import the gateway CA PEM for all workspaces",
           canSelectFiles: true,
           canSelectFolders: false,
           canSelectMany: false,
           filters: { "PEM certificate bundle": ["pem"] },
-          openLabel: "Use this PEM"
+          openLabel: "Import PEM"
         });
         if (!selected?.[0]) {
           void vscode.window.showInformationMessage("LiteLLM setup cancelled while selecting the CA certificate. No changes were saved.");
           return;
         }
         try {
-          const certificate = resolveWorkspaceCertificatePath(workspace.uri.fsPath, selected[0].fsPath);
-          caCertificateRelativePath = path.relative(workspace.uri.fsPath, certificate);
+          await importGatewayCa(context, selected[0]);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           void vscode.window.showErrorMessage(message);
           return;
         }
+      } else if (trustChoice.value === "system") {
+        await clearImportedGatewayCa(context);
       }
 
       await Promise.all([
@@ -265,12 +277,12 @@ export function activate(context: vscode.ExtensionContext): void {
         configuration.update("liteLlmAuthHeader", authChoice.value, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModelProfiles", modelProfiles, vscode.ConfigurationTarget.Global),
         configuration.update("agentRuntime", runtimeChoice.value, vscode.ConfigurationTarget.Workspace),
-        configuration.update("gatewayCaCertificatePath", caCertificateRelativePath, vscode.ConfigurationTarget.Workspace),
+        configuration.update("gatewayCaCertificatePath", undefined, vscode.ConfigurationTarget.Workspace),
         context.secrets.store(LITELLM_API_KEY_SECRET, resolvedApiKey)
       ]);
       await agent.reloadProviderConfiguration();
       void vscode.window.showInformationMessage(
-        `${agentRuntimeLabel(runtimeChoice.value)} configured with “${model.trim()}” using ${authChoice.label}.`
+        `${agentRuntimeLabel(runtimeChoice.value)} configured with “${model.trim()}” using ${authChoice.label}. ${trustChoice.value === "system" ? "System trust enabled." : "Corporate CA available to all workspaces."}`
       );
     }),
     vscode.commands.registerCommand("codexDevCompanion.clearLiteLlmKey", async () => {

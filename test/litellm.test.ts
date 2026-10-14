@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { rootCertificates } from "node:tls";
 import {
   chatCompletionsBaseUrl,
   chatCompletionsModelOptions,
@@ -16,6 +17,7 @@ import {
   parseOptionalTemperature,
   resolveWorkspaceCertificatePath,
   updateLiteLlmModelProfile,
+  validateGatewayCaPem,
   validateLiteLlmConnection,
   validateLiteLlmModelProfile
 } from "../src/litellm";
@@ -163,5 +165,17 @@ test("keeps the gateway CA certificate inside the workspace", () => {
   assert.throws(
     () => resolveWorkspaceCertificatePath("/workspace/project", "certificate.crt"),
     /.pem extension/
+  );
+});
+
+test("accepts certificate bundles and rejects non-PEM CA content", () => {
+  assert.doesNotThrow(() => validateGatewayCaPem(rootCertificates[0] ?? ""));
+  assert.throws(
+    () => validateGatewayCaPem("not a certificate"),
+    /must contain at least one certificate/
+  );
+  assert.throws(
+    () => validateGatewayCaPem("-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----"),
+    /contains an invalid certificate/
   );
 });
