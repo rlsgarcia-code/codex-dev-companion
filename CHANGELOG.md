@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0
+
+- Added documented GPT and Claude compatibility presets with model-aware reasoning, tool-calling, and sampling validation.
+- Added optional `top_p` configuration and the `max` reasoning effort while retaining a custom gateway-defined profile.
+- Added an optional user-configured model catalog URL loaded with `Cache-Control: no-cache` and the Secret Storage key in `api-key`.
+- Added a model picker that applies and remembers distinct capabilities for each exact LiteLLM alias.
+
 ## 0.8.2
 
 - Added model-specific Chat Completions profiles for optional `reasoning_effort` and `temperature` values.

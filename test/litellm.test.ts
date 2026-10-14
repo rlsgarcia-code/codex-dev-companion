@@ -4,15 +4,20 @@ import {
   chatCompletionsBaseUrl,
   chatCompletionsModelOptions,
   chatCompletionsUrl,
+  detectLiteLlmModelPreset,
   liteLlmModelProfile,
+  liteLlmModelsRequestHeaders,
   normalizeLiteLlmEndpoint,
+  normalizeLiteLlmModelsEndpoint,
   openAiClientAuthentication,
   parseLiteLlmAuthHeader,
   parseLiteLlmModelProfiles,
+  parseLiteLlmModelsResponse,
   parseOptionalTemperature,
   resolveWorkspaceCertificatePath,
   updateLiteLlmModelProfile,
-  validateLiteLlmConnection
+  validateLiteLlmConnection,
+  validateLiteLlmModelProfile
 } from "../src/litellm";
 
 test("normalizes HTTPS LiteLLM base and full Chat Completions URLs", () => {
@@ -107,6 +112,43 @@ test("builds only the model parameters explicitly configured for an alias", () =
   assert.equal(parseOptionalTemperature("0"), 0);
   assert.throws(() => parseOptionalTemperature("not-a-number"), /finite number/);
   assert.deepEqual(parseLiteLlmModelProfiles({ broken: { temperature: "nope" } }), {});
+});
+
+test("selects documented GPT and Claude compatibility profiles", () => {
+  assert.equal(detectLiteLlmModelPreset("gpt-6-Luna"), "gpt-6-chat-tools");
+  assert.equal(detectLiteLlmModelPreset("gpt-6.1-sol"), "gpt-6-responses-tools");
+  assert.equal(detectLiteLlmModelPreset("gpt-5.6-terra"), "gpt-5.6");
+  assert.equal(detectLiteLlmModelPreset("gpt-4o"), "gpt-standard");
+  assert.equal(detectLiteLlmModelPreset("claude-opus-4-8"), "claude-modern");
+  assert.equal(detectLiteLlmModelPreset("claude-sonnet-4-6"), "claude-4.6");
+  assert.doesNotThrow(() => validateLiteLlmModelProfile("gpt-6-luna", { reasoningEffort: "none" }));
+  assert.throws(() => validateLiteLlmModelProfile("gpt-6-luna", {}), /requires reasoning_effort none/);
+  assert.throws(
+    () => validateLiteLlmModelProfile("claude-opus-4-8", { temperature: 0.5 }),
+    /does not accept Temperature or Top P/
+  );
+  assert.doesNotThrow(() => validateLiteLlmModelProfile("opaque-corporate-alias", {
+    preset: "custom",
+    reasoningEffort: "minimal",
+    temperature: 0.5
+  }));
+});
+
+test("normalizes and parses the authenticated model catalog", () => {
+  assert.equal(
+    normalizeLiteLlmModelsEndpoint("https://gateway.example.com/catalog/models/"),
+    "https://gateway.example.com/catalog/models"
+  );
+  assert.deepEqual(liteLlmModelsRequestHeaders(" secret "), {
+    Accept: "application/json",
+    "Cache-Control": "no-cache",
+    "api-key": "secret"
+  });
+  assert.deepEqual(parseLiteLlmModelsResponse({
+    data: [{ id: "gpt-6-luna" }, { model: "claude-opus-4-8" }, { id: "gpt-6-luna" }]
+  }), ["claude-opus-4-8", "gpt-6-luna"]);
+  assert.deepEqual(parseLiteLlmModelsResponse({ models: ["z-model", { name: "a-model" }] }), ["a-model", "z-model"]);
+  assert.throws(() => normalizeLiteLlmModelsEndpoint("http://gateway.example.com/models"), /use HTTPS/);
 });
 
 test("keeps the gateway CA certificate inside the workspace", () => {

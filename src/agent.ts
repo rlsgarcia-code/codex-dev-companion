@@ -22,10 +22,14 @@ import {
   chatCompletionsModelOptions,
   LITELLM_API_KEY_SECRET,
   liteLlmModelProfile,
+  liteLlmModelsRequestHeaders,
+  normalizeLiteLlmModelsEndpoint,
   openAiClientAuthentication,
+  parseLiteLlmModelsResponse,
   parseLiteLlmAuthHeader,
   resolveWorkspaceCertificatePath,
-  validateLiteLlmConnection
+  validateLiteLlmConnection,
+  validateLiteLlmModelProfile
 } from "./litellm";
 import { ProjectMemory } from "./memory";
 import { agentRuntimeLabel, parseAgentRuntime } from "./runtime";
@@ -60,6 +64,38 @@ export class DevelopmentAgent implements vscode.Disposable {
 
   public get running(): boolean {
     return this.isRunning;
+  }
+
+  public async listModels(endpointInput: string, transientApiKey = ""): Promise<string[]> {
+    const workspace = vscode.workspace.workspaceFolders?.[0];
+    if (!workspace) throw new Error("Open a workspace before loading the model catalog.");
+    const endpoint = normalizeLiteLlmModelsEndpoint(endpointInput);
+    const storedApiKey = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
+    const apiKey = transientApiKey.trim() || storedApiKey;
+    if (!apiKey) throw new Error("Save a gateway key before loading the model catalog.");
+
+    const certificateAuthorities = await this.certificateAuthorities(workspace.uri.fsPath);
+    const dispatcher = certificateAuthorities
+      ? new UndiciAgent({ connect: { ca: certificateAuthorities } })
+      : undefined;
+    try {
+      const response = await undiciFetch(endpoint, {
+        method: "GET",
+        headers: liteLlmModelsRequestHeaders(apiKey),
+        signal: AbortSignal.timeout(15_000),
+        ...(dispatcher ? { dispatcher } : {})
+      });
+      if (!response.ok) {
+        throw new Error(`Models endpoint returned HTTP ${response.status}.`);
+      }
+      const models = parseLiteLlmModelsResponse(await response.json());
+      if (!models.length) {
+        throw new Error("Models endpoint returned no model identifiers in data, models, or the root array.");
+      }
+      return models;
+    } finally {
+      await dispatcher?.close();
+    }
   }
 
   public async run(
@@ -117,15 +153,15 @@ export class DevelopmentAgent implements vscode.Disposable {
       if (certificateAuthorities) {
         dispatcher = new UndiciAgent({ connect: { ca: certificateAuthorities } });
       }
+      const modelProfile = liteLlmModelProfile(configuration.get("liteLlmModelProfiles"), connection.model);
+      validateLiteLlmModelProfile(connection.model, modelProfile);
       const model = new ChatOpenAICompletions({
         model: connection.model,
         apiKey: authentication.apiKey,
         streaming: true,
         streamUsage: true,
         maxRetries: 2,
-        ...chatCompletionsModelOptions(
-          liteLlmModelProfile(configuration.get("liteLlmModelProfiles"), connection.model)
-        ),
+        ...chatCompletionsModelOptions(modelProfile),
         configuration: {
           baseURL: chatCompletionsBaseUrl(connection),
           ...(authentication.defaultHeaders

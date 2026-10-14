@@ -1,11 +1,12 @@
 # Local Dev Companion
 
-Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente e conectados somente ao endpoint **Chat Completions** de um gateway LiteLLM.
+Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente e conectados somente a endpoints configurados pelo usuário no gateway LiteLLM.
 
-O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e previsível, e **Deep Agent** (`createDeepAgent`), preparado para tarefas longas com planejamento, compactação de contexto e subagentes locais. Modelo (`ChatOpenAICompletions`), ferramentas (`tool` + Zod), estado (`MemorySaver`), callbacks e middleware continuam sendo do ecossistema LangChain. Contexto, histórico, memória e ferramentas rodam na máquina do usuário. A única chamada externa feita pela extensão é:
+O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e previsível, e **Deep Agent** (`createDeepAgent`), preparado para tarefas longas com planejamento, compactação de contexto e subagentes locais. Modelo (`ChatOpenAICompletions`), ferramentas (`tool` + Zod), estado (`MemorySaver`), callbacks e middleware continuam sendo do ecossistema LangChain. Contexto, histórico, memória e ferramentas rodam na máquina do usuário. As únicas chamadas externas feitas pela extensão são:
 
 ```text
 POST <LITELLM_BASE_URL>/chat/completions
+GET  <MODELS_URL>  # opcional, somente quando o usuário clica em Load
 ```
 
 Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, ferramentas hospedadas, web search, MCP externo, LangSmith, telemetria ou verificação de atualização.
@@ -27,6 +28,7 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Streaming de Chat Completions e function calling gerenciados por `ChatOpenAICompletions` e pelo runtime escolhido.
 - Chave virtual LiteLLM armazenada exclusivamente no Secret Storage do VS Code.
 - Bundle PEM corporativo opcional, mantido dentro do workspace.
+- Catálogo de modelos opcional carregado da URL informada pelo usuário com `Cache-Control: no-cache` e `api-key` usando a chave do Secret Storage.
 
 O modelo disponibilizado no LiteLLM precisa suportar **Chat Completions function calling**. A arquitetura segue a [documentação de Agents do LangChain](https://docs.langchain.com/oss/javascript/langchain/agents), a [documentação oficial de Deep Agents](https://docs.langchain.com/oss/javascript/deepagents/overview), a [memória de curto prazo](https://docs.langchain.com/oss/javascript/langchain/short-term-memory) e a referência de [`ChatOpenAI`](https://reference.langchain.com/javascript/langchain-openai/ChatOpenAI).
 
@@ -47,7 +49,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.8.2.vsix
+code --install-extension ./codex-dev-companion-0.9.0.vsix
 ```
 
 Se o comando `code` não estiver disponível:
@@ -55,7 +57,7 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.8.2.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.9.0.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 O VSIX não contém binário nativo e pode ser instalado em macOS, Windows ou Linux compatíveis com a versão do VS Code indicada.
@@ -72,16 +74,36 @@ O VSIX não contém binário nativo e pode ser instalado em macOS, Windows ou Li
 | --- | --- | --- |
 | Runtime local | **Agent runtime** | `LangChain Agent` ou `Deep Agent` |
 | Base ou rota completa | **Gateway Base URL** | `https://gateway.empresa.com/v1` ou `https://gateway.empresa.com/ia/chat/completions` |
+| Catálogo opcional | **Models URL** | `https://gateway.empresa.com/ia/models` |
 | Alias liberado | **Model Alias** | `modelo-corporativo` |
-| Reasoning opcional | **Reasoning effort** | omitir ou `none`, `minimal`, `low`, `medium`, `high`, `xhigh` |
+| Compatibilidade | **Compatibility profile** | automático, família GPT/Claude ou customizado |
+| Reasoning opcional | **Reasoning effort** | omitir ou `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | Temperatura opcional | **Temperature** | vazio para omitir, ou um número aceito pelo modelo |
+| Amostragem opcional | **Top P** | vazio para omitir, ou valor entre `0` e `1` |
 | Cabeçalho da chave | **Key Header** | `Authorization: Bearer`, `api-key` ou `Ocp-Apim-Subscription-Key` |
 | Chave | **Gateway Key** | chave individual/scoped ou subscription key |
 | CA opcional | **Gateway CA certificate** | `.pem` dentro do workspace |
 
 Se for informada uma URL base, a extensão acrescenta `/chat/completions`. Se a rota completa já for informada, ela será usada sem duplicação. Caminhos corporativos intermediários são aceitos; query parameters são recusados para evitar que segredos sejam gravados em settings.
 
-Também é possível trocar o runtime no seletor ao lado de **Execute / Plan only**. A escolha vale para o workspace atual. Clique em **LiteLLM** no rodapé para alterar URL, alias, capacidades, cabeçalho ou chave. Reasoning e temperatura são lembrados separadamente para cada alias exato; ao trocar de alias, o formulário recupera seu perfil salvo. Se a chave ficar vazia, o valor já armazenado no Secret Storage é preservado. Use **Setup wizard / PEM** para selecionar ou trocar o certificado corporativo.
+Também é possível trocar o runtime no seletor ao lado de **Execute / Plan only**. A escolha vale para o workspace atual. Clique em **LiteLLM** no rodapé para alterar URL, alias, capacidades, cabeçalho ou chave. Informe **Models URL** e clique em **Load** para preencher os aliases; essa consulta usa `GET`, `Cache-Control: no-cache` e `api-key: <chave>`. Reasoning, temperatura, Top P e preset são lembrados separadamente para cada alias exato. Se a chave ficar vazia, o valor já armazenado no Secret Storage é preservado. Use **Setup wizard / PEM** para selecionar ou trocar o certificado corporativo.
+
+### Compatibilidade por modelo
+
+O preset **Auto-detect from alias** aplica a matriz abaixo. Para aliases corporativos opacos ou gateways com tradução própria, selecione **Custom / gateway-defined**.
+
+| Família | Function tools no Chat Completions | Reasoning exposto | Temperature / Top P |
+| --- | --- | --- | --- |
+| GPT-6 Sol / Luna | somente com `reasoning_effort: none` | `none`, `low`, `medium`, `high`, `xhigh`, `max` | opcionais somente com `none` |
+| GPT-6 Astra / GPT-6.1 Sol | incompatível neste agente: tools exigem Responses API | `low` a `max` | omitidos |
+| GPT-5.6 | perfil de tools usa `none` | `none`, `low`, `medium`, `high`, `xhigh`, `max` | opcionais somente com `none` |
+| GPT-5.2–5.5 | perfil conservador de Chat Completions | conforme modelo | somente com `none` |
+| GPT-4 / GPT-4o | suportado | não enviado | opcionais; escolha Temperature ou Top P |
+| Claude 4.7+ / 5 | suportado via LiteLLM | `low`, `medium`, `high`, `xhigh`, `max`, conforme modelo | omitidos |
+| Claude 4.6 | suportado via LiteLLM | `low`, `medium`, `high`, `max` | somente com reasoning omitido |
+| Claude 4.5 ou anterior | suportado via LiteLLM | traduzido para thinking quando disponível | somente com reasoning omitido |
+
+A OpenAI documenta que GPT-6 Sol/Luna aceitam function calling no Chat Completions apenas com `reasoning_effort: none`, e que sampling deve ser removido quando reasoning não é `none`: [OpenAI API deployment checklist](https://developers.openai.com/api/docs/guides/deployment-checklist). A Anthropic documenta os níveis de effort e informa que Claude 4.7+ rejeita `temperature`, `top_p` e `top_k` não padrão: [Claude effort](https://platform.claude.com/docs/en/build-with-claude/effort) e [Claude model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations). O LiteLLM fornece a interface OpenAI compatível e traduz os parâmetros para cada provider: [LiteLLM providers](https://docs.litellm.ai/docs/providers).
 
 ### Erro “missing subscription key”
 
@@ -97,7 +119,7 @@ A escolha muda somente o cabeçalho HTTPS enviado ao gateway configurado. A chav
 
 Algumas implantações usam reasoning por padrão, mas não aceitam reasoning junto de function tools no endpoint Chat Completions. Como o agente precisa das ferramentas locais e este projeto não usa Responses API, abra **LiteLLM** e selecione `none` em **Reasoning effort** para o alias afetado.
 
-Não há inferência por nome de modelo: `reasoning_effort` e `temperature` são omitidos por padrão. Se aparecer erro de temperatura incompatível, deixe **Temperature** em branco. Cada alias mantém seu próprio perfil porque gateways e deployments diferentes podem aceitar combinações diferentes.
+O formulário detecta a família pelo alias e limita as opções conhecidas, mas o preset pode ser alterado manualmente. Se aparecer erro de temperatura incompatível, deixe **Temperature** e **Top P** em branco ou use o preset customizado conforme o contrato real do gateway.
 
 ## Como o agente trabalha
 
@@ -142,7 +164,7 @@ Para gerar e reinstalar o pacote:
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.8.2.vsix
+code --install-extension codex-dev-companion-0.9.0.vsix
 ```
 
 ## Memória
@@ -170,9 +192,10 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 | --- | --- | --- |
 | `codexDevCompanion.agentRuntime` | `standard` | Escolhe `LangChain Agent` (`standard`) ou `Deep Agent` (`deep`) por workspace. |
 | `codexDevCompanion.liteLlmEndpoint` | vazio | Base HTTPS do LiteLLM ou URL completa de Chat Completions. |
+| `codexDevCompanion.liteLlmModelsEndpoint` | vazio | URL HTTPS opcional do catálogo consultado sob demanda com `api-key` e sem cache. |
 | `codexDevCompanion.liteLlmAuthHeader` | `authorization` | Cabeçalho que transporta a chave até o gateway. |
 | `codexDevCompanion.liteLlmModel` | vazio | Alias exato do modelo liberado. |
-| `codexDevCompanion.liteLlmModelProfiles` | `{}` | Parâmetros opcionais de reasoning e temperatura por alias; campos ausentes não são enviados. |
+| `codexDevCompanion.liteLlmModelProfiles` | `{}` | Preset e parâmetros opcionais de reasoning/sampling por alias; campos ausentes não são enviados. |
 | `codexDevCompanion.gatewayCaCertificatePath` | vazio | Caminho relativo para o bundle CA `.pem`. |
 | `codexDevCompanion.autoContext` | `true` | Inclui contexto atual do editor. |
 | `codexDevCompanion.maxContextCharacters` | `24000` | Limite do contexto coletado por turno. |
@@ -201,13 +224,14 @@ VS Code Secondary Sidebar
             │     ├── approved command execution
             │     └── plan/memory
             │
-            └── HTTPS ──► LiteLLM POST /v1/chat/completions
+            ├── HTTPS ──► LiteLLM POST /v1/chat/completions
+            └── HTTPS ──► catálogo GET /models (opcional e sob demanda)
 ```
 
 ## Limitações
 
 - A qualidade do planejamento e do uso de ferramentas depende do modelo disponibilizado pelo gateway.
-- Modelos sem function calling podem conversar, mas não conseguem inspecionar ou modificar o workspace autonomamente.
+- Modelos sem function calling não são compatíveis com o runtime do agente.
 - A extensão não executa um sandbox de sistema operacional. Por isso, comandos exigem confirmação explícita e recebem um ambiente mínimo.
 - O LangChain Agent mantém turnos recentes inteiros dentro do limite configurado. O Deep Agent pode compactar conversas antigas usando o mesmo modelo via LiteLLM.
 - Não há suporte a ferramentas hospedadas, web search, MCP remoto ou execução em nuvem.

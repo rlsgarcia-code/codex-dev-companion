@@ -3,7 +3,7 @@
 ## Product contract
 
 - This project is a VS Code extension whose entire agent runtime is built from LangChain primitives: `ChatOpenAICompletions`, `createAgent`, `tool`, Zod schemas, middleware, callbacks, and `MemorySaver`.
-- The agent loop, tools, state, memory, command execution, and file access must run locally. The only permitted external request path is the user-configured LiteLLM `POST <base>/chat/completions` endpoint.
+- The agent loop, tools, state, memory, command execution, and file access must run locally. Permitted external request paths are the user-configured LiteLLM `POST <base>/chat/completions` endpoint and an optional user-configured model-catalog `GET` URL invoked only from settings. The catalog request must use `Cache-Control: no-cache` and the Secret Storage key in `api-key`.
 - Do not add ChatGPT sign-in, OpenAI Platform endpoints, hosted tools, web search, external MCP servers, telemetry, or update checks.
 - Store the LiteLLM virtual key only in VS Code Secret Storage. Never write it to settings, logs, prompts, or repository files.
 - Keep file access and command execution inside the opened workspace by default.

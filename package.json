@@ -1,8 +1,8 @@
 {
   "name": "codex-dev-companion",
   "displayName": "Local Dev Companion",
-  "description": "A local LangChain development agent connected only to a user-configured LiteLLM Chat Completions endpoint.",
-  "version": "0.8.2",
+  "description": "A local LangChain development agent connected only to user-configured LiteLLM endpoints.",
+  "version": "0.9.0",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -127,6 +127,11 @@
           "default": "",
           "description": "Exact client-facing model alias configured by the LiteLLM gateway administrator."
         },
+        "codexDevCompanion.liteLlmModelsEndpoint": {
+          "type": "string",
+          "default": "",
+          "description": "Optional HTTPS model-catalog URL queried with Cache-Control: no-cache and the stored key in the api-key header."
+        },
         "codexDevCompanion.liteLlmModelProfiles": {
           "type": "object",
           "default": {},
@@ -141,11 +146,32 @@
                   "low",
                   "medium",
                   "high",
-                  "xhigh"
+                  "xhigh",
+                  "max"
+                ]
+              },
+              "preset": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "gpt-6-chat-tools",
+                  "gpt-6-responses-tools",
+                  "gpt-5.6",
+                  "gpt-5-reasoning",
+                  "gpt-standard",
+                  "claude-modern",
+                  "claude-4.6",
+                  "claude-legacy",
+                  "custom"
                 ]
               },
               "temperature": {
                 "type": "number"
+              },
+              "topP": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
               }
             },
             "additionalProperties": false

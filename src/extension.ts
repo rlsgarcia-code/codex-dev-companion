@@ -149,6 +149,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const modelProfiles = updateLiteLlmModelProfile(existingProfiles, model, {
+        ...existingProfile,
         reasoningEffort: reasoningChoice.value,
         temperature: parseOptionalTemperature(temperatureInput)
       });
