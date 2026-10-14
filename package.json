@@ -2,7 +2,7 @@
   "name": "codex-dev-companion",
   "displayName": "Local Dev Companion",
   "description": "A local LangChain development agent connected only to user-configured LiteLLM endpoints.",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -212,11 +212,6 @@
           "type": "string",
           "default": "",
           "description": "LiteLLM model alias used only for embeddings. Leave blank to use memory.md without semantic retrieval."
-        },
-        "codexDevCompanion.embeddingsEndpoint": {
-          "type": "string",
-          "default": "",
-          "description": "Optional HTTPS LiteLLM embeddings base or complete /embeddings URL. Blank derives it from the Chat Completions base URL."
         },
         "codexDevCompanion.semanticMemoryResults": {
           "type": "number",

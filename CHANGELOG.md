@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.2
+
+- Replaced the permanently compressed plan/status area with an expandable activity dock above the composer.
+- Keep the collapsed dock compact with only live activity, status, and workspace context visible.
+- Automatically expand the first plan update while respecting a manual collapse for subsequent updates in the same run.
+- Added keyboard focus, `aria-expanded`, and reduced-motion-compatible transitions to the plan toggle.
+- Reused the existing model-catalog request for both selectors, keeping aliases containing `embedd` only in the embedding list and excluding them from the chat list.
+- Removed the separate embeddings URL setting; embedding requests now always use the same LiteLLM base, key, headers, and corporate CA as Chat Completions.
+
 ## 0.10.1
 
 - Removed the native SQLite checkpoint dependency to keep installation portable across restricted and heterogeneous development environments.
@@ -10,7 +19,7 @@
 ## 0.10.0
 
 - Added optional LangChain Chroma vector-store retrieval for `.codex-agent/memory.md`, backed by a bundled local-only ChromaDB service with no Docker requirement.
-- Added an embedding-model selector populated by the same authenticated LiteLLM model catalog used by the chat model, plus an optional embeddings URL, while reusing the Secret Storage key, gateway header, and imported corporate CA.
+- Added an embedding-model selector populated by the same authenticated LiteLLM model catalog used by the chat model, while reusing the Secret Storage key, gateway header, and imported corporate CA.
 - Persist active LangGraph checkpoints with `MemorySaver` and keep a bounded local conversation projection for restoration.
 - Keep transient editor context out of persisted human messages and inject only semantically relevant durable memory when embeddings are configured.
 - Removed the Deep Agent recursion limit of 50 and enabled its native high-limit compaction/offload path with a composite state/workspace backend.

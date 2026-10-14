@@ -178,10 +178,7 @@ export class DevelopmentAgent implements vscode.Disposable {
             query: request,
             memoryText,
             embeddingModel,
-            embeddingsBaseUrl: embeddingsBaseUrl(
-              connection,
-              configuration.get<string>("embeddingsEndpoint", "")
-            ),
+            embeddingsBaseUrl: embeddingsBaseUrl(connection),
             apiKey: authentication.apiKey,
             defaultHeaders: authentication.defaultHeaders,
             fetch: dispatcher || authentication.stripAuthorization

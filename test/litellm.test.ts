@@ -10,7 +10,6 @@ import {
   liteLlmModelProfile,
   liteLlmModelsRequestHeaders,
   normalizeLiteLlmEndpoint,
-  normalizeLiteLlmEmbeddingsEndpoint,
   normalizeLiteLlmModelsEndpoint,
   openAiClientAuthentication,
   parseLiteLlmAuthHeader,
@@ -155,23 +154,15 @@ test("normalizes and parses the authenticated model catalog", () => {
   assert.throws(() => normalizeLiteLlmModelsEndpoint("http://gateway.example.com/models"), /use HTTPS/);
 });
 
-test("derives or accepts the LiteLLM embeddings base URL", () => {
+test("derives the embeddings route from the same LiteLLM base URL", () => {
   assert.equal(
     embeddingsBaseUrl({ endpoint: "https://gateway.example.com/proxy/chat/completions" }),
     "https://gateway.example.com/proxy"
   );
   assert.equal(
-    embeddingsBaseUrl(
-      { endpoint: "https://gateway.example.com/chat" },
-      "https://embeddings.example.com/litellm/embeddings/"
-    ),
-    "https://embeddings.example.com/litellm"
+    embeddingsBaseUrl({ endpoint: "https://gateway.example.com/litellm" }),
+    "https://gateway.example.com/litellm"
   );
-  assert.equal(
-    normalizeLiteLlmEmbeddingsEndpoint("https://gateway.example.com/v1/embeddings/"),
-    "https://gateway.example.com/v1/embeddings"
-  );
-  assert.throws(() => normalizeLiteLlmEmbeddingsEndpoint("http://gateway.example.com/embeddings"), /use HTTPS/);
 });
 
 test("keeps the gateway CA certificate inside the workspace", () => {

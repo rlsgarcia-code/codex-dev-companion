@@ -155,23 +155,6 @@ export function normalizeLiteLlmModelsEndpoint(value: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
-export function normalizeLiteLlmEmbeddingsEndpoint(value: string): string {
-  const raw = value.trim();
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("Embeddings endpoint must be a valid HTTPS URL.");
-  }
-  if (url.protocol !== "https:") throw new Error("Embeddings endpoint must use HTTPS.");
-  if (url.username || url.password) throw new Error("Embeddings endpoint must not contain credentials.");
-  if (url.search) throw new Error("Embeddings endpoint must not contain query parameters or secrets.");
-  url.pathname = url.pathname.replace(/\/+$/, "");
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/$/, "");
-}
-
 export function parseLiteLlmModelsResponse(value: unknown): string[] {
   const root = value as { data?: unknown; models?: unknown } | unknown[] | undefined;
   const candidates = Array.isArray(root)
@@ -440,14 +423,8 @@ export function chatCompletionsBaseUrl(connection: Pick<LiteLlmConnection, "endp
   return url.toString().replace(/\/$/, "");
 }
 
-export function embeddingsBaseUrl(
-  connection: Pick<LiteLlmConnection, "endpoint">,
-  configuredEndpoint = ""
-): string {
-  const source = configuredEndpoint.trim()
-    ? normalizeLiteLlmEmbeddingsEndpoint(configuredEndpoint)
-    : connection.endpoint;
-  const url = new URL(source.replace(/\/$/, ""));
+export function embeddingsBaseUrl(connection: Pick<LiteLlmConnection, "endpoint">): string {
+  const url = new URL(connection.endpoint.replace(/\/$/, ""));
   url.pathname = url.pathname
     .replace(/\/chat\/completions$/i, "")
     .replace(/\/embeddings$/i, "");

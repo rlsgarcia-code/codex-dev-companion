@@ -5,7 +5,6 @@ import {
   LITELLM_API_KEY_SECRET,
   LITELLM_MODEL_CAPABILITIES,
   liteLlmModelProfile,
-  normalizeLiteLlmEmbeddingsEndpoint,
   normalizeLiteLlmEndpoint,
   normalizeLiteLlmModelsEndpoint,
   parseLiteLlmAuthHeader,
@@ -57,7 +56,6 @@ type IncomingMessage =
       topP: string;
       semanticMemoryEnabled: boolean;
       embeddingModel: string;
-      embeddingsEndpoint: string;
     };
 
 type LiteLlmSettingsSnapshot = {
@@ -77,7 +75,6 @@ type LiteLlmSettingsSnapshot = {
   topP?: number;
   semanticMemoryEnabled: boolean;
   embeddingModel: string;
-  embeddingsEndpoint: string;
 };
 
 export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -203,8 +200,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       temperature: profile.temperature,
       topP: profile.topP,
       semanticMemoryEnabled: configuration.get<boolean>("semanticMemoryEnabled", true),
-      embeddingModel: configuration.get<string>("embeddingModel", ""),
-      embeddingsEndpoint: configuration.get<string>("embeddingsEndpoint", "")
+      embeddingModel: configuration.get<string>("embeddingModel", "")
     };
   }
 
@@ -257,9 +253,6 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       const modelsEndpoint = message.modelsEndpoint.trim()
         ? normalizeLiteLlmModelsEndpoint(message.modelsEndpoint)
         : "";
-      const embeddingsEndpoint = message.embeddingsEndpoint.trim()
-        ? normalizeLiteLlmEmbeddingsEndpoint(message.embeddingsEndpoint)
-        : "";
       const preset = parseLiteLlmModelPreset(message.preset);
       const reasoningEffort = message.reasoningEffort === "omit"
         ? undefined
@@ -283,7 +276,6 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         configuration.update("liteLlmModelProfiles", modelProfiles, vscode.ConfigurationTarget.Global),
         configuration.update("semanticMemoryEnabled", message.semanticMemoryEnabled, vscode.ConfigurationTarget.Global),
         configuration.update("embeddingModel", message.embeddingModel.trim(), vscode.ConfigurationTarget.Global),
-        configuration.update("embeddingsEndpoint", embeddingsEndpoint, vscode.ConfigurationTarget.Global),
         ...(message.apiKey.trim()
           ? [this.extensionContext.secrets.store(LITELLM_API_KEY_SECRET, message.apiKey.trim())]
           : [])
@@ -475,11 +467,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           <option value="">Disabled · use memory.md only</option>
         </select>
       </label>
-      <label class="field">
-        <span>Embeddings URL <small>optional</small></span>
-        <input id="embeddings-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="Derived from gateway base · or …/embeddings" />
-      </label>
-      <p class="settings-note">Vectors and Chroma data stay on this machine. Only embedding requests use the configured LiteLLM gateway.</p>
+      <p class="settings-note">The same model catalog and LiteLLM base are used for chat and embeddings. Vectors and Chroma data stay on this machine.</p>
       <p class="settings-note" id="litellm-details"></p>
       <p class="settings-error hidden" id="litellm-settings-error"></p>
       <div class="settings-actions">
@@ -501,15 +489,17 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       </div>
     </section>
 
-    <section class="plan hidden" id="plan">
-      <div class="section-label">CURRENT PLAN</div>
-      <ol id="plan-items"></ol>
-    </section>
-
-    <section class="presence" aria-live="polite">
-      <span class="signal" id="signal"></span>
-      <span id="status">Ready</span>
-      <span class="workspace" id="workspace"></span>
+    <section class="activity-dock" id="activity-dock">
+      <button class="presence" id="activity-toggle" type="button" aria-expanded="false" aria-controls="plan-panel" title="Expand current plan">
+        <span class="signal" id="signal"></span>
+        <span id="status" aria-live="polite">Ready</span>
+        <span class="workspace" id="workspace"></span>
+        <span class="activity-chevron" aria-hidden="true">⌃</span>
+      </button>
+      <div class="plan" id="plan-panel">
+        <div class="section-label">CURRENT PLAN</div>
+        <ol id="plan-items"></ol>
+      </div>
     </section>
 
     <footer class="composer-wrap">
@@ -547,18 +537,26 @@ const styles = String.raw`
 body { height: 100vh; margin: 0; overflow: hidden; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font: 13px/1.5 var(--vscode-font-family); }
 button, textarea, select { font: inherit; }
 button { color: inherit; }
-.shell { height: 100vh; min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; }
+.shell { height: 100vh; min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
 .topbar { display: flex; align-items: flex-start; justify-content: space-between; padding: 20px 18px 13px; border-bottom: 1px solid var(--line); }
 .eyebrow, .section-label { color: var(--muted); font: 600 9px/1.2 var(--vscode-editor-font-family); letter-spacing: .16em; }
 h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; }
 .icon-button { border: 0; background: transparent; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 18px; opacity: .7; transition: opacity .15s, background .15s; }
 .icon-button:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .icon-button:disabled { cursor: default; opacity: .3; }
-.presence { display: flex; align-items: center; gap: 8px; padding: 8px 18px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); }
+.activity-dock { min-height: 34px; border-top: 1px solid var(--line); background: var(--vscode-sideBar-background); }
+.presence { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 33px; padding: 7px 18px; border: 0; color: var(--muted); background: transparent; text-align: left; font-size: 11px; }
+.activity-dock.has-plan .presence { cursor: pointer; }
+.activity-dock.has-plan .presence:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.presence:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -2px; }
 .signal { width: 7px; height: 7px; border-radius: 50%; background: #6ddc72; box-shadow: 0 0 0 3px color-mix(in srgb, #6ddc72 16%, transparent); }
 .signal.busy { background: var(--accent); animation: pulse 1.2s infinite; }
-.workspace { margin-left: auto; max-width: 45%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.plan { max-height: 32vh; overflow-y: auto; padding: 11px 18px 9px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 90%, var(--accent)); animation: reveal .2s ease-out; }
+.workspace { margin-left: auto; max-width: 38%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.activity-chevron { width: 12px; opacity: 0; transform: rotate(0); transition: transform .16s, opacity .16s; }
+.activity-dock.has-plan .activity-chevron { opacity: .7; }
+.activity-dock.expanded .activity-chevron { transform: rotate(180deg); }
+.plan { max-height: 0; overflow: hidden; padding: 0 18px; opacity: 0; background: color-mix(in srgb, var(--vscode-sideBar-background) 90%, var(--accent)); transition: max-height .2s ease, padding .2s ease, opacity .14s ease; }
+.activity-dock.expanded .plan { max-height: min(38vh, 360px); overflow-y: auto; padding: 11px 18px 12px; opacity: 1; border-top: 1px solid var(--line); }
 .plan ol { list-style: none; margin: 9px 0 0; padding: 0; display: grid; gap: 7px; }
 .plan li { position: relative; padding-left: 18px; color: var(--muted); font-size: 11px; }
 .plan li::before { content: ''; position: absolute; left: 0; top: .45em; width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
@@ -638,7 +636,8 @@ const send = document.getElementById('send');
 const cancel = document.getElementById('cancel');
 const status = document.getElementById('status');
 const signal = document.getElementById('signal');
-const plan = document.getElementById('plan');
+const activityDock = document.getElementById('activity-dock');
+const activityToggle = document.getElementById('activity-toggle');
 const planItems = document.getElementById('plan-items');
 const liteLlmSettings = document.getElementById('litellm-settings');
 const liteLlmEndpoint = document.getElementById('litellm-endpoint');
@@ -655,12 +654,12 @@ const liteLlmApiKey = document.getElementById('litellm-api-key');
 const liteLlmSettingsError = document.getElementById('litellm-settings-error');
 const semanticMemoryEnabled = document.getElementById('semantic-memory-enabled');
 const embeddingModel = document.getElementById('embedding-model');
-const embeddingsEndpoint = document.getElementById('embeddings-endpoint');
 const newThreadButton = document.getElementById('new-thread');
 const agentRuntime = document.getElementById('runtime');
 let busy = false;
 let liteLlmModelProfiles = {};
 let loadedModelCatalog = [];
+let planManuallyCollapsed = false;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -716,11 +715,27 @@ function setBusy(value) {
   if (value) scrollConversationToBottom();
 }
 
+function setActivityExpanded(expanded) {
+  const canExpand = activityDock.classList.contains('has-plan');
+  const next = Boolean(expanded && canExpand);
+  activityDock.classList.toggle('expanded', next);
+  activityToggle.setAttribute('aria-expanded', String(next));
+  activityToggle.title = canExpand
+    ? (next ? 'Collapse current plan' : 'Expand current plan')
+    : 'Agent activity';
+}
+
+function clearCurrentPlan() {
+  planItems.innerHTML = '';
+  activityDock.classList.remove('has-plan');
+  planManuallyCollapsed = false;
+  setActivityExpanded(false);
+}
+
 function submit() {
   const text = prompt.value.trim();
   if (!text || busy) return;
-  plan.classList.add('hidden');
-  planItems.innerHTML = '';
+  clearCurrentPlan();
   vscode.postMessage({ type: 'send', text, mode: document.getElementById('mode').value });
   prompt.value = '';
 }
@@ -730,8 +745,9 @@ function fillLiteLlmSettings(liteLlm) {
   liteLlmEndpoint.value = liteLlm.endpoint || '';
   liteLlmModelsEndpoint.value = liteLlm.modelsEndpoint || '';
   liteLlmModel.value = liteLlm.model || '';
-  const availableModels = [...new Set([...loadedModelCatalog, ...Object.keys(liteLlmModelProfiles)])].sort();
-  liteLlmModelAliases.innerHTML = availableModels
+  const knownModels = [...new Set([...loadedModelCatalog, ...Object.keys(liteLlmModelProfiles)])].sort();
+  const chatModels = knownModels.filter(model => !isEmbeddingModel(model));
+  liteLlmModelAliases.innerHTML = chatModels
     .map(model => '<option value="' + escapeHtml(model) + '"></option>')
     .join('');
   fillModelProfile(
@@ -743,10 +759,9 @@ function fillLiteLlmSettings(liteLlm) {
   liteLlmApiKey.value = '';
   semanticMemoryEnabled.checked = liteLlm.semanticMemoryEnabled !== false;
   fillEmbeddingModelOptions(
-    [...availableModels, liteLlm.embeddingModel || ''],
+    knownModels.filter(isEmbeddingModel),
     liteLlm.embeddingModel || ''
   );
-  embeddingsEndpoint.value = liteLlm.embeddingsEndpoint || '';
   agentRuntime.value = liteLlm.runtime === 'deep' ? 'deep' : 'standard';
   document.getElementById('litellm-key-state').textContent = liteLlm.hasApiKey ? '· stored securely' : '· required';
   const details = [];
@@ -757,8 +772,15 @@ function fillLiteLlmSettings(liteLlm) {
   liteLlmSettingsError.classList.add('hidden');
 }
 
+function isEmbeddingModel(model) {
+  return String(model).toLowerCase().includes('embedd');
+}
+
 function fillEmbeddingModelOptions(models, selected) {
-  const aliases = [...new Set((models || []).map(model => String(model).trim()).filter(Boolean))].sort();
+  const aliases = [...new Set([...(models || []), selected]
+    .map(model => String(model).trim())
+    .filter(model => model && (isEmbeddingModel(model) || model === selected)))]
+    .sort();
   embeddingModel.innerHTML = '<option value="">Disabled · use memory.md only</option>' + aliases
     .map(model => '<option value="' + escapeHtml(model) + '">' + escapeHtml(model) + '</option>')
     .join('');
@@ -835,8 +857,7 @@ function saveLiteLlmSettings() {
     temperature: liteLlmTemperature.value,
     topP: liteLlmTopP.value,
     semanticMemoryEnabled: semanticMemoryEnabled.checked,
-    embeddingModel: embeddingModel.value,
-    embeddingsEndpoint: embeddingsEndpoint.value
+    embeddingModel: embeddingModel.value
   });
 }
 
@@ -849,8 +870,7 @@ function wireStarterButtons() {
 
 function resetConversation() {
   timeline.innerHTML = welcomeMarkup;
-  plan.classList.add('hidden');
-  planItems.innerHTML = '';
+  clearCurrentPlan();
   prompt.value = '';
   newThreadButton.disabled = false;
   setBusy(false);
@@ -870,6 +890,12 @@ document.getElementById('memory').addEventListener('click', () => vscode.postMes
 document.getElementById('litellm').addEventListener('click', () => liteLlmSettings.classList.contains('hidden') ? openLiteLlmSettings() : liteLlmSettings.classList.add('hidden'));
 document.getElementById('litellm-close').addEventListener('click', () => liteLlmSettings.classList.add('hidden'));
 document.getElementById('litellm-save').addEventListener('click', saveLiteLlmSettings);
+activityToggle.addEventListener('click', () => {
+  if (!activityDock.classList.contains('has-plan')) return;
+  const expand = !activityDock.classList.contains('expanded');
+  planManuallyCollapsed = !expand;
+  setActivityExpanded(expand);
+});
 document.getElementById('litellm-advanced').addEventListener('click', () => vscode.postMessage({ type: 'configureLiteLlm' }));
 document.getElementById('litellm-load-models').addEventListener('click', () => {
   liteLlmSettingsError.classList.add('hidden');
@@ -913,11 +939,13 @@ window.addEventListener('message', ({ data }) => {
       loadedModelCatalog = data.models || [];
       const catalogModels = [...new Set([...loadedModelCatalog, ...Object.keys(liteLlmModelProfiles)])]
         .sort();
-      liteLlmModelAliases.innerHTML = catalogModels
+      const chatModels = catalogModels.filter(model => !isEmbeddingModel(model));
+      const embeddingModels = catalogModels.filter(isEmbeddingModel);
+      liteLlmModelAliases.innerHTML = chatModels
         .map(model => '<option value="' + escapeHtml(model) + '"></option>')
         .join('');
-      fillEmbeddingModelOptions(catalogModels, embeddingModel.value);
-      status.textContent = data.message;
+      fillEmbeddingModelOptions(embeddingModels, embeddingModel.value);
+      status.textContent = chatModels.length + ' chat · ' + embeddingModels.length + ' embedding models loaded';
       liteLlmModel.focus();
       break;
     case 'modelsLoadError':
@@ -951,9 +979,10 @@ window.addEventListener('message', ({ data }) => {
     case 'busy': setBusy(data.value); break;
     case 'status': status.textContent = data.label; break;
     case 'plan':
-      plan.classList.remove('hidden');
+      const firstPlanUpdate = !activityDock.classList.contains('has-plan');
+      activityDock.classList.add('has-plan');
       planItems.innerHTML = data.items.map(item => '<li class="' + (item.completed ? 'done' : '') + '">' + escapeHtml(item.text) + '</li>').join('');
-      scrollConversationToBottom();
+      if (firstPlanUpdate && !planManuallyCollapsed) setActivityExpanded(true);
       break;
     case 'activity': appendActivity(data.kind, data.title, data.detail); break;
     case 'usage': status.textContent = 'Ready · ' + data.input + ' in / ' + data.output + ' out'; break;

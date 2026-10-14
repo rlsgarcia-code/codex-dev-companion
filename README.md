@@ -50,7 +50,7 @@ cd codex-dev-companion
 npm ci
 npm test
 npm run package
-code --install-extension ./codex-dev-companion-0.10.1.vsix
+code --install-extension ./codex-dev-companion-0.10.2.vsix
 ```
 
 Se o comando `code` não estiver disponível:
@@ -58,7 +58,7 @@ Se o comando `code` não estiver disponível:
 1. Abra **Extensions** no VS Code.
 2. Clique no menu `…` do painel.
 3. Escolha **Install from VSIX…**.
-4. Selecione `codex-dev-companion-0.10.1.vsix` na pasta clonada.
+4. Selecione `codex-dev-companion-0.10.2.vsix` na pasta clonada.
 5. Reinicie o VS Code quando solicitado.
 
 O VSIX contém o binário local do ChromaDB para a plataforma em que foi gerado. Gere o pacote no mesmo sistema/arquitetura em que ele será instalado (macOS arm64/x64, Linux arm64/x64 ou Windows x64). Não é necessário Docker nem instalar um servidor Chroma separadamente. Os binários necessários são fornecidos por pacotes npm específicos da plataforma e o projeto desabilita scripts de lifecycle durante a instalação de dependências.
@@ -85,13 +85,12 @@ O VSIX contém o binário local do ChromaDB para a plataforma em que foi gerado.
 | Chave | **Gateway Key** | chave individual/scoped ou subscription key |
 | CA opcional | **Gateway CA certificate** | importe o `.pem` uma vez para todos os workspaces |
 | Memória semântica | **Embedding Model Alias** | alias LiteLLM de embeddings; deixe vazio para desativar vetores |
-| Rota de embeddings | **Embeddings URL** | opcional; se vazia, é derivada da base do chat |
 
 Se for informada uma URL base, a extensão acrescenta `/chat/completions`. Se a rota completa já for informada, ela será usada sem duplicação. Caminhos corporativos intermediários são aceitos; query parameters são recusados para evitar que segredos sejam gravados em settings.
 
 Também é possível trocar o runtime no seletor ao lado de **Execute / Plan only**. A escolha vale para o workspace atual. Clique em **LiteLLM** no rodapé para alterar URL, alias, capacidades, cabeçalho ou chave. Informe **Models URL** e clique em **Load** para preencher os aliases; essa consulta usa `GET`, `Cache-Control: no-cache` e `api-key: <chave>`. Reasoning, temperatura, Top P e preset são lembrados separadamente para cada alias exato. Se a chave ficar vazia, o valor já armazenado no Secret Storage é preservado. Use **Setup wizard / CA** para importar, trocar ou remover o certificado corporativo. A cópia importada fica somente no armazenamento global local da extensão e é reutilizada por todas as janelas e workspaces do mesmo perfil e ambiente do VS Code.
 
-Para ativar recuperação semântica, abra **LiteLLM**, informe **Models URL**, clique em **Load** e selecione um alias em **Embedding Model**. O mesmo catálogo preenche tanto o modelo de chat quanto o modelo de embeddings. A extensão inicia o ChromaDB empacotado em `127.0.0.1`, salva os vetores no armazenamento privado local do VS Code e indexa somente entradas de `.codex-agent/memory.md`. O arquivo Markdown continua sendo a fonte de verdade legível e versionável. A mesma chave, cabeçalho e CA do gateway são usados no `POST /embeddings`; nenhum dado é enviado ao Chroma Cloud.
+Para ativar recuperação semântica, abra **LiteLLM**, informe **Models URL**, clique em **Load** e selecione um alias em **Embedding Model**. Uma única consulta alimenta os dois seletores: aliases que contêm `embedd` (sem diferenciar maiúsculas de minúsculas) aparecem somente na lista de embeddings, enquanto os demais aparecem somente na lista de chat. A extensão deriva `POST /embeddings` da mesma base LiteLLM usada por Chat Completions, inicia o ChromaDB empacotado em `127.0.0.1`, salva os vetores no armazenamento privado local do VS Code e indexa somente entradas de `.codex-agent/memory.md`. O arquivo Markdown continua sendo a fonte de verdade legível e versionável. A mesma chave, cabeçalho e CA do gateway são reutilizados; nenhum dado é enviado ao Chroma Cloud.
 
 ### Compatibilidade por modelo
 
@@ -169,7 +168,7 @@ Para gerar e reinstalar o pacote:
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.10.1.vsix
+code --install-extension codex-dev-companion-0.10.2.vsix
 ```
 
 ## Memória
@@ -208,7 +207,6 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 | `codexDevCompanion.maxConversationCharacters` | `48000` | Limite do histórico recente enviado ao modelo. |
 | `codexDevCompanion.semanticMemoryEnabled` | `true` | Habilita recuperação semântica local quando há alias de embeddings. |
 | `codexDevCompanion.embeddingModel` | vazio | Alias LiteLLM usado em `POST /embeddings`; vazio mantém somente memória textual. |
-| `codexDevCompanion.embeddingsEndpoint` | vazio | Base/rota de embeddings opcional; por padrão deriva da base do chat. |
 | `codexDevCompanion.semanticMemoryResults` | `5` | Número máximo de chunks relevantes recuperados por turno. |
 | `codexDevCompanion.standardRecursionLimit` | `200` | Limite LangGraph do runtime padrão; o Deep Agent usa o limite nativo alto. |
 
