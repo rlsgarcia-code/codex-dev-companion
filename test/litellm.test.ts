@@ -4,6 +4,8 @@ import {
   chatCompletionsBaseUrl,
   chatCompletionsUrl,
   normalizeLiteLlmEndpoint,
+  openAiClientAuthentication,
+  parseLiteLlmAuthHeader,
   resolveWorkspaceCertificatePath,
   validateLiteLlmConnection
 } from "../src/litellm";
@@ -32,12 +34,14 @@ test("validates the Chat Completions connection and constructs its route", () =>
   const connection = validateLiteLlmConnection({
     endpoint: "https://gateway.example.com/v1/",
     model: " company-coding-model ",
-    apiKey: " secret "
+    apiKey: " secret ",
+    authHeader: "api-key"
   });
   assert.deepEqual(connection, {
     endpoint: "https://gateway.example.com/v1",
     model: "company-coding-model",
-    apiKey: "secret"
+    apiKey: "secret",
+    authHeader: "api-key"
   });
   assert.equal(chatCompletionsUrl(connection), "https://gateway.example.com/v1/chat/completions");
   assert.equal(chatCompletionsBaseUrl(connection), "https://gateway.example.com/v1");
@@ -55,8 +59,26 @@ test("validates the Chat Completions connection and constructs its route", () =>
   );
   assert.throws(
     () => validateLiteLlmConnection({ endpoint: "https://gateway.example.com/v1", model: "model", apiKey: "" }),
-    /virtual key is required/
+    /Gateway API or subscription key is required/
   );
+});
+
+test("maps the stored key to the selected gateway authentication header", () => {
+  assert.deepEqual(openAiClientAuthentication({ apiKey: "secret", authHeader: "authorization" }), {
+    apiKey: "secret",
+    stripAuthorization: false
+  });
+  assert.deepEqual(openAiClientAuthentication({ apiKey: "secret", authHeader: "api-key" }), {
+    apiKey: "local-gateway-header",
+    defaultHeaders: { "api-key": "secret" },
+    stripAuthorization: true
+  });
+  assert.deepEqual(openAiClientAuthentication({ apiKey: "secret", authHeader: "ocp-apim-subscription-key" }), {
+    apiKey: "local-gateway-header",
+    defaultHeaders: { "Ocp-Apim-Subscription-Key": "secret" },
+    stripAuthorization: true
+  });
+  assert.equal(parseLiteLlmAuthHeader("unknown"), "authorization");
 });
 
 test("keeps the gateway CA certificate inside the workspace", () => {

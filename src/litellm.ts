@@ -2,11 +2,16 @@ import * as path from "node:path";
 
 export const LITELLM_API_KEY_SECRET = "codexDevCompanion.liteLlmApiKey";
 
+export type LiteLlmAuthHeader = "authorization" | "api-key" | "ocp-apim-subscription-key";
+
 export type LiteLlmConnection = {
   endpoint: string;
   model: string;
   apiKey: string;
+  authHeader?: LiteLlmAuthHeader;
 };
+
+export type ValidatedLiteLlmConnection = Required<LiteLlmConnection>;
 
 export function normalizeLiteLlmEndpoint(value: string): string {
   const raw = value.trim();
@@ -35,20 +40,48 @@ export function normalizeLiteLlmEndpoint(value: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
-export function validateLiteLlmConnection(connection: LiteLlmConnection): LiteLlmConnection {
+export function parseLiteLlmAuthHeader(value: unknown): LiteLlmAuthHeader {
+  if (value === "api-key" || value === "ocp-apim-subscription-key") return value;
+  return "authorization";
+}
+
+export function validateLiteLlmConnection(connection: LiteLlmConnection): ValidatedLiteLlmConnection {
   const model = connection.model.trim();
   const apiKey = connection.apiKey.trim();
   if (!model) {
     throw new Error("LiteLLM model alias is required.");
   }
   if (!apiKey) {
-    throw new Error("LiteLLM virtual key is required.");
+    throw new Error("Gateway API or subscription key is required.");
   }
   return {
     endpoint: normalizeLiteLlmEndpoint(connection.endpoint),
     model,
-    apiKey
+    apiKey,
+    authHeader: parseLiteLlmAuthHeader(connection.authHeader)
   };
+}
+
+export function openAiClientAuthentication(
+  connection: Pick<ValidatedLiteLlmConnection, "apiKey" | "authHeader">
+): { apiKey: string; defaultHeaders?: Record<string, string | null>; stripAuthorization: boolean } {
+  if (connection.authHeader === "api-key") {
+    return {
+      apiKey: "local-gateway-header",
+      defaultHeaders: { "api-key": connection.apiKey },
+      stripAuthorization: true
+    };
+  }
+  if (connection.authHeader === "ocp-apim-subscription-key") {
+    return {
+      apiKey: "local-gateway-header",
+      defaultHeaders: {
+        "Ocp-Apim-Subscription-Key": connection.apiKey
+      },
+      stripAuthorization: true
+    };
+  }
+  return { apiKey: connection.apiKey, stripAuthorization: false };
 }
 
 export function chatCompletionsUrl(connection: Pick<LiteLlmConnection, "endpoint">): string {

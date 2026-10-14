@@ -2,7 +2,7 @@
   "name": "codex-dev-companion",
   "displayName": "Local Dev Companion",
   "description": "A local LangChain development agent connected only to a user-configured LiteLLM Chat Completions endpoint.",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -106,6 +106,21 @@
           "type": "string",
           "default": "",
           "description": "HTTPS LiteLLM gateway base URL or complete Chat Completions URL."
+        },
+        "codexDevCompanion.liteLlmAuthHeader": {
+          "type": "string",
+          "enum": [
+            "authorization",
+            "api-key",
+            "ocp-apim-subscription-key"
+          ],
+          "enumDescriptions": [
+            "Send the key as Authorization: Bearer, the standard LiteLLM mode.",
+            "Send the key in the api-key header used by Azure-compatible gateways.",
+            "Send the key in the default Azure API Management subscription header."
+          ],
+          "default": "authorization",
+          "description": "HTTP header used to authenticate the Chat Completions request."
         },
         "codexDevCompanion.liteLlmModel": {
           "type": "string",

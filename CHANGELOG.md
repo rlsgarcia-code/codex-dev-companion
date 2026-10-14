@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+- Added selectable gateway authentication headers: `Authorization: Bearer`, `api-key`, and `Ocp-Apim-Subscription-Key`.
+- Kept the API/subscription key exclusively in VS Code Secret Storage while supporting Azure-compatible corporate gateways.
+- Added header-mapping tests and local routing coverage for Azure API Management subscription-key authentication.
+
 ## 0.8.0
 
 - Added a workspace-level choice between the focused `createAgent` runtime and the advanced `createDeepAgent` runtime.

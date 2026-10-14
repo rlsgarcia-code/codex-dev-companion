@@ -3,8 +3,10 @@ import { DevelopmentAgent } from "./agent";
 import {
   LITELLM_API_KEY_SECRET,
   normalizeLiteLlmEndpoint,
+  parseLiteLlmAuthHeader,
   validateLiteLlmConnection
 } from "./litellm";
+import type { LiteLlmAuthHeader } from "./litellm";
 import { ContextCollector } from "./context";
 import { ProjectMemory } from "./memory";
 import { agentRuntimeLabel, parseAgentRuntime } from "./runtime";
@@ -22,7 +24,7 @@ type IncomingMessage =
   | { type: "openMemory" }
   | { type: "configureLiteLlm" }
   | { type: "selectRuntime"; runtime: AgentRuntime }
-  | { type: "saveLiteLlm"; endpoint: string; model: string; apiKey: string };
+  | { type: "saveLiteLlm"; endpoint: string; model: string; apiKey: string; authHeader: LiteLlmAuthHeader };
 
 type LiteLlmSettingsSnapshot = {
   endpoint: string;
@@ -30,6 +32,7 @@ type LiteLlmSettingsSnapshot = {
   hasApiKey: boolean;
   caCertificatePath: string;
   runtime: AgentRuntime;
+  authHeader: LiteLlmAuthHeader;
 };
 
 export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -131,7 +134,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       model: configuration.get<string>("liteLlmModel", ""),
       hasApiKey: Boolean(await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET)),
       caCertificatePath: configuration.get<string>("gatewayCaCertificatePath", ""),
-      runtime: parseAgentRuntime(configuration.get("agentRuntime"))
+      runtime: parseAgentRuntime(configuration.get("agentRuntime")),
+      authHeader: parseLiteLlmAuthHeader(configuration.get("liteLlmAuthHeader"))
     };
   }
 
@@ -163,11 +167,13 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       const connection = validateLiteLlmConnection({
         endpoint: normalizeLiteLlmEndpoint(message.endpoint),
         model: message.model,
-        apiKey
+        apiKey,
+        authHeader: parseLiteLlmAuthHeader(message.authHeader)
       });
       await Promise.all([
         configuration.update("liteLlmEndpoint", connection.endpoint, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModel", connection.model, vscode.ConfigurationTarget.Global),
+        configuration.update("liteLlmAuthHeader", connection.authHeader, vscode.ConfigurationTarget.Global),
         ...(message.apiKey.trim()
           ? [this.extensionContext.secrets.store(LITELLM_API_KEY_SECRET, message.apiKey.trim())]
           : [])
@@ -301,7 +307,15 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         <input id="litellm-model" type="text" autocomplete="off" spellcheck="false" placeholder="company-coding-model" />
       </label>
       <label class="field">
-        <span>Virtual Key <small id="litellm-key-state"></small></span>
+        <span>Key Header</span>
+        <select id="litellm-auth-header">
+          <option value="authorization">Authorization: Bearer</option>
+          <option value="api-key">api-key</option>
+          <option value="ocp-apim-subscription-key">Ocp-Apim-Subscription-Key</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Gateway Key <small id="litellm-key-state"></small></span>
         <input id="litellm-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the stored key" />
       </label>
       <p class="settings-note" id="litellm-details"></p>
@@ -384,8 +398,8 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .field { display: grid; gap: 4px; margin-top: 9px; color: var(--muted); font-size: 10px; }
 .field span, .local-setting > div > span { font-weight: 600; letter-spacing: .02em; }
 .field small, .local-setting small { font-weight: 400; opacity: .75; }
-.field input { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 4px; outline: 0; color: var(--vscode-input-foreground); background: var(--vscode-input-background); font: 11px/1.3 var(--vscode-editor-font-family); }
-.field input:focus { border-color: color-mix(in srgb, var(--accent) 62%, transparent); }
+.field input, .field select { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 4px; outline: 0; color: var(--vscode-input-foreground); background: var(--vscode-input-background); font: 11px/1.3 var(--vscode-editor-font-family); }
+.field input:focus, .field select:focus { border-color: color-mix(in srgb, var(--accent) 62%, transparent); }
 .field-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
 .local-setting { display: flex; align-items: end; justify-content: space-between; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .local-setting > div:first-child { min-width: 0; display: grid; gap: 3px; }
@@ -451,6 +465,7 @@ const planItems = document.getElementById('plan-items');
 const liteLlmSettings = document.getElementById('litellm-settings');
 const liteLlmEndpoint = document.getElementById('litellm-endpoint');
 const liteLlmModel = document.getElementById('litellm-model');
+const liteLlmAuthHeader = document.getElementById('litellm-auth-header');
 const liteLlmApiKey = document.getElementById('litellm-api-key');
 const liteLlmSettingsError = document.getElementById('litellm-settings-error');
 const newThreadButton = document.getElementById('new-thread');
@@ -514,11 +529,13 @@ function submit() {
 function fillLiteLlmSettings(liteLlm) {
   liteLlmEndpoint.value = liteLlm.endpoint || '';
   liteLlmModel.value = liteLlm.model || '';
+  liteLlmAuthHeader.value = liteLlm.authHeader || 'authorization';
   liteLlmApiKey.value = '';
   agentRuntime.value = liteLlm.runtime === 'deep' ? 'deep' : 'standard';
   document.getElementById('litellm-key-state').textContent = liteLlm.hasApiKey ? '· stored securely' : '· required';
   const details = [];
   if (liteLlm.caCertificatePath) details.push('CA: ' + liteLlm.caCertificatePath);
+  details.push('Auth: ' + (liteLlm.authHeader || 'authorization'));
   details.push('POST /chat/completions');
   document.getElementById('litellm-details').textContent = details.join(' · ');
   liteLlmSettingsError.classList.add('hidden');
@@ -535,7 +552,8 @@ function saveLiteLlmSettings() {
     type: 'saveLiteLlm',
     endpoint: liteLlmEndpoint.value,
     model: liteLlmModel.value,
-    apiKey: liteLlmApiKey.value
+    apiKey: liteLlmApiKey.value,
+    authHeader: liteLlmAuthHeader.value
   });
 }
 

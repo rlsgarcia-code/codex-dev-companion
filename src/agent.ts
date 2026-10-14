@@ -20,6 +20,8 @@ import { ContextCollector, renderContext } from "./context";
 import {
   chatCompletionsBaseUrl,
   LITELLM_API_KEY_SECRET,
+  openAiClientAuthentication,
+  parseLiteLlmAuthHeader,
   resolveWorkspaceCertificatePath,
   validateLiteLlmConnection
 } from "./litellm";
@@ -90,8 +92,10 @@ export class DevelopmentAgent implements vscode.Disposable {
       const connection = validateLiteLlmConnection({
         endpoint: configuration.get<string>("liteLlmEndpoint", ""),
         model: configuration.get<string>("liteLlmModel", ""),
-        apiKey: apiKey ?? ""
+        apiKey: apiKey ?? "",
+        authHeader: parseLiteLlmAuthHeader(configuration.get("liteLlmAuthHeader"))
       });
+      const authentication = openAiClientAuthentication(connection);
       const maxContextCharacters = configuration.get<number>("maxContextCharacters", 24_000);
       const maxConversationCharacters = configuration.get<number>("maxConversationCharacters", 48_000);
       const autoContext = configuration.get<boolean>("autoContext", true);
@@ -113,17 +117,19 @@ export class DevelopmentAgent implements vscode.Disposable {
       }
       const model = new ChatOpenAICompletions({
         model: connection.model,
-        apiKey: connection.apiKey,
+        apiKey: authentication.apiKey,
         temperature: 0,
         streaming: true,
         streamUsage: true,
         maxRetries: 2,
         configuration: {
           baseURL: chatCompletionsBaseUrl(connection),
-          ...(dispatcher ? {
-            fetch: undiciFetch as unknown as typeof globalThis.fetch,
-            fetchOptions: { dispatcher } as never
-          } : {})
+          ...(authentication.defaultHeaders
+            ? { defaultHeaders: authentication.defaultHeaders }
+            : {}),
+          ...(dispatcher || authentication.stripAuthorization
+            ? { fetch: gatewayFetch(authentication.stripAuthorization, dispatcher) }
+            : {})
         }
       });
       const toolHost = new LocalToolHost(workspace.uri.fsPath, this.memory, onEvent);
@@ -343,8 +349,11 @@ ${request}
   }
 
   private explainError(message: string): string {
+    if (/missing subscription key/i.test(message)) {
+      return `${message}\n\nThe gateway did not receive the key in its expected header. Open “Local Companion: Configure LiteLLM” and choose “api-key” for an AzureChatOpenAI-compatible hub or “Ocp-Apim-Subscription-Key” for standard Azure API Management.`;
+    }
     if (/auth|unauthorized|forbidden|\b401\b|\b403\b/i.test(message)) {
-      return `${message}\n\nCheck the LiteLLM base URL, Chat Completions model alias, virtual key, and optional CA in “Local Companion: Configure LiteLLM”.`;
+      return `${message}\n\nCheck the LiteLLM base URL, model alias, key header, stored key, and optional CA in “Local Companion: Configure LiteLLM”.`;
     }
     if (/certificate|self[- ]signed|unable to verify|CERT_/i.test(message)) {
       return `${message}\n\nSelect the corporate CA PEM using “Local Companion: Configure LiteLLM”.`;
@@ -413,4 +422,21 @@ function disableExternalLangChainTracing(): void {
   process.env.LANGSMITH_OTEL_ENABLED = "false";
   process.env.OTEL_ENABLED = "false";
   delete process.env.LANGCHAIN_TRACING;
+}
+
+function gatewayFetch(
+  stripAuthorization: boolean,
+  dispatcher: UndiciAgent | undefined
+): typeof globalThis.fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined)
+    );
+    if (stripAuthorization) headers.delete("authorization");
+    return await undiciFetch(input as never, {
+      ...init,
+      headers,
+      ...(dispatcher ? { dispatcher } : {})
+    } as never) as unknown as Response;
+  }) as typeof globalThis.fetch;
 }

@@ -88,8 +88,26 @@ try {
   assert.equal(secondPayload.messages.at(-1).role, "tool");
   assert.match(secondPayload.messages.at(-1).content, /readOnly/);
 
+  const subscriptionKeyModel = new ChatOpenAICompletions({
+    model: "smoke-model-alias",
+    apiKey: "local-gateway-header",
+    streaming: true,
+    streamUsage: true,
+    maxRetries: 0,
+    configuration: {
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      defaultHeaders: {
+        "Ocp-Apim-Subscription-Key": "apim-smoke-key"
+      },
+      fetch: async (input, init) => {
+        const headers = new Headers(init?.headers);
+        headers.delete("authorization");
+        return globalThis.fetch(input, { ...init, headers });
+      }
+    }
+  });
   const deepAgent = createDeepAgent({
-    model,
+    model: subscriptionKeyModel,
     tools: [readMarker],
     systemPrompt: "Read-only Deep Agent local routing smoke test. Do not call tools."
   });
@@ -100,12 +118,42 @@ try {
   assert.equal(requests.length, 3);
   assert.equal(requests[2].method, "POST");
   assert.equal(requests[2].url, "/v1/chat/completions");
-  assert.equal(requests[2].headers.authorization, "Bearer litellm-smoke-key");
+  assert.equal(requests[2].headers.authorization, undefined);
+  assert.equal(requests[2].headers["ocp-apim-subscription-key"], "apim-smoke-key");
   const deepPayload = JSON.parse(requests[2].body);
   assert.equal(deepPayload.model, "smoke-model-alias");
   assert.equal(deepPayload.stream, true);
   assert.ok(deepPayload.tools.some((entry) => entry.function.name === "read_file"));
   assert.ok(deepPayload.tools.some((entry) => entry.function.name === "task"));
+
+  const azureHeaderModel = new ChatOpenAICompletions({
+    model: "smoke-model-alias",
+    apiKey: "local-gateway-header",
+    streaming: true,
+    streamUsage: true,
+    maxRetries: 0,
+    configuration: {
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      defaultHeaders: { "api-key": "azure-smoke-key" },
+      fetch: async (input, init) => {
+        const headers = new Headers(init?.headers);
+        headers.delete("authorization");
+        return globalThis.fetch(input, { ...init, headers });
+      }
+    }
+  });
+  const azureHeaderAgent = createAgent({
+    model: azureHeaderModel,
+    tools: [readMarker],
+    systemPrompt: "Read-only Azure-compatible header smoke test. Do not call tools."
+  });
+  const azureHeaderResult = await azureHeaderAgent.invoke({
+    messages: [{ role: "user", content: "Reply with smoke-ok without changing anything." }]
+  });
+  assert.equal(azureHeaderResult.messages.at(-1)?.text, "smoke-ok");
+  assert.equal(requests.length, 4);
+  assert.equal(requests[3].headers.authorization, undefined);
+  assert.equal(requests[3].headers["api-key"], "azure-smoke-key");
   console.log("LANGCHAIN_AND_DEEPAGENT_LITELLM_CHAT_COMPLETIONS_LOCAL_ROUTING_OK");
 } finally {
   await new Promise((resolve) => server.close(resolve));
