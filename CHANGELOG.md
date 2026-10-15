@@ -2,6 +2,7 @@
 
 ## 0.11.0
 
+- Separate end-user packaging from maintainer verification: `npm run package` now builds a VSIX without tests, local smoke servers, VS Code configuration, or LiteLLM credentials, while `npm run package:verified` retains the complete local release gate.
 - Allow the Windows packaging gate to run for standard corporate users without Developer Mode or symbolic-link privileges; symlink-specific security cases remain covered on Linux and macOS.
 - Expanded the persistent run strip into a two-line progress monitor with elapsed time, plan completion, file/command counts, and the three latest actions, while preserving the compact collapsed state.
 - Stopped live updates from pulling readers away from earlier messages; a bounded new-activity indicator now offers an explicit jump back to the latest conversation point.

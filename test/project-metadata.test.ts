@@ -35,9 +35,13 @@ test("keeps professional extension metadata and a valid package icon", () => {
     "node --test test/issue-forms.test.mjs test/license-inventory.test.mjs test/native-package.test.mjs test/release-metadata.test.mjs test/security-audit.test.mjs"
   );
   assert.match(manifest.scripts?.test ?? "", /npm run test:repository/);
-  assert.match(manifest.scripts?.package ?? "", /npm run smoke:litellm/);
-  assert.match(manifest.scripts?.package ?? "", /npm run smoke:chroma/);
-  assert.match(manifest.scripts?.package ?? "", /node scripts\/package-native\.mjs/);
+  assert.equal(manifest.scripts?.package, "npm run build && node scripts/package-native.mjs");
+  assert.equal(
+    manifest.scripts?.verify,
+    "npm run check && npm test && npm run build && npm run smoke:litellm && npm run smoke:chroma"
+  );
+  assert.equal(manifest.scripts?.["package:verified"], "npm run verify && node scripts/package-native.mjs");
+  assert.doesNotMatch(manifest.scripts?.package ?? "", /test|smoke|compile|check/);
   assert.equal(manifest.scripts?.["audit:prod"], "node scripts/audit-production.mjs");
   assert.equal(
     manifest.scripts?.["test:extension-host"],

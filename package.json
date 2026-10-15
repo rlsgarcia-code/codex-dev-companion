@@ -301,7 +301,9 @@
     "smoke:litellm": "npm run compile:tests && node scripts/smoke-litellm-routing.mjs",
     "smoke:chroma": "node scripts/smoke-chroma-lifecycle.mjs",
     "audit:prod": "node scripts/audit-production.mjs",
-    "package": "npm run check && npm test && npm run build && npm run smoke:litellm && npm run smoke:chroma && node scripts/package-native.mjs"
+    "verify": "npm run check && npm test && npm run build && npm run smoke:litellm && npm run smoke:chroma",
+    "package": "npm run build && node scripts/package-native.mjs",
+    "package:verified": "npm run verify && node scripts/package-native.mjs"
   },
   "dependencies": {
     "@langchain/community": "^1.1.29",

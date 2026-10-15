@@ -89,26 +89,25 @@ Depois:
 
 Cada release inclui `SHA256SUMS.txt` para ambientes que exigem validação de integridade. O VSIX já contém a extensão e o binário local do ChromaDB para a plataforma escolhida; não é necessário Docker nem instalar um servidor Chroma separadamente.
 
-## Desenvolvedores: gerar localmente
+## Gerar e instalar a partir do repositório
 
-Requer Node.js 22 ou superior. Para gerar um VSIX da plataforma atual:
+Requer Node.js 22 ou superior. Este fluxo apenas instala as dependências locais, constrói a extensão e gera o VSIX da plataforma atual; ele não lê a configuração do VS Code, não exige que o LiteLLM já esteja configurado e não faz chamada de validação ao gateway:
 
 ```bash
 git clone https://github.com/rlsgarcia-code/codex-dev-companion.git
 cd codex-dev-companion
 npm ci --ignore-scripts
-npm test
-npm run test:extension-host
 npm run package
-npm run test:vsix-install -- ./codex-dev-companion-0.11.0-<plataforma>.vsix
 code --install-extension ./codex-dev-companion-0.11.0-<plataforma>.vsix --force
 ```
 
 `npm run package` detecta sistema e arquitetura, grava o `TargetPlatform` no manifesto e gera um nome explícito como `codex-dev-companion-0.11.0-win32-x64.vsix`. Use `--force` durante o piloto quando estiver substituindo outro build com o mesmo número de versão; depois execute **Developer: Reload Window** para carregar a cópia instalada. O VSIX contém o binário local do ChromaDB para a plataforma em que foi gerado. Gere o pacote no mesmo sistema/arquitetura em que ele será instalado (macOS arm64/x64, Linux arm64/x64 ou Windows x64). Hosts não suportados são recusados em vez de gerar um pacote incorretamente identificado como universal. Não é necessário Docker nem instalar um servidor Chroma separadamente. Os binários necessários são fornecidos por pacotes npm específicos da plataforma e o projeto desabilita scripts de lifecycle durante a instalação de dependências.
 
-`npm run package` funciona como gate de release local: executa type-check, todos os testes, build, smoke de Chat Completions e smoke do Chroma nativo antes de criar o VSIX. Se qualquer verificação falhar, nenhum pacote novo é produzido.
+`npm run package` executa somente o build local e o empacotamento. A chave, o endpoint, o certificado e os aliases serão configurados pelo usuário dentro do VS Code depois da instalação.
 
-No Windows, esse fluxo não exige habilitar o Modo de Desenvolvedor nem conceder ao usuário permissão para criar links simbólicos. Os cenários de teste que dependem especificamente de symlinks são validados nos runners Linux/macOS e ignorados no Windows; as demais verificações continuam obrigatórias.
+No Windows, esse fluxo não exige habilitar o Modo de Desenvolvedor nem conceder ao usuário permissão para criar links simbólicos.
+
+Para mantenedores, `npm run package:verified` executa antes do empacotamento o type-check, todos os testes e os smokes locais de roteamento de Chat Completions e Chroma. Esses smokes usam serviços temporários locais, nunca a configuração ou as credenciais do usuário. O CI continua exigindo todas essas verificações antes de publicar seus artifacts.
 
 Cada build também produz `dist/licenses/third-party-manifest.json` e `dist/licenses/THIRD_PARTY-LICENSES.txt` a partir das dependências que realmente entraram no bundle. Ambos seguem dentro do VSIX. O empacotamento falha se uma dependência não declarar uma licença revisada ou se o texto correspondente não estiver disponível, evitando distribuir componentes sem inventário auditável.
 
@@ -270,11 +269,7 @@ No modo **Plan only**, ferramentas de escrita, memória e execução de comandos
 
 ```bash
 npm install
-npm run check
-npm run build
-npm test
-npm run smoke:litellm
-npm run smoke:chroma
+npm run verify
 ```
 
 Abra esta pasta no VS Code e pressione `F5`. Na janela **Extension Development Host**, abra uma pasta de código e clique em **Local Companion** na Secondary Sidebar.
@@ -290,7 +285,7 @@ npm run watch
 Para gerar e reinstalar o pacote:
 
 ```bash
-npm run package
+npm run package:verified
 code --install-extension codex-dev-companion-0.11.0-<plataforma>.vsix --force
 ```
 
