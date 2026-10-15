@@ -125,6 +125,10 @@ function assertWorkflowActionsPinned(workflow: string): void {
   assert.ok(actionReferences.length > 0, "workflow must use at least one reviewed action");
   for (const [, action = "", revision = "", versionComment = ""] of actionReferences) {
     assert.match(revision, /^[a-f0-9]{40}$/, `${action} must be pinned to a full commit SHA`);
-    assert.match(versionComment ?? "", /^v\d+$/, `${action} must retain its reviewed major-version comment`);
+    assert.match(
+      versionComment,
+      /^v\d+(?:\.\d+\.\d+)?$/,
+      `${action} must retain its reviewed version comment`
+    );
   }
 }

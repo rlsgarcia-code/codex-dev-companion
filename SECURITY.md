@@ -62,7 +62,7 @@ O cancelamento é propagado pelo mesmo `AbortSignal` para chamadas do modelo, em
 
 O CI executa `npm run audit:prod` e bloqueia vulnerabilidades de produção `high` ou `critical`. Uma exceção só é aceita quando identifica o advisory e o pacote exatos, documenta a ausência de correção upstream, aponta uma mitigação verificável no código e possui prazo de expiração. A política versionada fica em `security-audit-exceptions.json`; ao expirar, o gate volta a falhar até que o risco seja removido ou revisto explicitamente.
 
-As GitHub Actions usadas para testar, empacotar e publicar a extensão são fixadas por SHA completo, com a versão principal revisada preservada em comentário. O Dependabot verifica semanalmente tanto o lockfile npm quanto essas referências e propõe alterações por pull request; nenhuma atualização é aplicada ou publicada automaticamente.
+As GitHub Actions usadas para testar, empacotar e publicar a extensão são fixadas por SHA completo, com uma versão legível e revisável preservada em comentário. O Dependabot verifica semanalmente tanto o lockfile npm quanto essas referências e propõe alterações por pull request; nenhuma atualização é aplicada ou publicada automaticamente.
 
 O advisory `GHSA-vfj7-8cjw-p6xm` afeta o `braces` trazido pelo Deep Agents e não possui versão corrigida. A extensão não expõe brace expansion: padrões de glob controlados pelo modelo são limitados em tamanho, operadores e segmentos, e qualquer `{` ou `}` é recusado antes de alcançar `micromatch` ou `fast-glob`. Globs comuns como `src/**/*.ts` continuam disponíveis. Testes exercitam tanto a política pura quanto o backend real do Deep Agent. A exceção tem validade limitada e deve ser removida assim que a dependência deixar de estar vulnerável.
 
