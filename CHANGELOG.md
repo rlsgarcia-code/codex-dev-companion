@@ -2,6 +2,7 @@
 
 ## 0.11.0
 
+- Allow the Windows packaging gate to run for standard corporate users without Developer Mode or symbolic-link privileges; symlink-specific security cases remain covered on Linux and macOS.
 - Expanded the persistent run strip into a two-line progress monitor with elapsed time, plan completion, file/command counts, and the three latest actions, while preserving the compact collapsed state.
 - Stopped live updates from pulling readers away from earlier messages; a bounded new-activity indicator now offers an explicit jump back to the latest conversation point.
 - Added structured GitHub forms for sanitized bug reports and feature requests, disabled unstructured public issues, and routed vulnerability reports to the repository's private security channel.

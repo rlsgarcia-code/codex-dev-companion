@@ -108,6 +108,8 @@ code --install-extension ./codex-dev-companion-0.11.0-<plataforma>.vsix --force
 
 `npm run package` funciona como gate de release local: executa type-check, todos os testes, build, smoke de Chat Completions e smoke do Chroma nativo antes de criar o VSIX. Se qualquer verificação falhar, nenhum pacote novo é produzido.
 
+No Windows, esse fluxo não exige habilitar o Modo de Desenvolvedor nem conceder ao usuário permissão para criar links simbólicos. Os cenários de teste que dependem especificamente de symlinks são validados nos runners Linux/macOS e ignorados no Windows; as demais verificações continuam obrigatórias.
+
 Cada build também produz `dist/licenses/third-party-manifest.json` e `dist/licenses/THIRD_PARTY-LICENSES.txt` a partir das dependências que realmente entraram no bundle. Ambos seguem dentro do VSIX. O empacotamento falha se uma dependência não declarar uma licença revisada ou se o texto correspondente não estiver disponível, evitando distribuir componentes sem inventário auditável.
 
 ### Pacotes verificados pelo CI
