@@ -27,11 +27,29 @@ test("keeps direct source-level network calls inside the reviewed gateway and lo
   for (const [file, source] of sources) {
     if (file === "src/webview.ts") continue;
     const destinations = source.match(/https?:\/\/[^`"'\s]+/g) ?? [];
-    const remoteDestinations = file === "src/chroma.ts"
-      ? destinations.filter((destination) => !destination.startsWith("http://127.0.0.1:"))
-      : destinations;
+    const remoteDestinations = destinations.filter((destination) =>
+      !destination.includes("${") &&
+      !/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::|\/|$)/.test(destination)
+    );
     assert.deepEqual(remoteDestinations, [], `${file} must not hard-code a remote network destination`);
   }
+});
+
+test("keeps browser automation local and approval-gated", () => {
+  const browser = sources.get("src/browser.ts") ?? "";
+  const browserPolicy = sources.get("src/browser-policy.ts") ?? "";
+  const tools = sources.get("src/tools.ts") ?? "";
+
+  assert.match(browserPolicy, /Browser access is restricted to credential-free http\(s\) loopback URLs/);
+  assert.match(browserPolicy, /\["http:", "https:", "ws:", "wss:"\]/);
+  assert.match(browser, /serviceWorkers: "block"/);
+  assert.match(browser, /acceptDownloads: false/);
+  assert.match(browser, /chromiumSandbox: true/);
+  assert.match(browser, /openedPage\.close/);
+  assert.match(agent, /sanitizeText: \(value\) => redactSensitiveText\(value, sensitiveValues\)/);
+  assert.match(browser, /routeWebSocket/);
+  assert.match(tools, /Allow the local agent to inspect and control this localhost application/);
+  assert.match(browser, /does not fill password fields/);
 });
 
 test("routes every LangChain model client through the exact-route gateway transport", () => {

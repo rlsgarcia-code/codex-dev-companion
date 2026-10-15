@@ -30,6 +30,9 @@ Instale o VSIX correspondente ao sistema em que o **Extension Host** executa. Em
 11. Abra uma segunda janela no mesmo workspace durante uma execução. Apenas uma janela deve manter a execução; a outra deve explicar o bloqueio e se recuperar quando a primeira terminar.
 12. Inicie uma tarefa longa, recolha a faixa de atividade, cancele a execução e recarregue a janela. O estado deve ser coerente e a solicitação interrompida deve oferecer recuperação explícita.
 13. Repita uma tarefa curta com cada perfil de modelo disponível. Altere `reasoning_effort`, `temperature` e `top_p` somente quando o modelo suportar; erros incompatíveis devem oferecer uma correção explícita, nunca silenciosa.
+14. Inicie uma aplicação de teste no workspace e peça ao agente para abrir sua URL de `localhost`. Confirme que o modal aparece antes do acesso, a página é exibida para acompanhamento e DOM, controles e console são inspecionados.
+15. Faça a página tentar carregar um recurso remoto e confirme que ele aparece como bloqueado. Verifique também que campo de senha, download e URL não local não podem ser usados pela automação.
+16. Com um alias multimodal, solicite uma conferência visual depois de alterar a interface. Com um alias somente de texto, confirme que a falha visual é explicada e que a inspeção estrutural continua utilizável.
 
 ## Critério de aprovação
 
@@ -41,6 +44,7 @@ O piloto passa quando:
 - chave, endpoint, PEM e conteúdo do projeto não aparecem em logs, memória ou bundle de suporte;
 - os dois runtimes completam pelo menos uma tarefa curta;
 - o Chroma inicia e encerra localmente em duas janelas sem disputa;
+- a validação de navegador funciona com Edge/Chrome já instalado, sem download, elevação ou tráfego não local;
 - três sessões consecutivas terminam sem falha não recuperável.
 
 ## Retorno de falha

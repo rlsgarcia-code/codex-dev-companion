@@ -1,10 +1,16 @@
 import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import * as path from "node:path";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { tool } from "langchain";
 import * as vscode from "vscode";
 import { z } from "zod";
 import { requiresLocalApproval, type LocalMutationKind } from "./autonomy";
+import {
+  LocalBrowserSession,
+  type BrowserInteraction
+} from "./browser";
+import { normalizeLocalBrowserUrl } from "./browser-policy";
 import type { ChangeTracker } from "./change-tracker";
 import { evaluateCommandPolicy } from "./command-policy";
 import { isWorkspaceGlob, validateWorkspaceGlob } from "./glob-policy";
@@ -19,13 +25,22 @@ const MAX_TOOL_OUTPUT = 30_000;
 const MAX_FILE_BYTES = 1_500_000;
 const MAX_COMMAND_OUTPUT = 30_000;
 
+export type BrowserVisualAnalyzer = (input: {
+  bytes: Buffer;
+  mimeType: "image/jpeg";
+  question: string;
+  signal: AbortSignal;
+}) => Promise<string>;
+
 export class LocalToolHost {
   public constructor(
     private readonly workspaceRoot: string,
     private readonly memory: ProjectMemory,
     private readonly onEvent: (event: AgentUiEvent) => void,
     private readonly changeTracker: ChangeTracker,
-    private readonly sensitiveValues: readonly string[] = []
+    private readonly sensitiveValues: readonly string[] = [],
+    private readonly browser?: LocalBrowserSession,
+    private readonly analyzeBrowserScreenshot?: BrowserVisualAnalyzer
   ) {}
 
   public tools(mode: RunMode, signal: AbortSignal) {
@@ -75,7 +90,8 @@ export class LocalToolHost {
             items: z.array(z.object({ text: z.string(), completed: z.boolean() })).min(1).max(8)
           })
         }
-      )
+      ),
+      ...this.browserTools(signal, mode !== "plan")
     ];
 
     if (mode === "plan") return readTools;
@@ -136,9 +152,11 @@ export class LocalToolHost {
         })
       }
     );
-    if (mode === "plan") return [planningTool];
+    const browserTools = this.browserTools(signal, mode !== "plan");
+    if (mode === "plan") return [planningTool, ...browserTools];
     return [
       planningTool,
+      ...browserTools,
       tool(
         (input) => this.safe(() => this.runCommand(input, signal, mode)),
         {
@@ -169,6 +187,177 @@ export class LocalToolHost {
     } catch (error) {
       return JSON.stringify({ error: safeErrorMessage(error, this.sensitiveValues) });
     }
+  }
+
+  private browserTools(signal: AbortSignal, interactive: boolean) {
+    if (!this.browser) return [];
+    const tools: StructuredToolInterface[] = [
+      tool(
+        (input) => this.safe(() => this.openBrowser(input, signal)),
+        {
+          name: "browser_open",
+          description: "Open and inspect a running http(s) localhost application in an isolated local browser. Non-loopback requests are blocked. This also asks VS Code to show the same URL for the user.",
+          schema: z.object({
+            url: z.string().max(2_048).describe("Local app URL such as http://localhost:3000.")
+          })
+        }
+      ),
+      tool(
+        () => this.safe(() => this.browserInspect(signal)),
+        {
+          name: "browser_inspect",
+          description: "Inspect the current local page: visible text, interactive element references, console warnings/errors, page errors, and blocked remote requests.",
+          schema: z.object({})
+        }
+      ),
+      tool(
+        (input) => this.safe(() => this.browserVisualCheck(input, signal)),
+        {
+          name: "browser_visual_check",
+          description: "Capture the current local app viewport and ask the configured multimodal LiteLLM model to identify visual defects. Use after important UI changes; if the model lacks image support, continue with browser_inspect.",
+          schema: z.object({
+            question: z.string().min(1).max(1_000).optional()
+              .describe("Specific visual acceptance criteria or suspected layout issue.")
+          })
+        }
+      ),
+      tool(
+        () => this.safe(() => this.closeBrowser()),
+        {
+          name: "browser_close",
+          description: "Close the isolated local browser session and delete its temporary screenshot.",
+          schema: z.object({})
+        }
+      )
+    ];
+    if (interactive) {
+      tools.splice(2, 0, tool(
+        (input) => this.safe(() => this.interactWithBrowser(input, signal)),
+        {
+          name: "browser_interact",
+          description: "Interact with the current local app using element references from the latest browser inspection, then return an updated inspection. Password fields are never filled.",
+          schema: z.object({
+            action: z.enum(["click", "fill", "press", "select", "reload", "go_back", "resize"]),
+            ref: z.string().regex(/^e\d+$/).optional().describe("Element reference from browser_open or browser_inspect."),
+            text: z.string().max(4_000).optional().describe("Text for fill."),
+            key: z.string().max(80).optional().describe("Playwright key such as Enter, Escape, or Control+Enter."),
+            value: z.string().max(1_000).optional().describe("Option value for select."),
+            width: z.number().int().min(320).max(1_920).optional(),
+            height: z.number().int().min(320).max(1_200).optional()
+          })
+        }
+      ));
+    }
+    return tools;
+  }
+
+  private async openBrowser(input: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+    const browser = this.requireBrowser();
+    const url = normalizeLocalBrowserUrl(requiredString(input.url, "url"));
+    if (!browser.hasApprovalFor(url)) {
+      const origin = new URL(url).origin;
+      const approved = await requestLocalApproval(this.onEvent, {
+        prompt: "Allow the local agent to inspect and control this localhost application?",
+        action: "Allow local browser session",
+        target: origin,
+        explanation: "The isolated session can reach loopback addresses only. Page text, console output, interactions, and screenshots may be sent to the configured LiteLLM model for this session. Downloads, password fields, service workers, and non-local HTTP/WebSocket requests are blocked.",
+        risk: "sensitive",
+        sensitiveValues: this.sensitiveValues
+      });
+      if (!approved) {
+        return JSON.stringify({ denied: true, origin, message: "The user declined local browser access." });
+      }
+      browser.grantApproval(url);
+    }
+    return this.browserResult(await browser.open(url, signal));
+  }
+
+  private async browserInspect(signal: AbortSignal): Promise<string> {
+    return this.browserResult(await this.requireBrowser().snapshot(signal));
+  }
+
+  private async interactWithBrowser(input: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+    const action = requiredString(input.action, "action") as BrowserInteraction["action"];
+    let interaction: BrowserInteraction;
+    switch (action) {
+      case "click":
+        interaction = { action, ref: requiredString(input.ref, "ref") };
+        break;
+      case "fill":
+        interaction = {
+          action,
+          ref: requiredString(input.ref, "ref"),
+          text: requiredString(input.text, "text", true)
+        };
+        break;
+      case "press":
+        interaction = {
+          action,
+          ...(optionalString(input.ref) ? { ref: optionalString(input.ref) } : {}),
+          key: requiredString(input.key, "key")
+        };
+        break;
+      case "select":
+        interaction = {
+          action,
+          ref: requiredString(input.ref, "ref"),
+          value: requiredString(input.value, "value", true)
+        };
+        break;
+      case "resize":
+        interaction = {
+          action,
+          width: clampRequiredInteger(input.width, 320, 1_920, "width"),
+          height: clampRequiredInteger(input.height, 320, 1_200, "height")
+        };
+        break;
+      case "reload":
+      case "go_back":
+        interaction = { action };
+        break;
+      default:
+        throw new Error("Unsupported browser interaction.");
+    }
+    return this.browserResult(await this.requireBrowser().interact(interaction, signal));
+  }
+
+  private async browserVisualCheck(input: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+    const browser = this.requireBrowser();
+    const capture = await browser.screenshot(signal);
+    const question = optionalString(input.question)
+      ?? "Review this local application viewport for layout breakage, clipping, overlap, unreadable text, inconsistent spacing, missing content, and obvious responsive or accessibility problems. Report only evidence visible in the image and distinguish defects from uncertainty.";
+    if (!this.analyzeBrowserScreenshot) {
+      return JSON.stringify({
+        captured: true,
+        analyzed: false,
+        message: "The viewport was captured locally, but visual model analysis is unavailable. Use browser_inspect for structural evidence."
+      });
+    }
+    try {
+      const analysis = await this.analyzeBrowserScreenshot({ ...capture, question, signal });
+      return truncate(JSON.stringify({ captured: true, analyzed: true, analysis }), MAX_TOOL_OUTPUT);
+    } catch (error) {
+      return truncate(JSON.stringify({
+        captured: true,
+        analyzed: false,
+        message: "The screenshot remains local, but the selected model did not complete visual analysis.",
+        error: safeErrorMessage(error, this.sensitiveValues)
+      }), MAX_TOOL_OUTPUT);
+    }
+  }
+
+  private async closeBrowser(): Promise<string> {
+    await this.requireBrowser().close();
+    return JSON.stringify({ closed: true, temporaryCaptureDeleted: true });
+  }
+
+  private browserResult(snapshot: Awaited<ReturnType<LocalBrowserSession["snapshot"]>>): string {
+    return truncate(redactSensitiveText(JSON.stringify(snapshot), this.sensitiveValues), MAX_TOOL_OUTPUT);
+  }
+
+  private requireBrowser(): LocalBrowserSession {
+    if (!this.browser) throw new Error("Local browser tools are disabled in workspace settings.");
+    return this.browser;
   }
 
   private async listFiles(input: Record<string, unknown>): Promise<string> {
@@ -504,6 +693,13 @@ function optionalString(value: unknown): string | undefined {
 function clampInteger(value: unknown, minimum: number, maximum: number, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
+}
+
+function clampRequiredInteger(value: unknown, minimum: number, maximum: number, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return value;
 }
 
 function truncate(value: string, maximum: number): string {

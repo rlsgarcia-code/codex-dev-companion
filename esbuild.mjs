@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { copyFile, mkdir, readdir, rm } from "node:fs/promises";
+import { copyFile, cp, mkdir, readdir, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { generateThirdPartyNotices } from "./scripts/generate-third-party-notices.mjs";
 
@@ -11,7 +11,7 @@ const context = await esbuild.context({
   format: "cjs",
   target: "node22",
   outfile: "dist/extension.js",
-  external: ["vscode"],
+  external: ["vscode", "playwright-core"],
   sourcemap: true,
   minify: false,
   metafile: true,
@@ -22,7 +22,7 @@ const result = await context.rebuild();
 const nativePackage = await copyNativeAssets();
 await generateThirdPartyNotices({
   metafile: result.metafile,
-  additionalPackages: [nativePackage]
+  additionalPackages: [nativePackage, "playwright-core"]
 });
 
 if (watch) {
@@ -49,6 +49,14 @@ async function copyNativeAssets() {
   await mkdir(path.join("dist", "chroma"), { recursive: true });
   await copyFile(path.join(chromaDirectory, chromaBinary), path.join("dist", "chroma", "chromadb.node"));
   await copyFile(path.join("scripts", "chroma-server.cjs"), path.join("dist", "chroma", "server.cjs"));
+
+  const packagedPlaywright = path.join("dist", "node_modules", "playwright-core");
+  await rm(packagedPlaywright, { recursive: true, force: true });
+  await mkdir(path.dirname(packagedPlaywright), { recursive: true });
+  await cp(path.join("node_modules", "playwright-core"), packagedPlaywright, {
+    recursive: true,
+    filter: (source) => !source.split(path.sep).includes("types") && !source.split(path.sep).includes("bin")
+  });
 
   await rm(path.join("dist", "build"), { recursive: true, force: true });
   return chromaPackage;

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -56,6 +56,22 @@ export function packageInvocation(version, target, options = {}) {
   };
 }
 
+export function verifyPackagedBrowserRuntime(projectRoot) {
+  const runtimeRoot = path.join(projectRoot, "dist", "node_modules", "playwright-core");
+  const requiredFiles = [
+    "package.json",
+    "index.js",
+    "browsers.json",
+    path.join("lib", "server", "browserType.js"),
+    "LICENSE"
+  ];
+  const missing = requiredFiles.filter((relativePath) => !existsSync(path.join(runtimeRoot, relativePath)));
+  if (missing.length) {
+    throw new Error(`Packaged local-browser runtime is incomplete: ${missing.join(", ")}. Run npm run build again.`);
+  }
+  return runtimeRoot;
+}
+
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
 if (import.meta.url === invokedPath) {
   const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -63,6 +79,7 @@ if (import.meta.url === invokedPath) {
   const version = String(manifest.version ?? "").trim();
   const target = nativeTarget();
   const output = nativePackageName(version, target);
+  verifyPackagedBrowserRuntime(projectRoot);
   const invocation = packageInvocation(version, target);
   const result = spawnSync(invocation.executable, invocation.args, {
     cwd: projectRoot,

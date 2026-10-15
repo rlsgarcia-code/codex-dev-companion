@@ -48,7 +48,7 @@ test("generates a complete allowlisted inventory for the production bundle", asy
     format: "cjs",
     target: "node22",
     outfile: path.join(temporaryRoot, "extension.js"),
-    external: ["vscode"],
+    external: ["vscode", "playwright-core"],
     metafile: true,
     write: false,
     logLevel: "silent"
@@ -57,16 +57,17 @@ test("generates a complete allowlisted inventory for the production bundle", asy
   const outputDirectory = path.join(temporaryRoot, "licenses");
   const manifest = await generateThirdPartyNotices({
     metafile: result.metafile,
-    additionalPackages: [nativePackage],
+    additionalPackages: [nativePackage, "playwright-core"],
     projectRoot,
     outputDirectory
   });
 
-  assert.equal(manifest.packageCount, 47, "dependency inventory changed; review licenses before updating this expectation");
+  assert.equal(manifest.packageCount, 48, "dependency inventory changed; review licenses before updating this expectation");
   assert.equal(manifest.packages.length, manifest.packageCount);
   assert.ok(manifest.packages.some((entry) => entry.name === nativePackage && entry.nativeComponent));
   assert.ok(manifest.packages.some((entry) => entry.name === "langchain"));
   assert.ok(manifest.packages.some((entry) => entry.name === "chromadb"));
+  assert.ok(manifest.packages.some((entry) => entry.name === "playwright-core" && entry.nativeComponent));
   for (const entry of manifest.packages) {
     assert.ok(APPROVED_LICENSE_EXPRESSIONS.includes(entry.license), `${entry.name} has ${entry.license}`);
     assert.ok(entry.licenseSources.length > 0, `${entry.name} has no license source`);

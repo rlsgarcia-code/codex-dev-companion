@@ -284,6 +284,40 @@
           "minimum": 30,
           "maximum": 2000,
           "description": "LangGraph recursion limit for the standard runtime. Deep Agent uses its own high native limit and compaction behavior."
+        },
+        "codexDevCompanion.localBrowserToolsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Expose approval-gated LangChain tools for inspecting and visually checking applications on localhost. Non-loopback browser traffic is blocked."
+        },
+        "codexDevCompanion.localBrowserChannel": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "msedge",
+            "chrome"
+          ],
+          "enumDescriptions": [
+            "Try the installed browser most common on this operating system, then the other supported browser.",
+            "Use an installed Microsoft Edge.",
+            "Use an installed Google Chrome."
+          ],
+          "default": "auto",
+          "scope": "machine",
+          "description": "Installed browser used for local app validation. The extension never downloads a browser."
+        },
+        "codexDevCompanion.localBrowserExecutablePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional absolute path to a corporate Chromium-based browser. Leave blank to find installed Edge or Chrome automatically."
+        },
+        "codexDevCompanion.localBrowserOpenPreview": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Ask VS Code to open the same localhost URL for the user when the agent starts an isolated validation session. VS Code 1.109+ opens localhost links in the integrated browser by default."
         }
       }
     }
@@ -313,6 +347,7 @@
     "chromadb": "^3.5.0",
     "deepagents": "^1.15.0",
     "langchain": "^1.5.16",
+    "playwright-core": "^1.58.2",
     "undici": "^6.29.0",
     "zod": "^4.6.7"
   },

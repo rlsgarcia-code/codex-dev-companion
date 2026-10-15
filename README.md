@@ -41,6 +41,8 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Central de memória na sidebar para consultar, adicionar, editar e excluir entradas duráveis, abrir a fonte Markdown e compreender o modo de recuperação ativo.
 - Planejamento apresentado na própria sidebar.
 - Ferramentas locais para listar, pesquisar e ler arquivos sob demanda.
+- Validação de aplicações locais em navegador isolado: abre a URL de `localhost` para acompanhamento no VS Code, inspeciona texto/controles/console, interage por referências estáveis e produz uma análise visual opcional pelo mesmo modelo LiteLLM.
+- Automação sem instalação de navegador: usa `playwright-core` com Edge ou Chrome já presente na máquina, sem download de Chromium, `node-gyp`, serviço do sistema ou privilégio administrativo.
 - Edição por substituição exata e criação de arquivos, sempre dentro do workspace.
 - Execução de comandos sem shell e sempre com confirmação modal do usuário, estado de aprovação visível na atividade, aviso destacado para ações destrutivas e ambiente sem a chave LiteLLM.
 - Política limitada para globs controlados pelo modelo: brace expansion é recusada e tamanho, operadores e segmentos são limitados antes dos matchers de filesystem.
@@ -267,6 +269,21 @@ O Deep Agent não pode excluir silenciosamente um caminho em nenhum modo: cada c
 
 No modo **Plan only**, ferramentas de escrita, memória e execução de comandos não são disponibilizadas. No Deep Agent, o middleware de filesystem também aplica permissão de escrita negada como defesa adicional.
 
+### Conferência de aplicações locais
+
+Para permitir que o agente confira uma interface que está rodando na raiz do projeto:
+
+1. Inicie a aplicação normalmente ou peça ao agente para executar o comando local, aprovando-o no modal do VS Code.
+2. Informe a URL, por exemplo: “abra `http://localhost:3000`, teste o formulário e confira visualmente o resultado”.
+3. Aprove **Allow local browser session**. A autorização vale para a sessão isolada e é revogada por `browser_close`, mudança de configuração ou encerramento do Extension Host.
+4. A mesma URL é aberta para acompanhamento. No VS Code 1.109 ou posterior, mantenha `workbench.browser.openLocalhostLinks` habilitado para que links locais apareçam no navegador integrado.
+
+O agente recebe ferramentas LangChain para abrir, inspecionar, clicar, preencher campos que não sejam de senha, selecionar opções, pressionar teclas, alterar o viewport, recarregar, voltar, capturar a tela e encerrar a sessão. DOM, texto visível, console e a captura solicitada passam somente pelo endpoint LiteLLM já configurado; a análise da imagem requer que o alias selecionado aceite conteúdo multimodal em Chat Completions. Se o modelo rejeitar imagens, a inspeção estrutural continua disponível.
+
+A sessão usa perfil efêmero, bloqueia downloads, service workers, campos de senha e qualquer requisição HTTP, HTTPS ou WebSocket que não seja loopback. Recursos externos usados pela página, como fontes ou scripts em CDN, aparecem em `blockedRequests` e precisam ser servidos localmente para essa validação. A última captura fica no armazenamento privado da extensão e é substituída na próxima conferência; ao fechar a sessão, ela é apagada.
+
+Em **Plan only**, o agente pode abrir, inspecionar e capturar a aplicação, mas não recebe a ferramenta de interação. Defina `codexDevCompanion.localBrowserToolsEnabled` como `false` para remover completamente essas ferramentas do runtime.
+
 ## Desenvolvimento
 
 ```bash
@@ -336,6 +353,10 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 | `codexDevCompanion.embeddingModel` | vazio | Alias LiteLLM usado em `POST /embeddings`; vazio mantém somente memória textual. |
 | `codexDevCompanion.semanticMemoryResults` | `5` | Número máximo de chunks relevantes recuperados por turno. |
 | `codexDevCompanion.standardRecursionLimit` | `200` | Limite LangGraph do runtime padrão; o Deep Agent usa o limite nativo alto. |
+| `codexDevCompanion.localBrowserToolsEnabled` | `true` | Disponibiliza ferramentas LangChain, protegidas por aprovação, para aplicações em loopback. |
+| `codexDevCompanion.localBrowserChannel` | `auto` | Usa Edge primeiro no Windows e Chrome primeiro nas demais plataformas, com fallback entre ambos. |
+| `codexDevCompanion.localBrowserExecutablePath` | vazio | Caminho absoluto opcional para um navegador Chromium corporativo já instalado. |
+| `codexDevCompanion.localBrowserOpenPreview` | `true` | Abre para o usuário a mesma URL local que está sendo validada na sessão isolada. |
 
 O prefixo `codexDevCompanion` foi mantido para que configurações e segredos de instalações anteriores continuem válidos.
 
@@ -360,7 +381,8 @@ VS Code Secondary Sidebar
             │     ├── list/search/read
             │     ├── edit/create
             │     ├── approved command execution
-            │     └── plan/memory
+            │     ├── plan/memory
+            │     └── browser local aprovado ──► Chrome/Edge instalado ──► loopback
             │
             ├── HTTPS ──► LiteLLM POST /v1/chat/completions
             ├── HTTPS ──► LiteLLM POST /v1/embeddings (opcional)
@@ -379,5 +401,8 @@ VS Code Secondary Sidebar
 - A revisão detalhada cobre escritas feitas pelas ferramentas de arquivo. Comandos aprovados podem alterar arquivos adicionais; o Source Control continua sendo a visão completa do workspace.
 - A memória semântica requer que o gateway disponibilize um modelo compatível com a API OpenAI de embeddings.
 - O pacote VSIX é específico de plataforma por conter o binário local do ChromaDB.
+- A automação visual precisa de Edge, Chrome ou outro Chromium configurado já instalado no host do Extension Host. Políticas corporativas do navegador ainda podem impedir inicialização ou automação mesmo sem exigir privilégio administrativo.
+- A aba exibida no navegador integrado e a sessão automatizada carregam a mesma URL, mas não compartilham cookies, login ou armazenamento. A sessão do agente é deliberadamente efêmera e isolada.
+- A interpretação visual exige um modelo multimodal. Modelos somente de texto ainda podem validar DOM, controles, console e erros de página.
 - O inventário de terceiros é derivado do bundle no momento do build; consulte `dist/licenses/third-party-manifest.json` para versões, licenças, fontes e alertas de conformidade exatos do pacote gerado.
 - Não há suporte a ferramentas hospedadas, web search, MCP remoto ou execução em nuvem.

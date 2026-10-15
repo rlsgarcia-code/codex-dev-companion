@@ -58,6 +58,10 @@ A extensão declara que workspaces não confiáveis não são suportados. Antes 
 
 O cancelamento é propagado pelo mesmo `AbortSignal` para chamadas do modelo, embeddings e ferramentas que executam comandos. A interface distingue a solicitação **Stopping…** do resultado confirmado **Run cancelled**, impede solicitações repetidas e verifica novamente o sinal antes de persistir uma resposta final. Operações locais que já entraram em uma chamada indivisível podem precisar retornar ao runtime antes da confirmação visual; não há encerramento forçado do processo do VS Code.
 
+As ferramentas de navegador exigem uma aprovação modal antes de iniciar cada origem de aplicação local. O transporte do navegador aceita somente `http`, `https`, `ws` e `wss` em endereços de loopback; requisições para outras origens são interrompidas e reportadas sem caminho ou query. O contexto é efêmero, service workers e downloads ficam desabilitados e a ferramenta de preenchimento recusa campos de senha. A extensão usa somente Edge, Chrome ou um executável Chromium explicitamente configurado que já esteja instalado; ela não baixa navegador nem instala dependências de sistema.
+
+Texto visível, metadados de controles, console e screenshots são dados do projeto enviados ao alias LiteLLM configurado quando o agente usa essas ferramentas. O modal explica esse limite antes da autorização. Capturas são limitadas, sobrescritas no armazenamento privado local da extensão e apagadas ao encerrar a sessão; elas não entram no repositório, na memória durável nem no bundle de suporte. A janela exibida ao usuário e a sessão automatizada não compartilham cookies ou credenciais.
+
 ## Dependências e exceções temporárias
 
 O CI executa `npm run audit:prod` e bloqueia vulnerabilidades de produção `high` ou `critical`. Uma exceção só é aceita quando identifica o advisory e o pacote exatos, documenta a ausência de correção upstream, aponta uma mitigação verificável no código e possui prazo de expiração. A política versionada fica em `security-audit-exceptions.json`; ao expirar, o gate volta a falhar até que o risco seja removido ou revisto explicitamente.

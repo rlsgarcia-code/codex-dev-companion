@@ -2,6 +2,9 @@
 
 ## 0.11.0
 
+- Added approval-gated LangChain browser tools for opening, inspecting, interacting with, and visually checking loopback applications while showing the same local URL to the user.
+- Keep browser validation local and installation-safe by using `playwright-core` with an already-installed Edge, Chrome, or configured Chromium executable; no browser download, lifecycle script, native build, or administrator access is attempted.
+- Isolate every browser session with ephemeral storage, blocked downloads and service workers, password-field refusal, loopback-only HTTP/WebSocket routing, bounded temporary screenshots, and explicit disclosure before page data is sent to the configured LiteLLM model.
 - Invoke the installed VSCE CLI directly through Node during local packaging, avoiding the Windows `spawnSync("npx.cmd")` `EINVAL` failure, and print the generated VSIX's absolute path on success.
 - Separate end-user packaging from maintainer verification: `npm run package` now builds a VSIX without tests, local smoke servers, VS Code configuration, or LiteLLM credentials, while `npm run package:verified` retains the complete local release gate.
 - Allow the Windows packaging gate to run for standard corporate users without Developer Mode or symbolic-link privileges; symlink-specific security cases remain covered on Linux and macOS.

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import * as path from "node:path";
 import { rootCertificates } from "node:tls";
@@ -16,6 +17,8 @@ import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import * as vscode from "vscode";
 import { z } from "zod";
 import { requiresLocalApproval } from "./autonomy";
+import { LocalBrowserSession } from "./browser";
+import type { LocalBrowserChannel } from "./browser-policy";
 import { readImportedGatewayCa, storeImportedGatewayCa } from "./certificate";
 import { ChangeReviewManager } from "./change-review";
 import type { ChangeTracker } from "./change-tracker";
@@ -98,6 +101,8 @@ export class DevelopmentAgent implements vscode.Disposable {
   private activeRunId: string | undefined;
   private runHeartbeat: ReturnType<typeof setInterval> | undefined;
   private isRunning = false;
+  private browserSession: LocalBrowserSession | undefined;
+  private browserSessionKey: string | undefined;
 
   public constructor(
     private readonly extensionContext: vscode.ExtensionContext,
@@ -471,14 +476,39 @@ export class DevelopmentAgent implements vscode.Disposable {
           )
         }
       });
+      const usage = new TokenUsageHandler();
+      const browserSession = this.localBrowserSession(workspace.uri.fsPath, configuration, onEvent, sensitiveValues);
       const toolHost = new LocalToolHost(
         workspace.uri.fsPath,
         this.memory,
         onEvent,
         changeTracker,
-        sensitiveValues
+        sensitiveValues,
+        browserSession,
+        browserSession
+          ? async ({ bytes, mimeType, question, signal }) => {
+              onEvent({ type: "status", label: "Reviewing local app screenshot" });
+              try {
+                const result = await model.invoke([
+                  new HumanMessage({
+                    content: [
+                      { type: "text", text: question },
+                      {
+                        type: "image_url",
+                        image_url: { url: `data:${mimeType};base64,${bytes.toString("base64")}` }
+                      }
+                    ]
+                  })
+                ], { signal, callbacks: [usage] });
+                const analysis = result.text.trim();
+                if (!analysis) throw new Error("The selected model returned no visual analysis.");
+                return redactSensitiveText(analysis, sensitiveValues);
+              } finally {
+                onEvent({ type: "status", label: `${agentRuntimeLabel(runtime)} is thinking` });
+              }
+            }
+          : undefined
       );
-      const usage = new TokenUsageHandler();
       let projectMemory = safeMemoryText.slice(-12_000);
       let memoryReceipt: AgentContextReceipt["memory"] = {
         mode: "recent",
@@ -557,7 +587,7 @@ export class DevelopmentAgent implements vscode.Disposable {
             new HumanMessage(request)
           ]
         : [new HumanMessage(request)];
-      const systemPrompt = this.systemPrompt(mode, projectMemory, runtime, context);
+      const systemPrompt = this.systemPrompt(mode, projectMemory, runtime, context, Boolean(browserSession));
       controller.signal.throwIfAborted();
 
       onEvent({ type: "status", label: `${agentRuntimeLabel(runtime)} is thinking` });
@@ -822,6 +852,7 @@ export class DevelopmentAgent implements vscode.Disposable {
   public dispose(): void {
     this.cancel();
     this.stopRunHeartbeat();
+    this.browserSession?.dispose();
     this.semanticMemory.dispose();
   }
 
@@ -975,7 +1006,13 @@ export class DevelopmentAgent implements vscode.Disposable {
     });
   }
 
-  private systemPrompt(mode: RunMode, memory: string, runtime: AgentRuntime, context: string): string {
+  private systemPrompt(
+    mode: RunMode,
+    memory: string,
+    runtime: AgentRuntime,
+    context: string,
+    browserEnabled: boolean
+  ): string {
     const operatingMode = mode === "plan"
       ? "PLAN ONLY: inspect and reason, but do not edit files, update memory, or run commands. Return a concrete implementation plan."
       : mode === "review"
@@ -991,10 +1028,15 @@ export class DevelopmentAgent implements vscode.Disposable {
       : `- Work from evidence. Inspect relevant workspace files before making claims or edits; use search_text before broad reading.
 - Manage context actively. Read only relevant files and use bounded line ranges.
 - Use edit_file for small exact replacements and create_file only for new files.`;
+    const browserGuidance = browserEnabled
+      ? `- For a visible localhost application, use browser_open and browser_inspect to verify behavior from evidence. After meaningful UI changes, use browser_visual_check when the selected model supports images. Use element references from the latest inspection for browser_interact. Never claim visual success from source code alone.
+- Browser tools are limited to loopback applications, require explicit session approval, and must not be used to seek internet access or enter passwords.`
+      : "- Local browser validation is disabled for this workspace. Do not claim that you opened, interacted with, or visually verified the application.";
     return `You are a senior development-support agent embedded locally in Visual Studio Code.
 
 Operating rules:
 ${toolGuidance}
+${browserGuidance}
 - For non-trivial work, call update_plan before implementation and keep it current.
 - All file operations must remain inside the opened workspace.
 - ${commandGuidance}
@@ -1012,6 +1054,42 @@ ${context}
 
 Project memory:
 ${memory}`;
+  }
+
+  private localBrowserSession(
+    workspaceRoot: string,
+    configuration: vscode.WorkspaceConfiguration,
+    onEvent: (event: AgentUiEvent) => void,
+    sensitiveValues: readonly string[]
+  ): LocalBrowserSession | undefined {
+    const enabled = configuration.get<boolean>("localBrowserToolsEnabled", true);
+    if (!enabled) {
+      this.browserSession?.dispose();
+      this.browserSession = undefined;
+      this.browserSessionKey = undefined;
+      return undefined;
+    }
+    const channel = parseLocalBrowserChannel(configuration.get("localBrowserChannel"));
+    const executablePath = configuration.get<string>("localBrowserExecutablePath", "").trim();
+    const openPreview = configuration.get<boolean>("localBrowserOpenPreview", true);
+    const sessionKey = JSON.stringify({ workspaceRoot, channel, executablePath, openPreview });
+    if (this.browserSession && this.browserSessionKey === sessionKey) {
+      this.browserSession.setEventSink(onEvent);
+      this.browserSession.setSanitizer((value) => redactSensitiveText(value, sensitiveValues));
+      return this.browserSession;
+    }
+    this.browserSession?.dispose();
+    const workspaceHash = createHash("sha256").update(path.resolve(workspaceRoot)).digest("hex").slice(0, 16);
+    this.browserSession = new LocalBrowserSession({
+      storageRoot: path.join(this.extensionContext.globalStorageUri.fsPath, "browser", workspaceHash),
+      channel,
+      ...(executablePath ? { executablePath } : {}),
+      openPreview,
+      onEvent,
+      sanitizeText: (value) => redactSensitiveText(value, sensitiveValues)
+    });
+    this.browserSessionKey = sessionKey;
+    return this.browserSession;
   }
 
   private conversationStorageKey(): string {
@@ -1113,6 +1191,10 @@ function finalAssistantText(messages: BaseMessage[]): string {
     if (message?.type === "ai" && message.text.trim()) return message.text.trim();
   }
   return "";
+}
+
+function parseLocalBrowserChannel(value: unknown): LocalBrowserChannel {
+  return value === "msedge" || value === "chrome" ? value : "auto";
 }
 
 async function runDiagnostic(

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import test from "node:test";
 import {
   nativePackageName,
   nativeTarget,
   packageArguments,
-  packageInvocation
+  packageInvocation,
+  verifyPackagedBrowserRuntime
 } from "../scripts/package-native.mjs";
 
 test("maps every supported build host to an explicit VSIX target", () => {
@@ -53,4 +57,24 @@ test("invokes the local VSCE CLI through Node without a shell or npx shim", () =
     "codex-dev-companion-0.11.0-win32-x64.vsix"
   ]);
   assert.doesNotMatch(invocation.args.join(" "), /npx(?:\.cmd)?/i);
+});
+
+test("requires the browser controller to be copied into the distributable", async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "local-companion-package-"));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const runtimeRoot = path.join(projectRoot, "dist", "node_modules", "playwright-core");
+  for (const relativePath of [
+    "package.json",
+    "index.js",
+    "browsers.json",
+    path.join("lib", "server", "browserType.js"),
+    "LICENSE"
+  ]) {
+    const target = path.join(runtimeRoot, relativePath);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, "test", "utf8");
+  }
+  assert.equal(verifyPackagedBrowserRuntime(projectRoot), runtimeRoot);
+  await rm(path.join(runtimeRoot, "browsers.json"));
+  assert.throws(() => verifyPackagedBrowserRuntime(projectRoot), /runtime is incomplete: browsers\.json/);
 });
