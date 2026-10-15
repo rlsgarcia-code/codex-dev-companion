@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { evaluateAuditReport } from "../scripts/audit-production.mjs";
+import { evaluateAuditReport, npmAuditInvocation } from "../scripts/audit-production.mjs";
 
 const report = {
   vulnerabilities: {
@@ -46,4 +46,25 @@ test("blocks missing, expired, mismatched, or unverifiable exceptions", () => {
   assert.equal(evaluateAuditReport(report, { exceptions: [{ ...exception, expires: "2026-01-01" }] }, new Date("2026-10-15T00:00:00Z")).blocking.length, 3);
   assert.equal(evaluateAuditReport(report, { exceptions: [{ ...exception, package: "other" }] }).blocking.length, 3);
   assert.equal(evaluateAuditReport(report, { exceptions: [{ ...exception, verification: "test/missing.test.ts" }] }).blocking.length, 3);
+});
+
+test("invokes npm audit without a shell on Windows and Unix", () => {
+  assert.deepEqual(npmAuditInvocation({
+    npmExecutable: "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+    nodeExecutable: "C:\\Program Files\\nodejs\\node.exe",
+    platform: "win32"
+  }), {
+    command: "C:\\Program Files\\nodejs\\node.exe",
+    args: [
+      "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js",
+      "audit",
+      "--omit=dev",
+      "--ignore-scripts",
+      "--json"
+    ]
+  });
+  assert.deepEqual(npmAuditInvocation({ npmExecutable: "", platform: "linux" }), {
+    command: "npm",
+    args: ["audit", "--omit=dev", "--ignore-scripts", "--json"]
+  });
 });

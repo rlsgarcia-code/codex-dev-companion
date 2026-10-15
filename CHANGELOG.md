@@ -6,6 +6,7 @@
 - Added a sanitized corporate-pilot checklist covering target-host compatibility, gateway and PEM setup, model profiles, Chroma, multi-window coordination, recovery, and privacy before stable promotion.
 - Updated the official VS Code packaging tool to its corrected major release, leaving only the separately mitigated Deep Agent glob advisory in the production audit policy.
 - Made local packaging platform-explicit: supported hosts now produce a versioned target-specific VSIX and unsupported hosts fail instead of emitting a misleading universal package containing a native Chroma binary.
+- Made the production audit gate invoke npm through its Node CLI path so the same checked policy runs reliably on Windows, macOS, and Linux without shell interpolation.
 - Mitigated `GHSA-vfj7-8cjw-p6xm` at every model-controlled glob boundary by rejecting brace expansion and bounding pattern length, operators, and path segments before filesystem matchers run.
 - Added a CI production-dependency audit with explicit, expiring, verification-backed exceptions; unknown, mismatched, unverifiable, or expired high/critical findings fail the build.
 - Added bounded, local repository-guidance discovery for applicable `AGENTS.md`, `.github/copilot-instructions.md`, `CONTRIBUTING.md`, and `README.md`, prioritizing nearer active-file instructions and refusing symlinks outside the workspace.

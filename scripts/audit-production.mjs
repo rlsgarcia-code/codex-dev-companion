@@ -2,6 +2,26 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+const AUDIT_ARGUMENTS = ["audit", "--omit=dev", "--ignore-scripts", "--json"];
+
+export function npmAuditInvocation({
+  npmExecutable = process.env.npm_execpath,
+  nodeExecutable = process.execPath,
+  platform = process.platform,
+  commandInterpreter = process.env.ComSpec
+} = {}) {
+  if (typeof npmExecutable === "string" && npmExecutable.trim()) {
+    return { command: nodeExecutable, args: [npmExecutable.trim(), ...AUDIT_ARGUMENTS] };
+  }
+  if (platform === "win32") {
+    return {
+      command: commandInterpreter?.trim() || "cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd", ...AUDIT_ARGUMENTS]
+    };
+  }
+  return { command: "npm", args: AUDIT_ARGUMENTS };
+}
+
 export function evaluateAuditReport(report, policy, now = new Date()) {
   const vulnerabilities = isRecord(report?.vulnerabilities) ? report.vulnerabilities : {};
   const exceptions = Array.isArray(policy?.exceptions) ? policy.exceptions : [];
@@ -64,13 +84,14 @@ function isRecord(value) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(npm, ["audit", "--omit=dev", "--ignore-scripts", "--json"], {
+  const invocation = npmAuditInvocation();
+  const result = spawnSync(invocation.command, invocation.args, {
     encoding: "utf8",
     maxBuffer: 10_000_000
   });
   if (!result.stdout?.trim()) {
-    process.stderr.write(result.stderr || "npm audit returned no JSON report.\n");
+    const detail = result.error?.message || result.stderr || "npm audit returned no JSON report.";
+    process.stderr.write(`${detail.trim()}\n`);
     process.exit(1);
   }
   let report;
