@@ -2,6 +2,7 @@
 
 ## 0.11.0
 
+- Restricted provider transport to exact configured HTTPS Chat Completions and embeddings routes, POST-only with redirects disabled, and disabled redirects for the explicit model catalog so gateway credentials cannot be forwarded to an unconfigured destination.
 - Extended real Extension Host and packaged-VSIX activation gates to Windows x64, matching the primary corporate pilot platform instead of relying only on Linux execution.
 - Added a packaged-artifact gate that installs the generated VSIX into a clean VS Code profile, verifies the loaded copy came from that installation, and exercises activation and core commands so source-mode tests cannot mask an incomplete distributable.
 - Made the production dependency audit fail closed when npm returns a network error or incomplete JSON instead of misreporting an unavailable registry as zero findings, and reject exceptions after their matching advisory disappears.

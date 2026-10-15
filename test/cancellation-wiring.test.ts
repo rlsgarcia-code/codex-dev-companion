@@ -27,7 +27,7 @@ test("keeps the single signal unchanged and allows an absent signal", () => {
 
 test("propagates cancellation through context, embeddings, tools, and model execution", () => {
   assert.match(agent, /controller\.signal\.throwIfAborted\(\)/);
-  assert.match(agent, /gatewayFetch\(authentication\.stripAuthorization, dispatcher, controller\.signal\)/);
+  assert.match(agent, /gatewayFetch\([\s\S]*authentication\.stripAuthorization,[\s\S]*dispatcher,[\s\S]*controller\.signal/);
   assert.match(agent, /signal: controller\.signal/);
   assert.match(agent, /if \(controller\.signal\.aborted\) throw error/);
   assert.match(semanticMemory, /options\.signal\?\.throwIfAborted\(\)/);

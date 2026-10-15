@@ -28,10 +28,12 @@ import { requestLocalApproval } from "./local-approval";
 import {
   chatCompletionsBaseUrl,
   chatCompletionsModelOptions,
+  chatCompletionsUrl,
   embeddingsBaseUrl,
+  embeddingsUrl,
   LITELLM_API_KEY_SECRET,
   liteLlmModelProfile,
-  liteLlmModelsRequestHeaders,
+  liteLlmModelsRequestInit,
   normalizeLiteLlmModelsEndpoint,
   openAiClientAuthentication,
   parseLiteLlmModelsResponse,
@@ -223,9 +225,16 @@ export class DevelopmentAgent implements vscode.Disposable {
     const dispatcher = certificateAuthorities
       ? new UndiciAgent({ connect: { ca: certificateAuthorities } })
       : undefined;
-    const fetch = dispatcher || authentication.stripAuthorization
-      ? gatewayFetch(authentication.stripAuthorization, dispatcher)
-      : undefined;
+    const chatFetch = gatewayFetch(
+      chatCompletionsUrl(connection),
+      authentication.stripAuthorization,
+      dispatcher
+    );
+    const embeddingFetch = gatewayFetch(
+      embeddingsUrl(connection),
+      authentication.stripAuthorization,
+      dispatcher
+    );
     const diagnostics: ConnectionDiagnostic[] = [];
 
     try {
@@ -262,7 +271,7 @@ export class DevelopmentAgent implements vscode.Disposable {
             ...(authentication.defaultHeaders
               ? { defaultHeaders: authentication.defaultHeaders }
               : {}),
-            ...(fetch ? { fetch } : {})
+            fetch: chatFetch
           }
         });
         const connectionProbe = tool(
@@ -292,7 +301,7 @@ export class DevelopmentAgent implements vscode.Disposable {
               ...(authentication.defaultHeaders
                 ? { defaultHeaders: authentication.defaultHeaders }
                 : {}),
-              ...(fetch ? { fetch } : {})
+              fetch: embeddingFetch
             }
           });
           const vector = await embeddings.embedQuery("Local Dev Companion connection diagnostic");
@@ -321,11 +330,12 @@ export class DevelopmentAgent implements vscode.Disposable {
     dispatcher?: UndiciAgent
   ): Promise<string[]> {
     const response = await undiciFetch(endpoint, {
-      method: "GET",
-      headers: liteLlmModelsRequestHeaders(apiKey),
-      signal: AbortSignal.timeout(15_000),
+      ...liteLlmModelsRequestInit(apiKey, AbortSignal.timeout(15_000)),
       ...(dispatcher ? { dispatcher } : {})
-    });
+    } as never);
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error("Models endpoint returned a redirect. Configure its final HTTPS URL; redirects are disabled.");
+    }
     if (!response.ok) {
       throw new Error(`Models endpoint returned HTTP ${response.status}.`);
     }
@@ -453,9 +463,12 @@ export class DevelopmentAgent implements vscode.Disposable {
           ...(authentication.defaultHeaders
             ? { defaultHeaders: authentication.defaultHeaders }
             : {}),
-          ...(dispatcher || authentication.stripAuthorization
-            ? { fetch: gatewayFetch(authentication.stripAuthorization, dispatcher, controller.signal) }
-            : {})
+          fetch: gatewayFetch(
+            chatCompletionsUrl(connection),
+            authentication.stripAuthorization,
+            dispatcher,
+            controller.signal
+          )
         }
       });
       const toolHost = new LocalToolHost(
@@ -484,7 +497,12 @@ export class DevelopmentAgent implements vscode.Disposable {
             embeddingsBaseUrl: embeddingsBaseUrl(connection),
             apiKey: authentication.apiKey,
             defaultHeaders: authentication.defaultHeaders,
-            fetch: gatewayFetch(authentication.stripAuthorization, dispatcher, controller.signal),
+            fetch: gatewayFetch(
+              embeddingsUrl(connection),
+              authentication.stripAuthorization,
+              dispatcher,
+              controller.signal
+            ),
             results: configuration.get<number>("semanticMemoryResults", 5),
             signal: controller.signal
           });

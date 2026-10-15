@@ -8,8 +8,10 @@ import {
   chatCompletionsUrl,
   detectLiteLlmModelPreset,
   embeddingsBaseUrl,
+  embeddingsUrl,
   liteLlmModelProfile,
   liteLlmModelsRequestHeaders,
+  liteLlmModelsRequestInit,
   normalizeLiteLlmEndpoint,
   normalizeLiteLlmModelsEndpoint,
   openAiClientAuthentication,
@@ -148,6 +150,14 @@ test("normalizes and parses the authenticated model catalog", () => {
     "Cache-Control": "no-cache",
     "api-key": "secret"
   });
+  const catalogRequest = liteLlmModelsRequestInit(" secret ");
+  assert.equal(catalogRequest.method, "GET");
+  assert.equal(catalogRequest.redirect, "manual");
+  assert.deepEqual(catalogRequest.headers, {
+    Accept: "application/json",
+    "Cache-Control": "no-cache",
+    "api-key": "secret"
+  });
   assert.deepEqual(parseLiteLlmModelsResponse({
     data: [{ id: "gpt-6-luna" }, { model: "claude-opus-4-8" }, { id: "gpt-6-luna" }]
   }), ["claude-opus-4-8", "gpt-6-luna"]);
@@ -163,6 +173,10 @@ test("derives the embeddings route from the same LiteLLM base URL", () => {
   assert.equal(
     embeddingsBaseUrl({ endpoint: "https://gateway.example.com/litellm" }),
     "https://gateway.example.com/litellm"
+  );
+  assert.equal(
+    embeddingsUrl({ endpoint: "https://gateway.example.com/proxy/chat/completions" }),
+    "https://gateway.example.com/proxy/embeddings"
   );
 });
 

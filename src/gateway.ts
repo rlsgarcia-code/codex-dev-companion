@@ -1,5 +1,10 @@
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 
+export type GatewayTransport = (
+  input: RequestInfo | URL,
+  init?: RequestInit & { dispatcher?: UndiciAgent }
+) => Promise<Response>;
+
 export function combinedAbortSignal(
   requestSignal?: AbortSignal | null,
   runSignal?: AbortSignal
@@ -12,22 +17,53 @@ export function combinedAbortSignal(
 }
 
 export function gatewayFetch(
+  allowedUrl: string,
   stripAuthorization: boolean,
   dispatcher: UndiciAgent | undefined,
-  runSignal?: AbortSignal
+  runSignal?: AbortSignal,
+  transport: GatewayTransport = undiciFetch as unknown as GatewayTransport
 ): typeof globalThis.fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    validateGatewayRequest(input, init, allowedUrl);
     const headers = new Headers(
       init?.headers ?? (input instanceof Request ? input.headers : undefined)
     );
     const requestSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const signal = combinedAbortSignal(requestSignal, runSignal);
     if (stripAuthorization) headers.delete("authorization");
-    return await undiciFetch(input as never, {
+    const response = await transport(input, {
       ...init,
       headers,
+      redirect: "manual",
       ...(signal ? { signal } : {}),
       ...(dispatcher ? { dispatcher } : {})
-    } as never) as unknown as Response;
+    });
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error("The configured LiteLLM route returned a redirect. Configure its final HTTPS URL; redirects are disabled.");
+    }
+    return response;
   }) as typeof globalThis.fetch;
+}
+
+export function validateGatewayRequest(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  allowedUrl: string
+): void {
+  const target = new URL(input instanceof Request ? input.url : input.toString());
+  const allowed = new URL(allowedUrl);
+  if (
+    target.protocol !== "https:" ||
+    target.username ||
+    target.password ||
+    target.search ||
+    target.hash ||
+    target.href !== allowed.href
+  ) {
+    throw new Error("Blocked a provider request outside the configured LiteLLM route.");
+  }
+  const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  if (method !== "POST") {
+    throw new Error("Blocked a non-POST request to the configured LiteLLM model route.");
+  }
 }

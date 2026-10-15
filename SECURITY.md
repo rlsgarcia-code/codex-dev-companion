@@ -34,6 +34,8 @@ São especialmente relevantes:
 
 A chave configurada permanece no Secret Storage do VS Code. Antes de exibir ou devolver dados operacionais ao modelo, a extensão remove localmente a chave conhecida e padrões reconhecíveis de cabeçalhos de autenticação, credenciais em URLs, tokens, senhas e chaves privadas. A mesma proteção cobre diagnósticos, falhas de ferramentas e saídas de comandos, e a memória durável recusa conteúdo detectado como credencial.
 
+O transporte do modelo aceita somente `POST` para as rotas HTTPS exatas de Chat Completions e embeddings derivadas do gateway configurado. Query strings, credenciais na URL, outra origem, outro caminho, outro método e redirects são bloqueados antes da chamada. O catálogo usa somente o endpoint HTTPS explícito, `GET`, `Cache-Control: no-cache` e `api-key`, também sem seguir redirects. Isso impede que uma resposta 3xx encaminhe a chave para uma origem não configurada.
+
 Essa filtragem é defesa em profundidade, não um detector universal de segredos. Não cole credenciais em mensagens, arquivos de contexto ou comandos; revogue imediatamente qualquer segredo que possa ter sido exposto.
 
 A central de memória aplica a mesma filtragem antes de renderizar entradas, não preenche um formulário de edição com conteúdo detectado como credencial e recusa novas entradas sensíveis ou maiores que o limite local. Inclusões, edições e exclusões pela central são bloqueadas enquanto qualquer janela mantém uma execução ativa no workspace; exclusões também exigem confirmação modal.

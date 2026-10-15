@@ -184,6 +184,15 @@ export function liteLlmModelsRequestHeaders(apiKey: string): Record<string, stri
   };
 }
 
+export function liteLlmModelsRequestInit(apiKey: string, signal?: AbortSignal): RequestInit {
+  return {
+    method: "GET",
+    headers: liteLlmModelsRequestHeaders(apiKey),
+    redirect: "manual",
+    ...(signal ? { signal } : {})
+  };
+}
+
 export function parseLiteLlmAuthHeader(value: unknown): LiteLlmAuthHeader {
   if (value === "api-key" || value === "ocp-apim-subscription-key") return value;
   return "authorization";
@@ -429,6 +438,10 @@ export function embeddingsBaseUrl(connection: Pick<LiteLlmConnection, "endpoint"
     .replace(/\/chat\/completions$/i, "")
     .replace(/\/embeddings$/i, "");
   return url.toString().replace(/\/$/, "");
+}
+
+export function embeddingsUrl(connection: Pick<LiteLlmConnection, "endpoint">): string {
+  return `${embeddingsBaseUrl(connection)}/embeddings`;
 }
 
 export function resolveWorkspaceCertificatePath(
