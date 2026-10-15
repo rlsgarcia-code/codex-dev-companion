@@ -13,6 +13,7 @@ npm ci --ignore-scripts
 npm run check
 npm run build
 npm test
+npm run audit:prod
 npm run test:extension-host
 npm run smoke:litellm
 npm run smoke:chroma
@@ -20,7 +21,11 @@ npm run smoke:chroma
 
 `test:extension-host` usa a infraestrutura oficial do VS Code, baixa a versão mínima suportada na primeira execução e abre um perfil isolado do Extension Development Host. Ele confirma ativação, registro de comandos e os fluxos de abrir a sidebar, criar thread e abrir a configuração sem chave ou chamada ao gateway. Defina `VSCODE_EXECUTABLE_PATH` para reutilizar um executável de teste específico ou `VSCODE_TEST_VERSION` para validar outra versão.
 
+Depois de `npm run package`, execute `npm run test:vsix-install -- ./codex-dev-companion-<versão>-<plataforma>.vsix`. Esse segundo teste instala o artefato em um perfil vazio e confirma que a extensão carregada veio desse diretório de instalação, evitando que o código-fonte do Extension Development Host mascare um VSIX incompleto. O CI e o workflow de release executam esse gate no pacote Linux x64.
+
 Os smoke tests criam somente serviços temporários em `127.0.0.1`. O teste de Chat Completions usa prompts de diagnóstico que não alteram arquivos; o teste do Chroma grava apenas em um diretório temporário, valida heartbeat/versão e confirma o encerramento do processo nativo.
+
+`audit:prod` consulta o registro npm e falha fechado se o relatório estiver indisponível ou incompleto. Achados altos ou críticos exigem correção ou uma exceção documentada, com vencimento e teste de mitigação; uma exceção que deixou de corresponder a um achado também bloqueia o gate até ser removida.
 
 O build gera o inventário de terceiros em `dist/licenses/` a partir do metafile do esbuild. Uma dependência nova só pode ser empacotada depois que sua expressão SPDX e seu texto de licença forem reconhecidos. Não edite os arquivos gerados manualmente; documente uma exceção em `licenses/overrides/` e no gerador quando o pacote npm declarar a licença, mas omitir o texto.
 
@@ -53,12 +58,12 @@ Consulte `AGENTS.md` antes de alterar agente, modelo, ferramentas, middleware, c
 4. Não inclua `dist/`, `dist-tests/`, certificados, banco Chroma local ou arquivos `.vsix` no commit.
 5. Use o centro **Review run** e o Source Control para conferir todas as alterações antes do commit.
 
-O CI repete type-check, testes, smoke local e empacotamento em macOS arm64/x64, Linux arm64/x64 e Windows x64. A matriz Linux x64 também executa a extensão dentro de um Extension Host real do VS Code.
+O CI repete type-check, testes, smoke local e empacotamento em macOS arm64/x64, Linux arm64/x64 e Windows x64. A matriz Linux x64 também executa a extensão dentro de um Extension Host real do VS Code e instala/ativa o VSIX final em um segundo perfil isolado.
 
 ## Releases
 
 1. Atualize a versão em `package.json` e `package-lock.json` e crie a seção correspondente em `CHANGELOG.md`.
-2. Execute `npm run package` e confira o VSIX local com sufixo de plataforma; pacotes que contêm o Chroma nativo nunca devem ser distribuídos como universais.
+2. Execute `npm run audit:prod` e `npm run package`; confira o VSIX local com sufixo de plataforma. Pacotes que contêm o Chroma nativo nunca devem ser distribuídos como universais.
 3. Execute `docs/CORPORATE-PILOT.md` na máquina e rede de destino e registre somente o retorno sanitizado.
 4. Faça commit e envie `main` somente depois que o CI estiver verde e o piloto não tiver bloqueadores.
 5. Crie e envie uma tag anotada com a mesma versão, por exemplo `git tag -a v0.12.0 -m "Local Dev Companion 0.12.0"` e `git push origin v0.12.0`.

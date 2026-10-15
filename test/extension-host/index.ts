@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as path from "node:path";
 import * as vscode from "vscode";
 
 const EXTENSION_ID = "local.codex-dev-companion";
@@ -32,6 +33,24 @@ export async function run(): Promise<void> {
 
   const extension = vscode.extensions.getExtension(EXTENSION_ID);
   assert.ok(extension, `${EXTENSION_ID} must be discoverable by the Extension Host`);
+  const expectedSource = process.env.LDC_EXPECTED_EXTENSION_SOURCE;
+  const expectedRoot = process.env.LDC_EXPECTED_EXTENSION_ROOT;
+  assert.ok(
+    expectedSource === "development" || expectedSource === "installed",
+    "the integration launcher must declare the expected extension source"
+  );
+  assert.ok(expectedRoot, "the integration launcher must declare the expected extension root");
+  const actualExtensionPath = path.resolve(extension.extensionPath);
+  const resolvedExpectedRoot = path.resolve(expectedRoot);
+  if (expectedSource === "development") {
+    assert.equal(actualExtensionPath, resolvedExpectedRoot, "the source-mode test must load the checkout");
+  } else {
+    const relativeInstalledPath = path.relative(resolvedExpectedRoot, actualExtensionPath);
+    assert.ok(
+      relativeInstalledPath && !relativeInstalledPath.startsWith("..") && !path.isAbsolute(relativeInstalledPath),
+      "the packaged test must load the copy installed from the VSIX"
+    );
+  }
   assert.equal(extension.packageJSON.main, "./dist/extension.js");
   assert.equal(extension.packageJSON.capabilities?.untrustedWorkspaces?.supported, false);
 
@@ -62,5 +81,9 @@ export async function run(): Promise<void> {
   );
 
   assert.equal(extension.isActive, true, "sidebar commands must not deactivate or crash the extension");
-  console.log("VSCODE_EXTENSION_HOST_ACTIVATION_AND_COMMANDS_OK");
+  console.log(
+    expectedSource === "installed"
+      ? "VSCODE_PACKAGED_EXTENSION_INSTALL_AND_ACTIVATION_OK"
+      : "VSCODE_EXTENSION_HOST_ACTIVATION_AND_COMMANDS_OK"
+  );
 }

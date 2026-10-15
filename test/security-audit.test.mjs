@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { evaluateAuditReport, npmAuditInvocation } from "../scripts/audit-production.mjs";
+import {
+  evaluateAuditReport,
+  npmAuditInvocation,
+  validateAuditPolicy,
+  validateAuditReport
+} from "../scripts/audit-production.mjs";
 
 const report = {
   vulnerabilities: {
@@ -32,6 +37,7 @@ test("accepts a current advisory exception only with checked mitigation evidence
   const result = evaluateAuditReport(report, { exceptions: [exception] }, new Date("2026-10-15T00:00:00Z"));
   assert.deepEqual(result.blocking, []);
   assert.deepEqual(result.accepted.map((entry) => entry.package), ["braces", "micromatch", "deepagents"]);
+  assert.deepEqual(result.staleExceptions, []);
 });
 
 test("keeps the repository exception current and backed by existing tests", () => {
@@ -46,6 +52,37 @@ test("blocks missing, expired, mismatched, or unverifiable exceptions", () => {
   assert.equal(evaluateAuditReport(report, { exceptions: [{ ...exception, expires: "2026-01-01" }] }, new Date("2026-10-15T00:00:00Z")).blocking.length, 3);
   assert.equal(evaluateAuditReport(report, { exceptions: [{ ...exception, package: "other" }] }).blocking.length, 3);
   assert.equal(evaluateAuditReport(report, { exceptions: [{ ...exception, verification: "test/missing.test.ts" }] }).blocking.length, 3);
+});
+
+test("fails closed when npm audit returns an error or incomplete report", () => {
+  assert.match(validateAuditReport({
+    message: "request failed",
+    error: { summary: "registry unavailable", detail: "" }
+  }) ?? "", /registry unavailable/);
+  assert.match(validateAuditReport({ vulnerabilities: {} }) ?? "", /metadata/);
+  assert.match(validateAuditReport({ metadata: { vulnerabilities: {} } }) ?? "", /vulnerabilities object/);
+  assert.equal(validateAuditReport({
+    auditReportVersion: 2,
+    vulnerabilities: {},
+    metadata: { vulnerabilities: { high: 0, critical: 0, total: 0 } }
+  }), undefined);
+});
+
+test("reports stale exceptions when the audited advisory is no longer present", () => {
+  const result = evaluateAuditReport({ vulnerabilities: {} }, { exceptions: [exception] });
+  assert.deepEqual(result.blocking, []);
+  assert.deepEqual(result.accepted, []);
+  assert.deepEqual(result.staleExceptions, ["GHSA-vfj7-8cjw-p6xm"]);
+});
+
+test("rejects malformed, duplicated, expired, and unverifiable policy entries", () => {
+  const current = new Date("2026-10-15T00:00:00Z");
+  assert.equal(validateAuditPolicy({ version: 1, exceptions: [exception] }, current), undefined);
+  assert.match(validateAuditPolicy({ version: 2, exceptions: [] }, current) ?? "", /version 1/);
+  assert.match(validateAuditPolicy({ version: 1, exceptions: [{ ...exception, extra: true }] }, current) ?? "", /unknown field/);
+  assert.match(validateAuditPolicy({ version: 1, exceptions: [exception, exception] }, current) ?? "", /duplicate/);
+  assert.match(validateAuditPolicy({ version: 1, exceptions: [{ ...exception, expires: "2026-01-01" }] }, current) ?? "", /expired/);
+  assert.match(validateAuditPolicy({ version: 1, exceptions: [{ ...exception, verification: "test/missing.test.ts" }] }, current) ?? "", /missing verification/);
 });
 
 test("invokes npm audit without a shell on Windows and Unix", () => {

@@ -76,6 +76,10 @@ jobs:
           mkdir -p release
           npx --no-install vsce package --no-dependencies --target "${{ matrix.target }}" --out "release/codex-dev-companion-${GITHUB_REF_NAME#v}-${{ matrix.target }}.vsix"
 
+      - name: Install and activate the packaged VSIX in VS Code
+        if: matrix.target == 'linux-x64'
+        run: xvfb-run -a npm run test:vsix-install -- "release/codex-dev-companion-${GITHUB_REF_NAME#v}-linux-x64.vsix"
+
       - name: Upload native package
         uses: actions/upload-artifact@v7
         with:

@@ -98,6 +98,7 @@ npm ci --ignore-scripts
 npm test
 npm run test:extension-host
 npm run package
+npm run test:vsix-install -- ./codex-dev-companion-0.11.0-<plataforma>.vsix
 code --install-extension ./codex-dev-companion-0.11.0-<plataforma>.vsix
 ```
 
@@ -109,7 +110,7 @@ Cada build também produz `dist/licenses/third-party-manifest.json` e `dist/lice
 
 ### Pacotes verificados pelo CI
 
-Cada push para `main` e cada pull request executa type-check, testes, smoke local de Chat Completions e empacotamento em cinco ambientes nativos. No Linux x64, o CI também abre um perfil isolado do VS Code 1.106 e verifica ativação, comandos e os fluxos básicos da sidebar em um Extension Host real, sem credenciais nem chamada ao gateway:
+Cada push para `main` e cada pull request executa type-check, testes, smoke local de Chat Completions e empacotamento em cinco ambientes nativos. No Linux x64, o CI também abre um perfil isolado do VS Code 1.106 e verifica ativação, comandos e os fluxos básicos da sidebar em um Extension Host real, sem credenciais nem chamada ao gateway. Depois do empacotamento, instala o VSIX recém-gerado em outro perfil vazio, prova que a cópia carregada veio do diretório de extensões instaladas e repete a ativação e os fluxos básicos; assim o arquivo distribuído, e não apenas o código-fonte, faz parte do gate:
 
 - macOS arm64 e x64;
 - Linux arm64 e x64;

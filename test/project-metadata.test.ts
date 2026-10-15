@@ -43,6 +43,10 @@ test("keeps professional extension metadata and a valid package icon", () => {
     manifest.scripts?.["test:extension-host"],
     "npm run build && npm run compile:extension-host-tests && node scripts/run-extension-host-tests.mjs"
   );
+  assert.equal(
+    manifest.scripts?.["test:vsix-install"],
+    "npm run compile:extension-host-tests && node scripts/run-vsix-install-tests.mjs"
+  );
 
   const icon = readFileSync(manifest.icon);
   assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
@@ -66,7 +70,8 @@ test("CI verifies and packages every supported native target", () => {
     "npm run build",
     "xvfb-run -a npm run test:extension-host",
     "npm run smoke:chroma",
-    "vsce package --no-dependencies --target"
+    "vsce package --no-dependencies --target",
+    "xvfb-run -a npm run test:vsix-install -- codex-dev-companion-linux-x64.vsix"
   ]) {
     assert.ok(workflow.includes(command), `missing CI command: ${command}`);
   }
@@ -85,6 +90,7 @@ test("tagged releases publish a complete, immutable, checksummed native package 
     "scripts/verify-release-metadata.mjs",
     "npm run audit:prod",
     "xvfb-run -a npm run test:extension-host",
+    "xvfb-run -a npm run test:vsix-install --",
     "actions/download-artifact@v8",
     "SHA256SUMS.txt",
     "gh release create",

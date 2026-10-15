@@ -12,6 +12,10 @@ const profileRoot = await mkdtemp(path.join(shortTemporaryRoot, "ldc-vscode-"));
 const options = {
   extensionDevelopmentPath: projectRoot,
   extensionTestsPath: path.join(projectRoot, "dist-extension-tests", "index.js"),
+  extensionTestsEnv: {
+    LDC_EXPECTED_EXTENSION_SOURCE: "development",
+    LDC_EXPECTED_EXTENSION_ROOT: projectRoot
+  },
   launchArgs: [
     path.join(projectRoot, "test", "fixtures", "extension-host-workspace"),
     "--disable-extensions",
