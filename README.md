@@ -119,6 +119,8 @@ Cada push para `main` e cada pull request executa type-check, testes, smoke loca
 
 Os arquivos de validação ficam disponíveis nos artifacts da execução do GitHub Actions por 14 dias. Releases versionadas publicam permanentemente os cinco VSIX nativos e um arquivo de checksums na página de [Releases](https://github.com/rlsgarcia-code/codex-dev-companion/releases). O empacotamento local com `npm run package` continua gerando o VSIX somente para a máquina atual.
 
+O pipeline usa GitHub Actions fixadas por commit imutável. Atualizações de dependências npm e das próprias Actions chegam semanalmente como pull requests do Dependabot e precisam passar pela revisão e por todos os gates; não há atualização ou publicação automática da extensão.
+
 Antes de promover uma versão para uso amplo, execute o [roteiro de piloto corporativo](https://github.com/rlsgarcia-code/codex-dev-companion/blob/main/docs/CORPORATE-PILOT.md) na máquina e rede de destino. Ele cobre compatibilidade do Extension Host, gateway/PEM, modelos, Chroma, duas janelas, recuperação e privacidade, e inclui um formato de retorno que não expõe dados internos.
 
 ## Primeiro uso

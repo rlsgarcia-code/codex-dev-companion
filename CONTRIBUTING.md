@@ -60,6 +60,8 @@ Consulte `AGENTS.md` antes de alterar agente, modelo, ferramentas, middleware, c
 
 O CI repete type-check, testes, smoke local e empacotamento em macOS arm64/x64, Linux arm64/x64 e Windows x64. As matrizes Linux x64 e Windows x64 também executam a extensão dentro de um Extension Host real do VS Code e instalam/ativam o VSIX final em um segundo perfil isolado.
 
+Referências de GitHub Actions devem permanecer fixadas por SHA completo e conservar o comentário da versão principal, por exemplo `# v6`. O Dependabot abre pull requests semanais para npm e Actions; revise changelog, release upstream, licenças, auditoria e toda a matriz antes de aceitar uma atualização.
+
 ## Releases
 
 1. Atualize a versão em `package.json` e `package-lock.json` e crie a seção correspondente em `CHANGELOG.md`.

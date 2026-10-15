@@ -76,7 +76,8 @@ test("CI verifies and packages every supported native target", () => {
     assert.ok(workflow.includes(command), `missing CI command: ${command}`);
   }
   assert.match(workflow, /permissions:\s+contents: read/);
-  assert.match(workflow, /actions\/upload-artifact@v7/);
+  assert.match(workflow, /actions\/upload-artifact@[a-f0-9]{40} # v7/);
+  assertWorkflowActionsPinned(workflow);
   assert.match(workflow, /if: matrix\.target == 'linux-x64'[\s\S]*xvfb-run -a npm run test:extension-host/);
   assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:extension-host/);
   assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:vsix-install -- codex-dev-companion-win32-x64\.vsix/);
@@ -93,7 +94,7 @@ test("tagged releases publish a complete, immutable, checksummed native package 
     "npm run audit:prod",
     "xvfb-run -a npm run test:extension-host",
     "xvfb-run -a npm run test:vsix-install --",
-    "actions/download-artifact@v8",
+    "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8",
     "SHA256SUMS.txt",
     "gh release create",
     "is already published and will not be overwritten"
@@ -105,6 +106,7 @@ test("tagged releases publish a complete, immutable, checksummed native package 
   assert.match(workflow, /gh release edit[\s\S]*--draft=false/);
   assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:extension-host/);
   assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: \|[\s\S]*Get-Content package\.json[\s\S]*npm run test:vsix-install -- "release\/codex-dev-companion-\$version-win32-x64\.vsix"/);
+  assertWorkflowActionsPinned(workflow);
 });
 
 test("repository policy documents stay present", () => {
@@ -112,4 +114,17 @@ test("repository policy documents stay present", () => {
   assert.match(readFileSync("SECURITY.md", "utf8"), /Report a vulnerability/);
   assert.match(readFileSync("docs/CORPORATE-PILOT.md", "utf8"), /Critério de aprovação/);
   assert.match(readFileSync("docs/CORPORATE-PILOT.md", "utf8"), /Não acrescente chaves/);
+  const dependabot = readFileSync(".github/dependabot.yml", "utf8");
+  assert.match(dependabot, /package-ecosystem: npm/);
+  assert.match(dependabot, /package-ecosystem: github-actions/);
+  assert.match(dependabot, /interval: weekly/);
 });
+
+function assertWorkflowActionsPinned(workflow: string): void {
+  const actionReferences = [...workflow.matchAll(/^\s*uses:\s+([^\s@]+)@([^\s#]+)(?:\s+#\s+(.+))?$/gm)];
+  assert.ok(actionReferences.length > 0, "workflow must use at least one reviewed action");
+  for (const [, action = "", revision = "", versionComment = ""] of actionReferences) {
+    assert.match(revision, /^[a-f0-9]{40}$/, `${action} must be pinned to a full commit SHA`);
+    assert.match(versionComment ?? "", /^v\d+$/, `${action} must retain its reviewed major-version comment`);
+  }
+}
