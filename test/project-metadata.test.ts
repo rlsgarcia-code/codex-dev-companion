@@ -78,6 +78,8 @@ test("CI verifies and packages every supported native target", () => {
   assert.match(workflow, /permissions:\s+contents: read/);
   assert.match(workflow, /actions\/upload-artifact@v7/);
   assert.match(workflow, /if: matrix\.target == 'linux-x64'[\s\S]*xvfb-run -a npm run test:extension-host/);
+  assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:extension-host/);
+  assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:vsix-install -- codex-dev-companion-win32-x64\.vsix/);
 });
 
 test("tagged releases publish a complete, immutable, checksummed native package set", () => {
@@ -101,6 +103,8 @@ test("tagged releases publish a complete, immutable, checksummed native package 
   assert.match(workflow, /publish:[\s\S]*permissions:\s+contents: write/);
   assert.match(workflow, /gh release create[\s\S]*--draft/);
   assert.match(workflow, /gh release edit[\s\S]*--draft=false/);
+  assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:extension-host/);
+  assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: \|[\s\S]*Get-Content package\.json[\s\S]*npm run test:vsix-install -- "release\/codex-dev-companion-\$version-win32-x64\.vsix"/);
 });
 
 test("repository policy documents stay present", () => {

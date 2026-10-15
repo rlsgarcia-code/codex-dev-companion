@@ -21,7 +21,7 @@ npm run smoke:chroma
 
 `test:extension-host` usa a infraestrutura oficial do VS Code, baixa a versão mínima suportada na primeira execução e abre um perfil isolado do Extension Development Host. Ele confirma ativação, registro de comandos e os fluxos de abrir a sidebar, criar thread e abrir a configuração sem chave ou chamada ao gateway. Defina `VSCODE_EXECUTABLE_PATH` para reutilizar um executável de teste específico ou `VSCODE_TEST_VERSION` para validar outra versão.
 
-Depois de `npm run package`, execute `npm run test:vsix-install -- ./codex-dev-companion-<versão>-<plataforma>.vsix`. Esse segundo teste instala o artefato em um perfil vazio e confirma que a extensão carregada veio desse diretório de instalação, evitando que o código-fonte do Extension Development Host mascare um VSIX incompleto. O CI e o workflow de release executam esse gate no pacote Linux x64.
+Depois de `npm run package`, execute `npm run test:vsix-install -- ./codex-dev-companion-<versão>-<plataforma>.vsix`. Esse segundo teste instala o artefato em um perfil vazio e confirma que a extensão carregada veio desse diretório de instalação, evitando que o código-fonte do Extension Development Host mascare um VSIX incompleto. O CI e o workflow de release executam esse gate nos pacotes Linux x64 e Windows x64.
 
 Os smoke tests criam somente serviços temporários em `127.0.0.1`. O teste de Chat Completions usa prompts de diagnóstico que não alteram arquivos; o teste do Chroma grava apenas em um diretório temporário, valida heartbeat/versão e confirma o encerramento do processo nativo.
 
@@ -58,7 +58,7 @@ Consulte `AGENTS.md` antes de alterar agente, modelo, ferramentas, middleware, c
 4. Não inclua `dist/`, `dist-tests/`, certificados, banco Chroma local ou arquivos `.vsix` no commit.
 5. Use o centro **Review run** e o Source Control para conferir todas as alterações antes do commit.
 
-O CI repete type-check, testes, smoke local e empacotamento em macOS arm64/x64, Linux arm64/x64 e Windows x64. A matriz Linux x64 também executa a extensão dentro de um Extension Host real do VS Code e instala/ativa o VSIX final em um segundo perfil isolado.
+O CI repete type-check, testes, smoke local e empacotamento em macOS arm64/x64, Linux arm64/x64 e Windows x64. As matrizes Linux x64 e Windows x64 também executam a extensão dentro de um Extension Host real do VS Code e instalam/ativam o VSIX final em um segundo perfil isolado.
 
 ## Releases
 
