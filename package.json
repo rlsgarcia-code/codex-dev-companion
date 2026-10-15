@@ -287,9 +287,9 @@
         },
         "codexDevCompanion.localBrowserToolsEnabled": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "scope": "resource",
-          "description": "Expose approval-gated LangChain tools for inspecting and visually checking applications on localhost. Non-loopback browser traffic is blocked."
+          "description": "Allow the agent to request approval-gated LangChain tools for inspecting and visually checking applications on localhost. Toggle this from the browser icon in the sidebar. Non-loopback browser traffic is blocked."
         },
         "codexDevCompanion.localBrowserChannel": {
           "type": "string",

@@ -2,6 +2,8 @@
 
 ## 0.11.0
 
+- Added a subtle, accessible browser-control toggle to the chat header; access is opt-in per workspace, locked during runs, and revoking it immediately closes the isolated session.
+- Added an agent completion gate for visible web-interface changes: validate the affected local flow, page/console errors, responsive layouts when relevant, and final visuals when the selected model accepts images, or report exactly what remains unverified.
 - Added approval-gated LangChain browser tools for opening, inspecting, interacting with, and visually checking loopback applications while showing the same local URL to the user.
 - Keep browser validation local and installation-safe by using `playwright-core` with an already-installed Edge, Chrome, or configured Chromium executable; no browser download, lifecycle script, native build, or administrator access is attempted.
 - Isolate every browser session with ephemeral storage, blocked downloads and service workers, password-field refusal, loopback-only HTTP/WebSocket routing, bounded temporary screenshots, and explicit disclosure before page data is sent to the configured LiteLLM model.

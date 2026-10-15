@@ -17,6 +17,10 @@ test("accepts the bounded commands emitted by the bundled sidebar", () => {
     { type: "draftChanged", threadId: "thread-1", text: "draft" }
   );
   assert.deepEqual(
+    parseIncomingMessage({ type: "setLocalBrowserToolsEnabled", enabled: true }),
+    { type: "setLocalBrowserToolsEnabled", enabled: true }
+  );
+  assert.deepEqual(
     parseIncomingMessage({ type: "restoreRunChanges", runId: "run-1", changeIds: ["change-1", "change-2"] }),
     { type: "restoreRunChanges", runId: "run-1", changeIds: ["change-1", "change-2"] }
   );
@@ -50,6 +54,7 @@ test("rejects unknown, incomplete, and extra-field messages", () => {
     extra: true
   }), undefined);
   assert.equal(parseIncomingMessage({ type: "send", text: "x", mode: "unsafe" }), undefined);
+  assert.equal(parseIncomingMessage({ type: "setLocalBrowserToolsEnabled", enabled: "yes" }), undefined);
 });
 
 test("rejects oversized identifiers, drafts, prompts, credentials, and diagnostics", () => {

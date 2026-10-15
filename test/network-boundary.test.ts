@@ -50,6 +50,8 @@ test("keeps browser automation local and approval-gated", () => {
   assert.match(browser, /routeWebSocket/);
   assert.match(tools, /Allow the local agent to inspect and control this localhost application/);
   assert.match(browser, /does not fill password fields/);
+  assert.match(agent, /UI completion gate:/);
+  assert.match(agent, /state exactly what remains unverified/);
 });
 
 test("routes every LangChain model client through the exact-route gateway transport", () => {

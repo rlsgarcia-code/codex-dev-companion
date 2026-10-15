@@ -60,6 +60,7 @@ test("keeps webview element identifiers unique", () => {
   assert.ok(ids.includes("thread-list"));
   assert.ok(ids.includes("thread-search"));
   assert.ok(ids.includes("threads-toggle"));
+  assert.ok(ids.includes("browser-control"));
   assert.ok(ids.includes("composer-hint"));
   assert.ok(ids.includes("context-add-file"));
   assert.ok(ids.includes("context-budget-track"));
@@ -73,6 +74,17 @@ test("keeps webview element identifiers unique", () => {
   assert.ok(ids.includes("activity-meta"));
   assert.ok(ids.includes("plan-summary"));
   assert.ok(ids.includes("plan-activity-items"));
+});
+
+test("keeps local browser control visible, opt-in, and revocable", () => {
+  const agentSource = readFileSync("src/agent.ts", "utf8");
+  assertMessageType("setLocalBrowserToolsEnabled");
+  assert.match(source, /id="browser-control"[^>]*aria-pressed="false"/);
+  assert.match(source, /setBrowserControl\(Boolean\(data\.browserControlEnabled\)\)/);
+  assert.match(source, /configuration\.update\("localBrowserToolsEnabled", enabled, vscode\.ConfigurationTarget\.Workspace\)/);
+  assert.match(source, /await this\.agent\.setLocalBrowserToolsEnabled\(enabled\)/);
+  assert.match(agentSource, /await browserSession\?\.close\(\)/);
+  assert.match(source, /browserControl\.disabled = locked \|\| browserControlPending/);
 });
 
 test("keeps recovery actions and per-thread draft persistence wired", () => {

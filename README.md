@@ -273,16 +273,19 @@ No modo **Plan only**, ferramentas de escrita, memória e execução de comandos
 
 Para permitir que o agente confira uma interface que está rodando na raiz do projeto:
 
-1. Inicie a aplicação normalmente ou peça ao agente para executar o comando local, aprovando-o no modal do VS Code.
-2. Informe a URL, por exemplo: “abra `http://localhost:3000`, teste o formulário e confira visualmente o resultado”.
-3. Aprove **Allow local browser session**. A autorização vale para a sessão isolada e é revogada por `browser_close`, mudança de configuração ou encerramento do Extension Host.
-4. A mesma URL é aberta para acompanhamento. No VS Code 1.109 ou posterior, mantenha `workbench.browser.openLocalhostLinks` habilitado para que links locais apareçam no navegador integrado.
+1. Clique no discreto ícone de navegador no cabeçalho do chat. A cor de destaque indica que o controle está disponível para este workspace.
+2. Inicie a aplicação normalmente ou peça ao agente para executar o comando local, aprovando-o no modal do VS Code.
+3. Informe a URL, por exemplo: “abra `http://localhost:3000`, teste o formulário e confira visualmente o resultado”.
+4. Aprove **Allow local browser session**. A autorização vale para a sessão isolada e é revogada por `browser_close`, pelo ícone de navegador, mudança de configuração ou encerramento do Extension Host.
+5. A mesma URL é aberta para acompanhamento. No VS Code 1.109 ou posterior, mantenha `workbench.browser.openLocalhostLinks` habilitado para que links locais apareçam no navegador integrado.
 
 O agente recebe ferramentas LangChain para abrir, inspecionar, clicar, preencher campos que não sejam de senha, selecionar opções, pressionar teclas, alterar o viewport, recarregar, voltar, capturar a tela e encerrar a sessão. DOM, texto visível, console e a captura solicitada passam somente pelo endpoint LiteLLM já configurado; a análise da imagem requer que o alias selecionado aceite conteúdo multimodal em Chat Completions. Se o modelo rejeitar imagens, a inspeção estrutural continua disponível.
 
 A sessão usa perfil efêmero, bloqueia downloads, service workers, campos de senha e qualquer requisição HTTP, HTTPS ou WebSocket que não seja loopback. Recursos externos usados pela página, como fontes ou scripts em CDN, aparecem em `blockedRequests` e precisam ser servidos localmente para essa validação. A última captura fica no armazenamento privado da extensão e é substituída na próxima conferência; ao fechar a sessão, ela é apagada.
 
-Em **Plan only**, o agente pode abrir, inspecionar e capturar a aplicação, mas não recebe a ferramenta de interação. Defina `codexDevCompanion.localBrowserToolsEnabled` como `false` para remover completamente essas ferramentas do runtime.
+Em **Plan only**, o agente pode abrir, inspecionar e capturar a aplicação, mas não recebe a ferramenta de interação. O controle começa desligado; o ícone atualiza `codexDevCompanion.localBrowserToolsEnabled` somente para o workspace e fica indisponível durante uma execução. Desligá-lo fecha imediatamente a sessão isolada e remove todas as ferramentas de navegador do próximo run.
+
+Quando o controle está ativo, alterações em interfaces web têm uma etapa de conclusão explícita: o agente deve verificar o fluxo afetado, conferir erros da página e do console e, quando o modelo aceitar imagens, realizar a conferência visual final. Se a aplicação ou o navegador não puder ser executado, a resposta deve dizer precisamente o que permaneceu sem verificação.
 
 ## Desenvolvimento
 
@@ -353,7 +356,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 | `codexDevCompanion.embeddingModel` | vazio | Alias LiteLLM usado em `POST /embeddings`; vazio mantém somente memória textual. |
 | `codexDevCompanion.semanticMemoryResults` | `5` | Número máximo de chunks relevantes recuperados por turno. |
 | `codexDevCompanion.standardRecursionLimit` | `200` | Limite LangGraph do runtime padrão; o Deep Agent usa o limite nativo alto. |
-| `codexDevCompanion.localBrowserToolsEnabled` | `true` | Disponibiliza ferramentas LangChain, protegidas por aprovação, para aplicações em loopback. |
+| `codexDevCompanion.localBrowserToolsEnabled` | `false` | Disponibiliza, após ativação pelo ícone do chat, ferramentas LangChain protegidas por aprovação para aplicações em loopback. |
 | `codexDevCompanion.localBrowserChannel` | `auto` | Usa Edge primeiro no Windows e Chrome primeiro nas demais plataformas, com fallback entre ambos. |
 | `codexDevCompanion.localBrowserExecutablePath` | vazio | Caminho absoluto opcional para um navegador Chromium corporativo já instalado. |
 | `codexDevCompanion.localBrowserOpenPreview` | `true` | Abre para o usuário a mesma URL local que está sendo validada na sessão isolada. |

@@ -64,7 +64,7 @@ export async function run(): Promise<void> {
 
   const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
   assert.equal(configuration.get("agentRuntime"), "standard");
-  assert.equal(configuration.get("localBrowserToolsEnabled"), true);
+  assert.equal(configuration.get("localBrowserToolsEnabled"), false);
   assert.equal(configuration.get("localBrowserChannel"), "auto");
   assert.equal(configuration.get("localBrowserOpenPreview"), true);
   assert.equal(configuration.get("autonomyMode"), "review");

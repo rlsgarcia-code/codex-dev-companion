@@ -121,6 +121,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           const mode = this.autonomyMode();
           this.post({ type: "autonomyChanged", mode, message: `${runModeLabel(mode)} selected` });
         }
+        if (event.affectsConfiguration("codexDevCompanion.localBrowserToolsEnabled")) {
+          this.postBrowserControlState();
+        }
       })
     );
   }
@@ -314,7 +317,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           ...payload,
           workspace: vscode.workspace.name ?? "No workspace",
           context,
-          liteLlm
+          liteLlm,
+          browserControlEnabled: this.localBrowserToolsEnabled()
         });
         if (this.connectionSettingsRequested) await this.postConnectionSettings();
         break;
@@ -451,6 +455,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         break;
       case "selectAutonomy":
         await this.selectAutonomy(message.mode);
+        break;
+      case "setLocalBrowserToolsEnabled":
+        await this.setLocalBrowserToolsEnabled(message.enabled);
         break;
       case "testLiteLlm":
         await this.testLiteLlmSettings(message);
@@ -791,6 +798,40 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         message: await this.safeError(error)
       });
     }
+  }
+
+  private async setLocalBrowserToolsEnabled(enabled: boolean): Promise<void> {
+    try {
+      await this.assertProviderConfigurationEditable();
+      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      await this.agent.setLocalBrowserToolsEnabled(enabled);
+      await configuration.update("localBrowserToolsEnabled", enabled, vscode.ConfigurationTarget.Workspace);
+      this.post({
+        type: "browserControlChanged",
+        enabled,
+        message: enabled
+          ? "Local browser control enabled for this workspace"
+          : "Local browser control disabled and its session closed"
+      });
+    } catch (error) {
+      this.post({
+        type: "browserControlError",
+        enabled: this.localBrowserToolsEnabled(),
+        message: await this.safeError(error)
+      });
+    }
+  }
+
+  private localBrowserToolsEnabled(): boolean {
+    return vscode.workspace
+      .getConfiguration("codexDevCompanion")
+      .get<boolean>("localBrowserToolsEnabled", false);
+  }
+
+  private postBrowserControlState(): void {
+    const enabled = this.localBrowserToolsEnabled();
+    if (!enabled) void this.agent.setLocalBrowserToolsEnabled(false);
+    this.post({ type: "browserControlChanged", enabled });
   }
 
   private async saveLiteLlmSettings(message: Extract<IncomingMessage, { type: "saveLiteLlm" }>): Promise<void> {
@@ -1505,6 +1546,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         <h1>Companion</h1>
       </div>
       <div class="topbar-actions">
+        <button class="icon-button browser-control" id="browser-control" type="button" title="Browser control off — click to enable access to localhost apps" aria-label="Enable local browser control" aria-pressed="false">
+          <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2"></rect><path d="M3 7.25h14"></path><circle cx="5.25" cy="5.55" r=".65"></circle><circle cx="7.35" cy="5.55" r=".65"></circle></svg>
+        </button>
         <button class="icon-button" id="threads-toggle" title="Local threads" aria-label="Local threads" aria-expanded="false" aria-controls="thread-panel">☷</button>
         <button class="icon-button" id="new-thread" title="New thread" aria-label="New thread">＋</button>
       </div>
@@ -1878,6 +1922,11 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .icon-button { border: 0; background: transparent; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 18px; opacity: .7; transition: opacity .15s, background .15s; }
 .icon-button:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .icon-button:disabled { cursor: default; opacity: .3; }
+.browser-control { position: relative; display: grid; place-items: center; }
+.browser-control svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.35; }
+.browser-control[aria-pressed="true"] { color: var(--accent); opacity: 1; background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.browser-control[aria-pressed="true"]::after { content: ''; position: absolute; right: 4px; bottom: 4px; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1px var(--vscode-sideBar-background); }
+.browser-control.pending { opacity: .45; }
 .activity-dock { min-height: 43px; border-top: 1px solid var(--line); background: var(--vscode-sideBar-background); }
 .presence { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto 12px; align-items: center; gap: 9px; width: 100%; min-height: 42px; padding: 7px 18px; border: 0; color: var(--muted); background: transparent; text-align: left; font-size: 11px; }
 .activity-dock.has-plan .presence { cursor: pointer; }
@@ -2296,6 +2345,7 @@ const promptTokenEstimate = document.getElementById('prompt-token-estimate');
 const semanticMemoryEnabled = document.getElementById('semantic-memory-enabled');
 const embeddingModel = document.getElementById('embedding-model');
 const newThreadButton = document.getElementById('new-thread');
+const browserControl = document.getElementById('browser-control');
 const agentRuntime = document.getElementById('runtime');
 const autonomyMode = document.getElementById('mode');
 const runControls = document.getElementById('run-controls');
@@ -2316,6 +2366,8 @@ let diagnosticFixApplied = false;
 let connectionSetupStep = 1;
 let planManuallyCollapsed = false;
 let hasStoredLiteLlmKey = false;
+let browserControlEnabled = false;
+let browserControlPending = false;
 let currentContextState = { activeFile: '', autoContext: true, pinned: [] };
 let currentRunSummary = createRunSummary();
 let liveRunState = null;
@@ -2896,6 +2948,7 @@ function setBusy(value) {
   runControls.querySelector('summary').tabIndex = locked ? -1 : 0;
   if (locked) runControls.open = false;
   newThreadButton.disabled = locked;
+  browserControl.disabled = locked || browserControlPending;
   threadsToggle.disabled = value;
   briefToggle.disabled = locked;
   contextAddFile.disabled = locked;
@@ -2920,6 +2973,20 @@ function setBusy(value) {
   else if (!value && status.textContent !== 'Ready') status.textContent = 'Ready';
   renderActivityOverview();
   if (value) scrollConversationToBottom({ force: true });
+}
+
+function setBrowserControl(enabled, pending = false) {
+  browserControlEnabled = Boolean(enabled);
+  browserControlPending = Boolean(pending);
+  browserControl.setAttribute('aria-pressed', String(browserControlEnabled));
+  browserControl.setAttribute('aria-label', browserControlEnabled
+    ? 'Disable local browser control'
+    : 'Enable local browser control');
+  browserControl.title = browserControlEnabled
+    ? 'Browser control on — click to revoke access and close the local session'
+    : 'Browser control off — click to enable access to localhost apps';
+  browserControl.classList.toggle('pending', browserControlPending);
+  browserControl.disabled = busy || remoteRunActive || browserControlPending;
 }
 
 function setCancellationPending(value) {
@@ -3753,6 +3820,11 @@ newThreadButton.addEventListener('click', () => {
   status.textContent = 'Starting a new thread';
   vscode.postMessage({ type: 'newThread' });
 });
+browserControl.addEventListener('click', () => {
+  if (browserControl.disabled) return;
+  setBrowserControl(browserControlEnabled, true);
+  vscode.postMessage({ type: 'setLocalBrowserToolsEnabled', enabled: !browserControlEnabled });
+});
 memoryToggle.addEventListener('click', () => memoryPanel.classList.contains('hidden') ? openMemoryCenter() : closeTopPanels());
 briefToggle.addEventListener('click', () => briefPanel.classList.contains('hidden') ? openTaskBrief() : closeTopPanels());
 liteLlmToggle.addEventListener('click', () => liteLlmSettings.classList.contains('hidden') ? openLiteLlmSettings() : closeTopPanels());
@@ -3941,6 +4013,7 @@ window.addEventListener('message', ({ data }) => {
       break;
     case 'hydrate':
       document.getElementById('workspace').textContent = data.workspace;
+      setBrowserControl(Boolean(data.browserControlEnabled));
       fillLiteLlmSettings(data.liteLlm || {});
       resetConversation(data.context, data.history, data, data.draft);
       break;
@@ -4064,6 +4137,19 @@ window.addEventListener('message', ({ data }) => {
       runtimeError.setAttribute('role', 'alert');
       runtimeError.textContent = data.message;
       timeline.appendChild(runtimeError);
+      break;
+    case 'browserControlChanged':
+      setBrowserControl(Boolean(data.enabled));
+      if (data.message) {
+        status.textContent = data.message;
+        announce(data.message);
+      }
+      break;
+    case 'browserControlError':
+      setBrowserControl(Boolean(data.enabled));
+      status.textContent = 'Could not change browser control';
+      appendRecovery(data.message || 'The browser-control setting could not be changed.', true, false);
+      announce(status.textContent + '. ' + (data.message || ''));
       break;
     case 'autonomyChanged':
       setAutonomyMode(data.mode || 'review');

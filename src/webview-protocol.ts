@@ -71,6 +71,7 @@ export const incomingMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("listModels"), endpoint: urlText, apiKey: secretText }).strict(),
   z.object({ type: z.literal("selectRuntime"), runtime }).strict(),
   z.object({ type: z.literal("selectAutonomy"), mode: runMode }).strict(),
+  z.object({ type: z.literal("setLocalBrowserToolsEnabled"), enabled: z.boolean() }).strict(),
   z.object({ type: z.literal("testLiteLlm"), ...liteLlmFields }).strict(),
   z.object({ type: z.literal("saveLiteLlm"), ...liteLlmFields }).strict()
 ]);
