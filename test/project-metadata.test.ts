@@ -118,6 +118,9 @@ test("repository policy documents stay present", () => {
   assert.match(dependabot, /package-ecosystem: npm/);
   assert.match(dependabot, /package-ecosystem: github-actions/);
   assert.match(dependabot, /interval: weekly/);
+  assert.equal((dependabot.match(/update-types:/g) ?? []).length, 2);
+  assert.equal((dependabot.match(/^\s+- minor$/gm) ?? []).length, 2);
+  assert.equal((dependabot.match(/^\s+- patch$/gm) ?? []).length, 2);
 });
 
 function assertWorkflowActionsPinned(workflow: string): void {

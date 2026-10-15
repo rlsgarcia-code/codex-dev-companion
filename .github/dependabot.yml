@@ -16,10 +16,16 @@ updates:
           - "@langchain/*"
           - langchain
           - deepagents
+        update-types:
+          - minor
+          - patch
       build-and-test-tooling:
         dependency-type: development
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: github-actions
     directory: /
