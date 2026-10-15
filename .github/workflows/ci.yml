@@ -61,6 +61,10 @@ jobs:
       - name: Build extension with the runner-native ChromaDB binary
         run: npm run build
 
+      - name: Verify the local packaging entrypoint on Windows
+        if: matrix.target == 'win32-x64'
+        run: npm run package
+
       - name: Verify activation and sidebar commands in Linux VS Code Extension Host
         if: matrix.target == 'linux-x64'
         run: xvfb-run -a npm run test:extension-host
