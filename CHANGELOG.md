@@ -2,6 +2,14 @@
 
 ## 0.11.0
 
+- Added VS Code-native corporate MCP onboarding from clipboard or JSON files, with placeholder resolution, per-header Secret Storage, explicit tool allowlists, enable/disable/remove controls, and a read-only handshake/catalog test.
+- Added official LangChain MCP tool adaptation for both agent runtimes, exact-route HTTPS transport with redirects blocked and corporate CA reuse, plus approval before every MCP tool call and no MCP access in Plan-only mode.
+- Added VS Code-native Problems, symbol, definition/reference, call-hierarchy, code-action, and bounded multi-file rename tools, with diagnostic baseline/compare evidence.
+- Added an invalidatable local structural project map, related-test suggestions, and repository playbooks under `.codex-agent/playbooks`, without source-code embeddings or a hosted index.
+- Added approval-gated managed local server/watcher processes with direct spawn, bounded logs, loopback URL discovery, readiness, restart, and process-tree cleanup; no shell, daemon, native module, or elevation is introduced.
+- Added categorized source-derived memory with file fingerprints, automatic stale-recall suppression, module-summary guidance, and exact recalled-memory previews in the run receipt.
+- Added an optional independent completion reviewer through the same configured LiteLLM model, using redacted bounded diff excerpts plus command, diagnostic, process, and browser evidence.
+- Added ephemeral browser baselines and multimodal before/after comparison, with redacted textual observations preserved in **Review run**.
 - Added a subtle, accessible browser-control toggle to the chat header; access is opt-in per workspace, locked during runs, and revoking it immediately closes the isolated session.
 - Added an agent completion gate for visible web-interface changes: validate the affected local flow, page/console errors, responsive layouts when relevant, and final visuals when the selected model accepts images, or report exactly what remains unverified.
 - Added approval-gated LangChain browser tools for opening, inspecting, interacting with, and visually checking loopback applications while showing the same local URL to the user.

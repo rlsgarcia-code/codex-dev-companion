@@ -67,6 +67,7 @@ export async function run(): Promise<void> {
   assert.equal(configuration.get("localBrowserToolsEnabled"), false);
   assert.equal(configuration.get("localBrowserChannel"), "auto");
   assert.equal(configuration.get("localBrowserOpenPreview"), true);
+  assert.equal(configuration.get("finalReviewMode"), "changes");
   assert.equal(configuration.get("autonomyMode"), "review");
   assert.equal(configuration.get("completionNotifications"), "whenHidden");
 

@@ -8,6 +8,7 @@ const urlText = z.string().max(4_096);
 const secretText = z.string().max(16_384);
 const runMode = z.enum(["review", "execute", "plan"]);
 const runtime = z.enum(["standard", "deep"]);
+const finalReviewMode = z.enum(["off", "changes", "always"]);
 const authHeader = z.enum(["authorization", "api-key", "ocp-apim-subscription-key"]);
 const noPayload = <Type extends string>(type: Type) => z.object({ type: z.literal(type) }).strict();
 const boundedDiagnostics = z.unknown().refine((value) => {
@@ -64,6 +65,7 @@ export const incomingMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("removePinnedContext"), id: identifier }).strict(),
   noPayload("clearPinnedContext"),
   noPayload("connectionSettingsOpened"),
+  noPayload("openMcpConnections"),
   noPayload("configureGatewayCa"),
   noPayload("exportConnectionProfile"),
   noPayload("importConnectionProfile"),
@@ -71,6 +73,7 @@ export const incomingMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("listModels"), endpoint: urlText, apiKey: secretText }).strict(),
   z.object({ type: z.literal("selectRuntime"), runtime }).strict(),
   z.object({ type: z.literal("selectAutonomy"), mode: runMode }).strict(),
+  z.object({ type: z.literal("selectFinalReview"), mode: finalReviewMode }).strict(),
   z.object({ type: z.literal("setLocalBrowserToolsEnabled"), enabled: z.boolean() }).strict(),
   z.object({ type: z.literal("testLiteLlm"), ...liteLlmFields }).strict(),
   z.object({ type: z.literal("saveLiteLlm"), ...liteLlmFields }).strict()

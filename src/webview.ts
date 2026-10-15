@@ -46,6 +46,14 @@ import { ContextCollector } from "./context";
 import { estimateContextTokens } from "./context-budget";
 import { ProjectMemory } from "./memory";
 import { memoryChunks } from "./memory-chunks";
+import {
+  hasMcpPlaceholder,
+  isSecretMcpHeader,
+  normalizeMcpEndpoint,
+  parseMcpTemplate,
+  stripSecretHeaderPrefix
+} from "./mcp-config";
+import type { McpConnectionSnapshot } from "./mcp-config";
 import { redactSensitiveText, safeErrorMessage } from "./redaction";
 import { agentRuntimeLabel, parseAgentRuntime } from "./runtime";
 import { renderSafeMarkdown } from "./safe-markdown";
@@ -65,6 +73,18 @@ import type { IncomingMessage } from "./webview-protocol";
 const LEGACY_HISTORY_KEY = "codexDevCompanion.history";
 const DRAFTS_KEY = "codexDevCompanion.threadDrafts";
 const MAX_DRAFT_CHARACTERS = 50_000;
+
+function parseFinalReviewMode(value: unknown): "off" | "changes" | "always" {
+  return value === "off" || value === "always" ? value : "changes";
+}
+
+function mcpConnectionState(connections: readonly McpConnectionSnapshot[]) {
+  return {
+    count: connections.length,
+    enabled: connections.filter((connection) => connection.enabled).length,
+    needsAttention: connections.filter((connection) => connection.missingSecretHeaders.length > 0).length
+  };
+}
 
 type LiteLlmFormFields = {
   endpoint: string;
@@ -97,6 +117,7 @@ type LiteLlmSettingsSnapshot = {
   topP?: number;
   semanticMemoryEnabled: boolean;
   embeddingModel: string;
+  finalReviewMode: "off" | "changes" | "always";
 };
 
 export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -123,6 +144,12 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         }
         if (event.affectsConfiguration("codexDevCompanion.localBrowserToolsEnabled")) {
           this.postBrowserControlState();
+        }
+        if (event.affectsConfiguration("codexDevCompanion.finalReviewMode")) {
+          this.post({
+            type: "finalReviewChanged",
+            mode: parseFinalReviewMode(vscode.workspace.getConfiguration("codexDevCompanion").get("finalReviewMode"))
+          });
         }
       })
     );
@@ -307,10 +334,11 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     switch (message.type) {
       case "ready":
         await this.migrateLegacyHistory();
-        const [payload, context, liteLlm] = await Promise.all([
+        const [payload, context, liteLlm, mcpConnections] = await Promise.all([
           this.threadPayload(),
           this.contextState(),
-          this.liteLlmSettingsSnapshot()
+          this.liteLlmSettingsSnapshot(),
+          this.agent.mcpSnapshots()
         ]);
         this.post({
           type: "hydrate",
@@ -318,7 +346,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           workspace: vscode.workspace.name ?? "No workspace",
           context,
           liteLlm,
-          browserControlEnabled: this.localBrowserToolsEnabled()
+          browserControlEnabled: this.localBrowserToolsEnabled(),
+          mcpConnections: mcpConnectionState(mcpConnections)
         });
         if (this.connectionSettingsRequested) await this.postConnectionSettings();
         break;
@@ -435,6 +464,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       case "connectionSettingsOpened":
         this.connectionSettingsRequested = false;
         break;
+      case "openMcpConnections":
+        await this.configureMcpConnections();
+        break;
       case "configureGatewayCa":
         await this.configureGatewayCa();
         break;
@@ -455,6 +487,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         break;
       case "selectAutonomy":
         await this.selectAutonomy(message.mode);
+        break;
+      case "selectFinalReview":
+        await this.selectFinalReview(message.mode);
         break;
       case "setLocalBrowserToolsEnabled":
         await this.setLocalBrowserToolsEnabled(message.enabled);
@@ -496,7 +531,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       temperature: profile.temperature,
       topP: profile.topP,
       semanticMemoryEnabled: configuration.get<boolean>("semanticMemoryEnabled", true),
-      embeddingModel: configuration.get<string>("embeddingModel", "")
+      embeddingModel: configuration.get<string>("embeddingModel", ""),
+      finalReviewMode: parseFinalReviewMode(configuration.get("finalReviewMode"))
     };
   }
 
@@ -557,6 +593,333 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     } catch (error) {
       this.post({ type: "gatewayCaError", message: await this.safeError(error) });
     }
+  }
+
+  private async configureMcpConnections(): Promise<void> {
+    try {
+      await this.assertProviderConfigurationEditable();
+      const connections = await this.agent.mcpSnapshots();
+      const selection = await vscode.window.showQuickPick([
+        {
+          label: "$(add) Add corporate MCP from clipboard",
+          description: "Use the JSON template copied from the corporate catalog",
+          value: "add-clipboard"
+        },
+        {
+          label: "$(file-code) Add corporate MCP from JSON file",
+          description: "Select a portable mcpServers or VS Code servers configuration",
+          value: "add-file"
+        },
+        ...connections.map((connection) => ({
+          label: `${connection.enabled ? "$(plug)" : "$(circle-slash)"} ${connection.name}`,
+          description: `${connection.enabled ? "Enabled" : "Disabled"} · ${connection.tools.length} tool${connection.tools.length === 1 ? "" : "s"}`,
+          detail: connection.missingSecretHeaders.length
+            ? `Missing credentials: ${connection.missingSecretHeaders.join(", ")}`
+            : connection.url,
+          value: connection.id
+        }))
+      ], {
+        title: "Corporate MCP connections",
+        placeHolder: "Add or manage a connection. Credentials stay in VS Code Secret Storage.",
+        ignoreFocusOut: true
+      });
+      if (!selection) return;
+      if (selection.value === "add-clipboard" || selection.value === "add-file") {
+        const source = selection.value === "add-clipboard"
+          ? await vscode.env.clipboard.readText()
+          : await this.readMcpTemplateFile();
+        if (source === undefined) return;
+        await this.importMcpTemplate(source);
+      } else {
+        await this.manageMcpConnection(selection.value);
+      }
+    } catch (error) {
+      const message = await this.safeError(error);
+      this.post({ type: "mcpConnectionError", message });
+      void vscode.window.showErrorMessage(message);
+    } finally {
+      await this.postMcpConnectionState();
+    }
+  }
+
+  private async readMcpTemplateFile(): Promise<string | undefined> {
+    const selected = await vscode.window.showOpenDialog({
+      title: "Import corporate MCP JSON",
+      openLabel: "Review MCP configuration",
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: { "MCP configuration": ["json"] }
+    });
+    if (!selected?.[0]) return undefined;
+    const stat = await vscode.workspace.fs.stat(selected[0]);
+    if (stat.size > 64_000) throw new Error("MCP configuration exceeds the 64 KB safety limit.");
+    return new TextDecoder().decode(await vscode.workspace.fs.readFile(selected[0]));
+  }
+
+  private async importMcpTemplate(source: string): Promise<void> {
+    const parsed = parseMcpTemplate(source);
+    const server = parsed.length === 1
+      ? parsed[0]!
+      : (await vscode.window.showQuickPick(parsed.map((candidate) => ({
+          label: candidate.name,
+          description: candidate.url,
+          value: candidate
+        })), {
+          title: "Choose the MCP server to import",
+          ignoreFocusOut: true
+        }))?.value;
+    if (!server) return;
+
+    const name = await vscode.window.showInputBox({
+      title: "MCP connection name",
+      value: server.name,
+      prompt: "This label is stored only in the current workspace.",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a connection name."
+    });
+    if (name === undefined) return;
+    const url = await this.resolveMcpEndpointTemplate(name, server.url);
+    if (url === undefined) return;
+
+    const headers: Record<string, string> = {};
+    const secrets: Record<string, string> = {};
+    for (const [header, templateValue] of Object.entries(server.headers)) {
+      if (isSecretMcpHeader(header)) {
+        const { prefix, secret: detectedSecret } = stripSecretHeaderPrefix(header, templateValue);
+        const detected = detectedSecret && !hasMcpPlaceholder(detectedSecret) ? detectedSecret : "";
+        const entered = await vscode.window.showInputBox({
+          title: `${name} · ${header}`,
+          password: true,
+          prompt: detected
+            ? "A value was copied with the template. Leave blank to use it without displaying it."
+            : "Stored only in VS Code Secret Storage. It is never written to settings or workspace files.",
+          placeHolder: prefix ? `${prefix.trim()} credential` : "Secret credential",
+          ignoreFocusOut: true,
+          validateInput: (value) => value.trim() || detected ? undefined : `Enter the credential for ${header}.`
+        });
+        if (entered === undefined) return;
+        secrets[header] = `${prefix}${entered.trim() || detected}`;
+        continue;
+      }
+      if (hasMcpPlaceholder(templateValue)) {
+        const entered = await vscode.window.showInputBox({
+          title: `${name} · ${header}`,
+          prompt: "Optional routing value from the corporate catalog. Leave blank to omit this header.",
+          ignoreFocusOut: true
+        });
+        if (entered === undefined) return;
+        if (entered.trim()) headers[header] = entered.trim();
+      } else if (templateValue.trim()) {
+        headers[header] = templateValue.trim();
+      }
+    }
+
+    let configuredTools = server.tools;
+    if (!configuredTools.length) {
+      const toolsText = await vscode.window.showInputBox({
+        title: `${name} · allowed tools`,
+        prompt: "Enter the exact catalog tool names separated by commas.",
+        ignoreFocusOut: true,
+        validateInput: (value) => value.split(",").some((tool) => tool.trim())
+          ? undefined
+          : "Enter at least one tool name."
+      });
+      if (toolsText === undefined) return;
+      configuredTools = toolsText.split(",").map((tool) => tool.trim()).filter(Boolean);
+    }
+    const selectedTools = await vscode.window.showQuickPick(configuredTools.map((tool) => ({
+      label: tool,
+      picked: true
+    })), {
+      title: `${name} · tools available to the agent`,
+      placeHolder: "Only selected tools will be exposed to LangChain",
+      canPickMany: true,
+      ignoreFocusOut: true
+    });
+    if (!selectedTools) return;
+    if (!selectedTools.length) throw new Error("Choose at least one MCP tool.");
+
+    const approval = await vscode.window.showInformationMessage(
+      `Add the corporate MCP connection “${name.trim()}”?`,
+      {
+        modal: true,
+        detail: [
+          `Endpoint: ${normalizeMcpEndpoint(url)}`,
+          `Tools: ${selectedTools.map(({ label }) => label).join(", ")}`,
+          "",
+          "Tool calls require approval. MCP results may be included in requests to your configured LiteLLM model. Credentials remain in VS Code Secret Storage."
+        ].join("\n")
+      },
+      "Add connection"
+    );
+    if (approval !== "Add connection") return;
+    const saved = await this.agent.saveMcpConnection({
+      name,
+      url,
+      enabled: true,
+      headers,
+      secrets,
+      tools: selectedTools.map(({ label }) => label)
+    });
+    this.post({ type: "mcpConnectionChanged", ...(await this.mcpConnectionState()), message: `${saved.name} added` });
+    const test = await vscode.window.showInformationMessage(
+      `${saved.name} was saved securely. Test its handshake and tool catalog now?`,
+      "Test connection",
+      "Later"
+    );
+    if (test === "Test connection") await this.testMcpConnection(saved.id);
+  }
+
+  private async resolveMcpEndpointTemplate(name: string, template: string): Promise<string | undefined> {
+    let resolved = template;
+    const placeholders = [...new Set(template.match(/<[^<>]{3,240}>|\$\{[^{}]{1,240}\}/g) ?? [])];
+    for (const placeholder of placeholders) {
+      const label = placeholder.replace(/^<|>$|^\$\{|}$/g, "").trim();
+      const value = await vscode.window.showInputBox({
+        title: `${name} · ${label}`,
+        prompt: `This value replaces ${placeholder} in the MCP URL.`,
+        ignoreFocusOut: true,
+        validateInput: (candidate) => candidate.trim() ? undefined : "Enter the value supplied by the corporate catalog."
+      });
+      if (value === undefined) return undefined;
+      resolved = resolved.replaceAll(placeholder, value.trim());
+    }
+    const url = await vscode.window.showInputBox({
+      title: `${name} · HTTPS endpoint`,
+      value: resolved,
+      prompt: placeholders.length
+        ? "Review the resolved endpoint. Credentials are not allowed in the URL."
+        : "Review the endpoint supplied by the corporate catalog.",
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        try {
+          normalizeMcpEndpoint(value);
+          return undefined;
+        } catch (error) {
+          return error instanceof Error ? error.message : "Enter a valid HTTPS MCP URL.";
+        }
+      }
+    });
+    return url === undefined ? undefined : normalizeMcpEndpoint(url);
+  }
+
+  private async manageMcpConnection(id: string): Promise<void> {
+    const connection = (await this.agent.mcpSnapshots()).find((candidate) => candidate.id === id);
+    if (!connection) throw new Error("The MCP connection no longer exists.");
+    const action = await vscode.window.showQuickPick([
+      { label: "$(pulse) Test connection", description: "Handshake and list tools without executing one", value: "test" },
+      { label: "$(key) Update endpoint or credentials", description: "Replace routing values or rotated secrets securely", value: "update" },
+      {
+        label: connection.enabled ? "$(circle-slash) Disable for the agent" : "$(plug) Enable for the agent",
+        description: connection.enabled ? "Keep the configuration but hide its tools" : "Expose its selected tools on the next run",
+        value: "toggle"
+      },
+      { label: "$(trash) Remove connection", description: "Also delete its credentials from Secret Storage", value: "remove" }
+    ], { title: connection.name, placeHolder: connection.url, ignoreFocusOut: true });
+    if (!action) return;
+    if (action.value === "test") {
+      await this.testMcpConnection(id);
+      return;
+    }
+    if (action.value === "update") {
+      await this.updateMcpConnection(connection);
+      return;
+    }
+    if (action.value === "toggle") {
+      await this.agent.setMcpConnectionEnabled(id, !connection.enabled);
+      this.post({
+        type: "mcpConnectionChanged",
+        ...(await this.mcpConnectionState()),
+        message: `${connection.name} ${connection.enabled ? "disabled" : "enabled"}`
+      });
+      return;
+    }
+    const confirmation = await vscode.window.showWarningMessage(
+      `Remove the MCP connection “${connection.name}”?`,
+      { modal: true, detail: "Its credentials will also be deleted from VS Code Secret Storage." },
+      "Remove connection"
+    );
+    if (confirmation !== "Remove connection") return;
+    await this.agent.removeMcpConnection(id);
+    this.post({ type: "mcpConnectionChanged", ...(await this.mcpConnectionState()), message: `${connection.name} removed` });
+  }
+
+  private async updateMcpConnection(connection: McpConnectionSnapshot): Promise<void> {
+    const url = await vscode.window.showInputBox({
+      title: `${connection.name} · HTTPS endpoint`,
+      value: connection.url,
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        try {
+          normalizeMcpEndpoint(value);
+          return undefined;
+        } catch (error) {
+          return error instanceof Error ? error.message : "Enter a valid HTTPS MCP URL.";
+        }
+      }
+    });
+    if (url === undefined) return;
+    const headers: Record<string, string> = {};
+    for (const [header, current] of Object.entries(connection.headers)) {
+      const value = await vscode.window.showInputBox({
+        title: `${connection.name} · ${header}`,
+        value: current,
+        prompt: "Leave blank to omit this non-secret routing header.",
+        ignoreFocusOut: true
+      });
+      if (value === undefined) return;
+      if (value.trim()) headers[header] = value.trim();
+    }
+    const secrets: Record<string, string> = {};
+    for (const header of connection.secretHeaders) {
+      const value = await vscode.window.showInputBox({
+        title: `${connection.name} · ${header}`,
+        password: true,
+        prompt: "Leave blank to preserve the credential already stored in VS Code Secret Storage.",
+        ignoreFocusOut: true
+      });
+      if (value === undefined) return;
+      secrets[header] = value.trim();
+    }
+    await this.agent.saveMcpConnection({
+      id: connection.id,
+      name: connection.name,
+      url,
+      enabled: connection.enabled,
+      headers,
+      secrets,
+      tools: connection.tools
+    });
+    this.post({
+      type: "mcpConnectionChanged",
+      ...(await this.mcpConnectionState()),
+      message: `${connection.name} updated`
+    });
+  }
+
+  private async testMcpConnection(id: string): Promise<void> {
+    const result = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: "Testing corporate MCP connection",
+      cancellable: false
+    }, () => this.agent.testMcpConnection(id));
+    const missing = result.profile.tools.filter((tool) => !result.discoveredTools.includes(tool));
+    if (missing.length) {
+      throw new Error(`MCP connected, but the server did not advertise the selected tools: ${missing.join(", ")}.`);
+    }
+    void vscode.window.showInformationMessage(
+      `${result.profile.name} connected · ${result.enabledTools.length} approved tool${result.enabledTools.length === 1 ? "" : "s"} found.`
+    );
+    this.post({ type: "mcpConnectionChanged", ...(await this.mcpConnectionState()), message: `${result.profile.name} verified` });
+  }
+
+  private async mcpConnectionState() {
+    return mcpConnectionState(await this.agent.mcpSnapshots());
+  }
+
+  private async postMcpConnectionState(): Promise<void> {
+    this.post({ type: "mcpConnectionChanged", ...(await this.mcpConnectionState()) });
   }
 
   private async exportConnectionProfile(): Promise<void> {
@@ -795,6 +1158,30 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.post({
         type: "runtimeChangeError",
         liteLlm: await this.liteLlmSettingsSnapshot(),
+        message: await this.safeError(error)
+      });
+    }
+  }
+
+  private async selectFinalReview(value: unknown): Promise<void> {
+    try {
+      await this.assertProviderConfigurationEditable();
+      const mode = parseFinalReviewMode(value);
+      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      await configuration.update("finalReviewMode", mode, vscode.ConfigurationTarget.Workspace);
+      this.post({
+        type: "finalReviewChanged",
+        mode,
+        message: mode === "off"
+          ? "Independent final review disabled"
+          : mode === "always"
+            ? "Every executable run will receive an independent final review"
+            : "Runs with changes or execution evidence will receive an independent final review"
+      });
+    } catch (error) {
+      this.post({
+        type: "finalReviewChangeError",
+        mode: parseFinalReviewMode(vscode.workspace.getConfiguration("codexDevCompanion").get("finalReviewMode")),
         message: await this.safeError(error)
       });
     }
@@ -1546,6 +1933,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         <h1>Companion</h1>
       </div>
       <div class="topbar-actions">
+        <button class="icon-button mcp-control" id="mcp-connections" type="button" title="Corporate MCP connections" aria-label="Manage corporate MCP connections" aria-pressed="false">
+          <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M7 3.25v4M13 3.25v4M5.25 7.25h9.5v1.25A4.75 4.75 0 0 1 10 13.25v3.5M7.25 16.75h5.5"></path></svg>
+        </button>
         <button class="icon-button browser-control" id="browser-control" type="button" title="Browser control off — click to enable access to localhost apps" aria-label="Enable local browser control" aria-pressed="false">
           <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2"></rect><path d="M3 7.25h14"></path><circle cx="5.25" cy="5.55" r=".65"></circle><circle cx="7.35" cy="5.55" r=".65"></circle></svg>
         </button>
@@ -1892,6 +2282,15 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
                 </select>
                 <small id="mode-help">Confirm every workspace change and command.</small>
               </label>
+              <label class="run-control-field" for="final-review-mode">
+                <span>Final review</span>
+                <select id="final-review-mode" aria-describedby="final-review-help">
+                  <option value="changes">When work is performed</option>
+                  <option value="always">Every executable run</option>
+                  <option value="off">Off</option>
+                </select>
+                <small id="final-review-help">A separate model call reviews local evidence.</small>
+              </label>
             </div>
           </details>
           <button class="cancel hidden" id="cancel" type="button">Cancel run</button>
@@ -1923,7 +2322,11 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .icon-button:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .icon-button:disabled { cursor: default; opacity: .3; }
 .browser-control { position: relative; display: grid; place-items: center; }
-.browser-control svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.35; }
+.browser-control svg, .mcp-control svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
+.mcp-control { position: relative; display: grid; place-items: center; }
+.mcp-control[aria-pressed="true"] { color: var(--accent); opacity: 1; background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.mcp-control[aria-pressed="true"]::after { content: ''; position: absolute; right: 4px; bottom: 4px; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1px var(--vscode-sideBar-background); }
+.mcp-control.attention::after { background: var(--vscode-editorWarning-foreground); }
 .browser-control[aria-pressed="true"] { color: var(--accent); opacity: 1; background: color-mix(in srgb, var(--accent) 11%, transparent); }
 .browser-control[aria-pressed="true"]::after { content: ''; position: absolute; right: 4px; bottom: 4px; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1px var(--vscode-sideBar-background); }
 .browser-control.pending { opacity: .45; }
@@ -2345,13 +2748,16 @@ const promptTokenEstimate = document.getElementById('prompt-token-estimate');
 const semanticMemoryEnabled = document.getElementById('semantic-memory-enabled');
 const embeddingModel = document.getElementById('embedding-model');
 const newThreadButton = document.getElementById('new-thread');
+const mcpConnections = document.getElementById('mcp-connections');
 const browserControl = document.getElementById('browser-control');
 const agentRuntime = document.getElementById('runtime');
 const autonomyMode = document.getElementById('mode');
+const finalReviewMode = document.getElementById('final-review-mode');
 const runControls = document.getElementById('run-controls');
 const runControlsLabel = document.getElementById('run-controls-label');
 const runtimeHelp = document.getElementById('runtime-help');
 const modeHelp = document.getElementById('mode-help');
+const finalReviewHelp = document.getElementById('final-review-help');
 const announcer = document.getElementById('announcer');
 const setupCallout = document.getElementById('setup-callout');
 const setupCalloutAction = document.getElementById('setup-callout-action');
@@ -2368,6 +2774,8 @@ let planManuallyCollapsed = false;
 let hasStoredLiteLlmKey = false;
 let browserControlEnabled = false;
 let browserControlPending = false;
+let mcpConnectionCount = 0;
+let mcpConnectionsPending = false;
 let currentContextState = { activeFile: '', autoContext: true, pinned: [] };
 let currentRunSummary = createRunSummary();
 let liveRunState = null;
@@ -2409,6 +2817,8 @@ function createRunSummary() {
     plan: [],
     memoryUpdates: 0,
     contextReceipt: undefined,
+    evidence: undefined,
+    verification: undefined,
     usage: undefined,
     failed: false,
     cancelled: false,
@@ -2801,6 +3211,7 @@ function runSummaryStats(summary) {
     verifications.length ? verifications.filter(command => command.exitCode === 0).length + '/' + verifications.length + ' checks passed' : '',
     summary.memoryUpdates ? summary.memoryUpdates + ' memory update' + (summary.memoryUpdates === 1 ? '' : 's') : '',
     summary.contextReceipt ? '~' + formatTokenEstimate(summary.contextReceipt.estimatedTokens) + ' context tokens' : '',
+    summary.verification ? (summary.verification.verdict === 'pass' ? 'Independent review passed' : 'Independent review needs attention') : '',
     summary.usage ? summary.usage.input + ' in / ' + summary.usage.output + ' out' : ''
   ].filter(Boolean);
   if (summary.omittedChanges) stats.push(summary.omittedChanges + ' change' + (summary.omittedChanges === 1 ? '' : 's') + ' not snapshotted');
@@ -2813,11 +3224,24 @@ function preserveRunReview(summary) {
     files: [...summary.files.values()].map(file => ({ ...file })),
     commands: summary.commands.map(command => ({ ...command })),
     plan: summary.plan.map(item => ({ ...item })),
+    verification: summary.verification ? {
+      ...summary.verification,
+      risks: [...summary.verification.risks],
+      unverified: [...summary.verification.unverified]
+    } : undefined,
+    evidence: summary.evidence ? {
+      ...summary.evidence,
+      commands: summary.evidence.commands.map(item => ({ ...item })),
+      diagnostics: summary.evidence.diagnostics.map(item => ({ ...item })),
+      browser: summary.evidence.browser.map(item => ({ ...item })),
+      processes: summary.evidence.processes.map(item => ({ ...item })),
+      playbooksRead: [...summary.evidence.playbooksRead]
+    } : undefined,
     contextReceipt: summary.contextReceipt ? {
       ...summary.contextReceipt,
       guidanceFiles: [...summary.contextReceipt.guidanceFiles],
       pinnedSources: summary.contextReceipt.pinnedSources.map(source => ({ ...source })),
-      memory: { ...summary.contextReceipt.memory }
+      memory: { ...summary.contextReceipt.memory, references: [...summary.contextReceipt.memory.references] }
     } : undefined
   };
   runReviews.set(review.id, review);
@@ -2884,6 +3308,27 @@ function renderRunReview(summary) {
       (summary.memoryUpdates ? '<li class="run-review-row"><span class="run-review-row-copy">Durable memory updates</span><span>' +
         summary.memoryUpdates + '</span></li>' : '') + '</ul></section>'
     : '';
+  const verification = summary.verification
+    ? '<section class="run-review-section"><div class="section-label">INDEPENDENT VERIFICATION</div>' +
+      '<div class="run-review-overview' + (summary.verification.verdict === 'pass' ? '' : ' failed') + '"><span class="run-review-signal" aria-hidden="true"></span>' +
+      '<span class="run-review-copy"><strong>' + escapeHtml(summary.verification.verdict === 'pass' ? 'Evidence passed review' : 'Needs attention') + '</strong>' +
+      '<small>' + escapeHtml(summary.verification.summary) + '</small></span></div>' +
+      evidenceList('Risks', summary.verification.risks) + evidenceList('Not verified', summary.verification.unverified) + '</section>'
+    : '';
+  const browserObservations = summary.evidence
+    ? summary.evidence.browser.filter(item => item.detail).map(item => String(item.action || 'visual check') + ': ' + item.detail)
+    : [];
+  const evidence = summary.evidence
+    ? '<section class="run-review-section"><div class="section-label">LOCAL EVIDENCE</div><ul class="run-review-list">' +
+      '<li class="run-review-row"><span class="run-review-row-copy"><strong>PROBLEMS</strong> · ' + summary.evidence.diagnostics.length + ' inspection' + (summary.evidence.diagnostics.length === 1 ? '' : 's') + '</span></li>' +
+      '<li class="run-review-row"><span class="run-review-row-copy"><strong>BROWSER</strong> · ' + summary.evidence.browser.length + ' check' + (summary.evidence.browser.length === 1 ? '' : 's') +
+      '<small>' + summary.evidence.browser.reduce((sum, item) => sum + item.pageErrors + item.consoleErrors, 0) + ' page/console errors observed · ' +
+      summary.evidence.browser.filter(item => item.analyzed).length + ' visual analyses</small></span></li>' +
+      '<li class="run-review-row"><span class="run-review-row-copy"><strong>LOCAL PROCESSES</strong> · ' + summary.evidence.processes.length + ' observed action' + (summary.evidence.processes.length === 1 ? '' : 's') + '</span></li>' +
+      '<li class="run-review-row"><span class="run-review-row-copy"><strong>PROJECT MAP</strong> · ' + (summary.evidence.projectIndexInspected ? 'inspected' : 'not used') +
+      '<small>' + summary.evidence.playbooksRead.length + ' playbook' + (summary.evidence.playbooksRead.length === 1 ? '' : 's') + ' used</small></span></li>' +
+      '</ul>' + evidenceList('Visual observations', browserObservations) + '</section>'
+    : '';
   const receipt = summary.contextReceipt;
   const contextEvidence = receipt
     ? '<section class="run-review-section"><div class="section-label">CONTEXT USED</div><ul class="run-review-list">' +
@@ -2900,7 +3345,8 @@ function renderRunReview(summary) {
       escapeHtml(receipt.memory.mode === 'semantic'
         ? receipt.memory.recalledChunks + ' semantic chunk' + (receipt.memory.recalledChunks === 1 ? '' : 's')
         : 'recent durable memory') +
-      (receipt.memory.fallback ? '<small>Semantic retrieval fell back to recent local memory.</small>' : '') + '</span></li>' +
+      (receipt.memory.fallback ? '<small>Semantic retrieval fell back to recent local memory.</small>' : '') + '</span>' +
+      contextSourceDetails(receipt.memory.references || []) + '</li>' +
       '<li class="run-review-row"><span class="run-review-row-copy"><strong>BOUNDED CONTEXT</strong> · ~' +
       formatTokenEstimate(receipt.estimatedTokens) + ' tokens · ' + receipt.utilizationPercent + '%</span><span>' +
       (receipt.truncated ? 'truncated' : 'complete') + '</span></li></ul></section>'
@@ -2915,8 +3361,14 @@ function renderRunReview(summary) {
     '<span class="run-review-copy"><strong>' + escapeHtml(title) + '</strong><small>' +
     escapeHtml(summary.error || (summary.failed ? 'Review the failed step and retry when ready.' : 'Execution evidence collected locally.')) +
     '</small><span class="run-review-stats">' + escapeHtml([...runSummaryStats(summary), duration].filter(Boolean).join(' · ')) +
-    '</span></span></div>' + contextEvidence + plan + files + commands + usage +
+    '</span></span></div>' + contextEvidence + plan + files + commands + evidence + verification + usage +
     ((summary.files.length || summary.commands.length) ? '<div class="run-review-footer">' + undoRun + '<button type="button" data-open-changes>Open Source Control</button></div>' : '');
+}
+
+function evidenceList(label, items) {
+  if (!items?.length) return '';
+  return '<div class="run-review-output"><strong>' + escapeHtml(label) + '</strong><ul>' +
+    items.map(item => '<li>' + escapeHtml(item) + '</li>').join('') + '</ul></div>';
 }
 
 function contextSourceDetails(sources) {
@@ -2943,11 +3395,13 @@ function setBusy(value) {
   signal.classList.toggle('busy', locked);
   agentRuntime.disabled = locked;
   autonomyMode.disabled = locked;
+  finalReviewMode.disabled = locked;
   runControls.classList.toggle('locked', locked);
   runControls.querySelector('summary').setAttribute('aria-disabled', String(locked));
   runControls.querySelector('summary').tabIndex = locked ? -1 : 0;
   if (locked) runControls.open = false;
   newThreadButton.disabled = locked;
+  mcpConnections.disabled = locked || mcpConnectionsPending;
   browserControl.disabled = locked || browserControlPending;
   threadsToggle.disabled = value;
   briefToggle.disabled = locked;
@@ -2989,6 +3443,20 @@ function setBrowserControl(enabled, pending = false) {
   browserControl.disabled = busy || remoteRunActive || browserControlPending;
 }
 
+function setMcpConnectionState(state = {}, pending = false) {
+  mcpConnectionCount = Number(state.count || 0);
+  mcpConnectionsPending = Boolean(pending);
+  const enabled = Number(state.enabled || 0);
+  const needsAttention = Number(state.needsAttention || 0);
+  mcpConnections.setAttribute('aria-pressed', String(enabled > 0));
+  mcpConnections.classList.toggle('attention', needsAttention > 0);
+  mcpConnections.title = mcpConnectionCount
+    ? enabled + ' of ' + mcpConnectionCount + ' corporate MCP connection' + (mcpConnectionCount === 1 ? '' : 's') + ' enabled'
+    : 'Add a corporate MCP connection';
+  mcpConnections.setAttribute('aria-label', mcpConnections.title);
+  mcpConnections.disabled = busy || remoteRunActive || mcpConnectionsPending;
+}
+
 function setCancellationPending(value) {
   cancellationPending = Boolean(value);
   cancel.disabled = cancellationPending;
@@ -3025,12 +3493,20 @@ function updateRunControlsSummary() {
     execute: 'Apply scoped file and memory edits automatically; commands and deletions still ask.',
     plan: 'Inspect the project and prepare a read-only implementation plan.'
   };
+  const reviewLabels = { off: 'No review', changes: 'Review work', always: 'Review every run' };
+  const reviewDescriptions = {
+    off: 'Do not make a separate final-review model call.',
+    changes: 'Review runs that changed files or collected execution evidence.',
+    always: 'Review every executable run with a separate call through the same LiteLLM route.'
+  };
   const runtime = agentRuntime.value === 'deep' ? 'deep' : 'standard';
   const mode = ['review', 'execute', 'plan'].includes(autonomyMode.value) ? autonomyMode.value : 'review';
-  runControlsLabel.textContent = modeLabels[mode] + ' · ' + runtimeLabels[runtime];
+  const review = ['off', 'changes', 'always'].includes(finalReviewMode.value) ? finalReviewMode.value : 'changes';
+  runControlsLabel.textContent = modeLabels[mode] + ' · ' + runtimeLabels[runtime] + ' · ' + reviewLabels[review];
   runtimeHelp.textContent = runtimeDescriptions[runtime];
   modeHelp.textContent = modeDescriptions[mode];
-  runControls.querySelector('summary').title = modeDescriptions[mode] + ' ' + runtimeDescriptions[runtime];
+  finalReviewHelp.textContent = reviewDescriptions[review];
+  runControls.querySelector('summary').title = modeDescriptions[mode] + ' ' + runtimeDescriptions[runtime] + ' ' + reviewDescriptions[review];
 }
 
 function setActivityExpanded(expanded) {
@@ -3401,6 +3877,7 @@ function fillLiteLlmSettings(liteLlm) {
     liteLlm.embeddingModel || ''
   );
   agentRuntime.value = liteLlm.runtime === 'deep' ? 'deep' : 'standard';
+  finalReviewMode.value = ['off', 'always'].includes(liteLlm.finalReviewMode) ? liteLlm.finalReviewMode : 'changes';
   updateRunControlsSummary();
   hasStoredLiteLlmKey = Boolean(liteLlm.hasApiKey);
   const savedConnectionReady = Boolean(liteLlm.endpoint && liteLlm.model && liteLlm.hasApiKey);
@@ -3825,6 +4302,11 @@ browserControl.addEventListener('click', () => {
   setBrowserControl(browserControlEnabled, true);
   vscode.postMessage({ type: 'setLocalBrowserToolsEnabled', enabled: !browserControlEnabled });
 });
+mcpConnections.addEventListener('click', () => {
+  if (mcpConnections.disabled) return;
+  setMcpConnectionState({ count: mcpConnectionCount, enabled: mcpConnections.getAttribute('aria-pressed') === 'true' ? 1 : 0 }, true);
+  vscode.postMessage({ type: 'openMcpConnections' });
+});
 memoryToggle.addEventListener('click', () => memoryPanel.classList.contains('hidden') ? openMemoryCenter() : closeTopPanels());
 briefToggle.addEventListener('click', () => briefPanel.classList.contains('hidden') ? openTaskBrief() : closeTopPanels());
 liteLlmToggle.addEventListener('click', () => liteLlmSettings.classList.contains('hidden') ? openLiteLlmSettings() : closeTopPanels());
@@ -3959,6 +4441,10 @@ autonomyMode.addEventListener('change', () => {
   setAutonomyMode(autonomyMode.value);
   vscode.postMessage({ type: 'selectAutonomy', mode: autonomyMode.value });
 });
+finalReviewMode.addEventListener('change', () => {
+  updateRunControlsSummary();
+  vscode.postMessage({ type: 'selectFinalReview', mode: finalReviewMode.value });
+});
 prompt.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); submit(); }
 });
@@ -4014,8 +4500,21 @@ window.addEventListener('message', ({ data }) => {
     case 'hydrate':
       document.getElementById('workspace').textContent = data.workspace;
       setBrowserControl(Boolean(data.browserControlEnabled));
+      setMcpConnectionState(data.mcpConnections || {});
       fillLiteLlmSettings(data.liteLlm || {});
       resetConversation(data.context, data.history, data, data.draft);
+      break;
+    case 'mcpConnectionChanged':
+      setMcpConnectionState(data);
+      if (data.message) {
+        status.textContent = data.message;
+        announce(data.message);
+      }
+      break;
+    case 'mcpConnectionError':
+      setMcpConnectionState({ count: mcpConnectionCount, enabled: mcpConnections.getAttribute('aria-pressed') === 'true' ? 1 : 0 });
+      status.textContent = 'Could not update corporate MCP connections';
+      announce(data.message || status.textContent);
       break;
     case 'openConnectionSettings':
       fillLiteLlmSettings(data.liteLlm || {});
@@ -4155,6 +4654,20 @@ window.addEventListener('message', ({ data }) => {
       setAutonomyMode(data.mode || 'review');
       status.textContent = data.message;
       break;
+    case 'finalReviewChanged':
+      finalReviewMode.value = ['off', 'always'].includes(data.mode) ? data.mode : 'changes';
+      updateRunControlsSummary();
+      if (data.message) {
+        status.textContent = data.message;
+        announce(data.message);
+      }
+      break;
+    case 'finalReviewChangeError':
+      finalReviewMode.value = ['off', 'always'].includes(data.mode) ? data.mode : 'changes';
+      updateRunControlsSummary();
+      status.textContent = 'Could not change final review';
+      appendRecovery(data.message || 'The final-review setting could not be changed.', true, false);
+      break;
     case 'liteLlmSaveError':
       liteLlmSettingsError.textContent = data.message;
       liteLlmSettingsError.classList.remove('hidden');
@@ -4283,6 +4796,15 @@ window.addEventListener('message', ({ data }) => {
     case 'contextReceipt':
       currentRunSummary.contextReceipt = data.receipt || undefined;
       if (liveRunState) renderLiveRun();
+      break;
+    case 'evidence':
+      currentRunSummary.evidence = data.evidence || undefined;
+      if (liveRunState) renderLiveRun();
+      break;
+    case 'verification':
+      currentRunSummary.verification = data.review || undefined;
+      if (liveRunState) renderLiveRun();
+      renderActivityOverview();
       break;
     case 'activity': appendActivity(data.kind, data.title, data.detail); break;
     case 'changes':

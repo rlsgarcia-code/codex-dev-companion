@@ -20,6 +20,11 @@ test("accepts the bounded commands emitted by the bundled sidebar", () => {
     parseIncomingMessage({ type: "setLocalBrowserToolsEnabled", enabled: true }),
     { type: "setLocalBrowserToolsEnabled", enabled: true }
   );
+  assert.deepEqual(parseIncomingMessage({ type: "openMcpConnections" }), { type: "openMcpConnections" });
+  assert.deepEqual(
+    parseIncomingMessage({ type: "selectFinalReview", mode: "changes" }),
+    { type: "selectFinalReview", mode: "changes" }
+  );
   assert.deepEqual(
     parseIncomingMessage({ type: "restoreRunChanges", runId: "run-1", changeIds: ["change-1", "change-2"] }),
     { type: "restoreRunChanges", runId: "run-1", changeIds: ["change-1", "change-2"] }
@@ -55,6 +60,8 @@ test("rejects unknown, incomplete, and extra-field messages", () => {
   }), undefined);
   assert.equal(parseIncomingMessage({ type: "send", text: "x", mode: "unsafe" }), undefined);
   assert.equal(parseIncomingMessage({ type: "setLocalBrowserToolsEnabled", enabled: "yes" }), undefined);
+  assert.equal(parseIncomingMessage({ type: "openMcpConnections", template: "secret" }), undefined);
+  assert.equal(parseIncomingMessage({ type: "selectFinalReview", mode: "sometimes" }), undefined);
 });
 
 test("rejects oversized identifiers, drafts, prompts, credentials, and diagnostics", () => {

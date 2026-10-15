@@ -61,6 +61,7 @@ test("keeps webview element identifiers unique", () => {
   assert.ok(ids.includes("thread-search"));
   assert.ok(ids.includes("threads-toggle"));
   assert.ok(ids.includes("browser-control"));
+  assert.ok(ids.includes("mcp-connections"));
   assert.ok(ids.includes("composer-hint"));
   assert.ok(ids.includes("context-add-file"));
   assert.ok(ids.includes("context-budget-track"));
@@ -72,6 +73,7 @@ test("keeps webview element identifiers unique", () => {
   assert.ok(ids.includes("setup-callout-action"));
   assert.ok(ids.includes("jump-latest"));
   assert.ok(ids.includes("activity-meta"));
+  assert.ok(ids.includes("final-review-mode"));
   assert.ok(ids.includes("plan-summary"));
   assert.ok(ids.includes("plan-activity-items"));
 });
@@ -85,6 +87,27 @@ test("keeps local browser control visible, opt-in, and revocable", () => {
   assert.match(source, /await this\.agent\.setLocalBrowserToolsEnabled\(enabled\)/);
   assert.match(agentSource, /await browserSession\?\.close\(\)/);
   assert.match(source, /browserControl\.disabled = locked \|\| browserControlPending/);
+});
+
+test("keeps corporate MCP onboarding native, secret-separated, and approval-gated", () => {
+  const agentSource = readFileSync("src/agent.ts", "utf8");
+  const managerSource = readFileSync("src/mcp-manager.ts", "utf8");
+  const transportSource = readFileSync("src/mcp-transport.ts", "utf8");
+  assertMessageType("openMcpConnections");
+  assert.match(source, /id="mcp-connections"[^>]*aria-pressed="false"/);
+  assert.match(source, /Add corporate MCP from clipboard/);
+  assert.match(source, /password: true/);
+  assert.match(source, /Credentials remain in VS Code Secret Storage/);
+  assert.match(source, /Handshake and list tools without executing one/);
+  assert.match(managerSource, /this\.context\.secrets\.store/);
+  assert.match(managerSource, /prefixToolNameWithServerName: true/);
+  assert.match(managerSource, /resource: "artifact"/);
+  assert.match(managerSource, /sanitizeMcpResult/);
+  assert.match(managerSource, /beforeToolCall: async/);
+  assert.match(managerSource, /The user declined this MCP tool call/);
+  assert.match(managerSource, /if \(options\.mode === "plan"\) return emptySession\(\)/);
+  assert.match(transportSource, /redirect: "manual"/);
+  assert.match(agentSource, /\.\.\.mcpSession\.tools/);
 });
 
 test("keeps recovery actions and per-thread draft persistence wired", () => {
@@ -236,11 +259,20 @@ test("keeps technical run choices behind one compact explained control", () => {
   assert.match(source, /id="runtime-help">Predictable for most development work/);
   assert.match(source, /id="mode-help">Confirm every workspace change and command/);
   assert.match(source, /function updateRunControlsSummary/);
-  assert.match(source, /runControlsLabel\.textContent = modeLabels\[mode\] \+ ' · ' \+ runtimeLabels\[runtime\]/);
+  assert.match(source, /runControlsLabel\.textContent = modeLabels\[mode\] \+ ' · ' \+ runtimeLabels\[runtime\] \+ ' · ' \+ reviewLabels\[review\]/);
+  assert.match(source, /type: 'selectFinalReview', mode: finalReviewMode\.value/);
+  assert.match(source, /case 'finalReviewChanged'/);
   assert.match(source, /runControls\.classList\.toggle\('locked', locked\)/);
   assert.match(source, /runControls\.querySelector\('summary'\)\.tabIndex = locked \? -1 : 0/);
   assert.match(source, /if \(runControls\.open\)[\s\S]{0,180}runControls\.querySelector\('summary'\)\.focus\(\)/);
   assert.match(source, /\.run-controls-panel \{ position: absolute/);
+});
+
+test("shows independent and browser-comparison evidence in the run review", () => {
+  assert.match(source, /INDEPENDENT VERIFICATION/);
+  assert.match(source, /LOCAL EVIDENCE/);
+  assert.match(source, /Visual observations/);
+  assert.match(source, /summary\.evidence\.browser\.filter\(item => item\.detail\)/);
 });
 
 test("turns a local task brief into an editable draft without sending it", () => {

@@ -10,6 +10,7 @@ const agent = sources.get("src/agent.ts") ?? "";
 const semanticMemory = sources.get("src/semantic-memory.ts") ?? "";
 const gateway = sources.get("src/gateway.ts") ?? "";
 const chroma = sources.get("src/chroma.ts") ?? "";
+const processManager = sources.get("src/process-manager.ts") ?? "";
 
 function count(source: string, pattern: RegExp): number {
   return [...source.matchAll(pattern)].length;
@@ -23,6 +24,8 @@ test("keeps direct source-level network calls inside the reviewed gateway and lo
   assert.deepEqual(directNetworkCallFiles, ["src/agent.ts", "src/chroma.ts"]);
   assert.equal(count(agent, /\bundiciFetch\s*\(/g), 1, "only the explicit model catalog may call undici directly");
   assert.match(chroma, /http:\/\/127\.0\.0\.1:/, "the remaining direct fetch must target local Chroma");
+  assert.match(processManager, /new URL\(normalizeLocalBrowserUrl\(urlText\)\)/,
+    "managed-process readiness must validate loopback before using node:http");
 
   for (const [file, source] of sources) {
     if (file === "src/webview.ts") continue;
@@ -68,6 +71,10 @@ test("routes every LangChain model client through the exact-route gateway transp
   assert.match(semanticMemory, /options\.fetch \? \{ fetch: options\.fetch \} : \{\}/);
   assert.match(gateway, /validateGatewayRequest\(input, init, allowedUrl\)/);
   assert.match(gateway, /redirect: "manual"/);
+  const mcpTransport = sources.get("src/mcp-transport.ts") ?? "";
+  assert.match(mcpTransport, /validateMcpRequest\(input, init, allowedUrl\)/);
+  assert.match(mcpTransport, /redirect: "manual"/);
+  assert.match(mcpTransport, /target\.href !== allowed\.href/);
 });
 
 test("keeps hosted tracing explicitly disabled before agent execution", () => {

@@ -23,7 +23,7 @@ Se o relatório privado não estiver disponível, abra apenas uma issue sem deta
 São especialmente relevantes:
 
 - escape do workspace por caminhos ou links simbólicos;
-- exposição da chave LiteLLM ou do certificado corporativo;
+- exposição da chave LiteLLM, de credenciais MCP ou do certificado corporativo;
 - chamadas de rede fora das rotas configuradas;
 - execução de shell ou comando sem aprovação;
 - bypass das confirmações de exclusão ou restauração;
@@ -61,6 +61,16 @@ O cancelamento é propagado pelo mesmo `AbortSignal` para chamadas do modelo, em
 As ferramentas de navegador exigem uma aprovação modal antes de iniciar cada origem de aplicação local. O transporte do navegador aceita somente `http`, `https`, `ws` e `wss` em endereços de loopback; requisições para outras origens são interrompidas e reportadas sem caminho ou query. O contexto é efêmero, service workers e downloads ficam desabilitados e a ferramenta de preenchimento recusa campos de senha. A extensão usa somente Edge, Chrome ou um executável Chromium explicitamente configurado que já esteja instalado; ela não baixa navegador nem instala dependências de sistema.
 
 Texto visível, metadados de controles, console e screenshots são dados do projeto enviados ao alias LiteLLM configurado quando o agente usa essas ferramentas. O modal explica esse limite antes da autorização. Capturas são limitadas, sobrescritas no armazenamento privado local da extensão e apagadas ao encerrar a sessão; elas não entram no repositório, na memória durável nem no bundle de suporte. A janela exibida ao usuário e a sessão automatizada não compartilham cookies ou credenciais.
+
+Servidores e watchers gerenciados são iniciados diretamente, sem shell, sob a conta do Extension Host. A mesma política de comando e a aprovação modal se aplicam antes da criação; o ambiente é mínimo, a saída é limitada e URLs detectadas só podem ser verificadas quando são loopback. A extensão mantém no máximo três processos e encerra a árvore que iniciou ao parar, recarregar ou desativar. Não instala serviços, não pede elevação e não tenta superar uma política corporativa de execução.
+
+A revisão final independente usa somente o mesmo transporte LiteLLM já configurado. Antes da chamada, conteúdo de caminhos sensíveis é omitido, segredos reconhecidos são redigidos e recortes de mudanças e evidências recebem limites estritos. O revisor não recebe ferramentas nem autoridade para modificar o workspace; sua saída é tratada como parecer adicional, não como prova de sucesso.
+
+### MCP corporativo
+
+Conexões MCP aceitam somente URLs HTTPS finais e explicitamente importadas. O transporte permite apenas os métodos do protocolo na URL exata, rejeita credenciais e query na URL e desabilita redirects antes de anexar headers. Headers sensíveis são separados do perfil e armazenados individualmente no Secret Storage; o template colado não é persistido. A CA corporativa importada é reutilizada pelo transporte MCP sem desabilitar validação TLS.
+
+Somente ferramentas da allowlist revisada pelo usuário entram no `createAgent` ou `createDeepAgent`. Cada chamada exige aprovação modal; recusar encerra aquela chamada sem tentativa de contorno. A descoberta usada por **Test connection** lista ferramentas, mas não executa nenhuma. Saídas MCP são tratadas como dados não confiáveis e podem ser enviadas ao LiteLLM configurado quando passam a compor o contexto do agente. **Plan only** não abre conexão MCP.
 
 ## Dependências e exceções temporárias
 

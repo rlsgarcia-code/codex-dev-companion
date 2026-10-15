@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rlsgarcia-code/codex-dev-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/rlsgarcia-code/codex-dev-companion/actions/workflows/ci.yml)
 
-Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente e conectados somente a endpoints configurados pelo usuário no gateway LiteLLM.
+Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente e conectados ao gateway LiteLLM e aos MCPs corporativos HTTPS que o usuário configurar explicitamente.
 
 O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e previsível, e **Deep Agent** (`createDeepAgent`), preparado para tarefas longas com planejamento, compactação de contexto e subagentes locais. Modelo (`ChatOpenAICompletions`), ferramentas (`tool` + Zod), estado (`MemorySaver`), callbacks, vector store e middleware continuam sendo do ecossistema LangChain. Contexto, histórico, ChromaDB, memória e ferramentas rodam na máquina do usuário. As únicas chamadas externas feitas pela extensão são:
 
@@ -10,9 +10,10 @@ O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e prev
 POST <LITELLM_BASE_URL>/chat/completions
 POST <LITELLM_BASE_URL>/embeddings       # opcional, se a memória semântica for configurada
 GET  <MODELS_URL>  # opcional, somente quando o usuário clica em Load ou Test connection
+POST/GET/DELETE <MCP_URL_EXATA>          # opcional, somente em conexões MCP corporativas habilitadas
 ```
 
-Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, ferramentas hospedadas, web search, MCP externo, LangSmith, telemetria ou verificação de atualização.
+Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, ferramentas hospedadas, web search, descoberta pública de MCP, LangSmith, telemetria ou verificação de atualização.
 
 ## Capacidades
 
@@ -38,10 +39,18 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Revisão por arquivo com diff nativo **before ↔ after**, restauração individual e uma ação para desfazer em conjunto todas as alterações de arquivo completamente capturadas, sempre protegidas contra a perda de edições posteriores.
 - Checkpoints das threads da sessão gerenciados por `MemorySaver`, com projeções limitadas de usuário/assistente no armazenamento local do workspace para restauração após reiniciar o VS Code.
 - Memória durável e auditável em `.codex-agent/memory.md`, com recuperação semântica opcional pelo ChromaDB local.
+- Memória categorizada com proveniência opcional por arquivo: fatos e resumos derivados do código deixam de ser recuperados automaticamente quando a fonte muda, e o recibo da execução mostra quais lembranças influenciaram o turno.
 - Central de memória na sidebar para consultar, adicionar, editar e excluir entradas duráveis, abrir a fonte Markdown e compreender o modo de recuperação ativo.
 - Planejamento apresentado na própria sidebar.
 - Ferramentas locais para listar, pesquisar e ler arquivos sob demanda.
+- Inteligência da própria linguagem do VS Code para Problems, símbolos, definições, referências, hierarquia de chamadas, ações de código e rename multi-arquivo; o rename usa `WorkspaceEdit`, mostra o alcance e segue a política de aprovação.
+- Mapa estrutural local e invalidável do projeto, com módulos, imports, dependentes, scripts e testes relacionados sem embeddings do código-fonte nem um índice hospedado.
+- Seleção progressiva de verificações: sugere testes relacionados aos arquivos alterados, executa primeiro o alvo mais estreito e compara Problems antes/depois quando apropriado.
+- Processos locais gerenciados para servidores e watchers, com saída limitada, detecção de URL `localhost`, readiness, status, reinício e encerramento da árvore sem shell e sem serviço de sistema.
+- Playbooks versionáveis em `.codex-agent/playbooks/*.md`, lidos sob demanda como orientação não confiável e nunca executados automaticamente.
 - Validação de aplicações locais em navegador isolado: abre a URL de `localhost` para acompanhamento no VS Code, inspeciona texto/controles/console, interage por referências estáveis e produz uma análise visual opcional pelo mesmo modelo LiteLLM.
+- Evidência visual comparativa opcional, com baseline efêmero antes da mudança e análise before/after no mesmo modelo multimodal, registrada no **Review run** sem persistir a imagem no projeto.
+- Revisor final independente e configurável, chamado pelo mesmo `ChatOpenAICompletions`, que recebe evidência limitada e redigida — incluindo recortes reais das mudanças, comandos, diagnósticos, navegador e processos — e sinaliza risco ou verificação ausente sem inventar sucesso.
 - Automação sem instalação de navegador: usa `playwright-core` com Edge ou Chrome já presente na máquina, sem download de Chromium, `node-gyp`, serviço do sistema ou privilégio administrativo.
 - Edição por substituição exata e criação de arquivos, sempre dentro do workspace.
 - Execução de comandos sem shell e sempre com confirmação modal do usuário, estado de aprovação visível na atividade, aviso destacado para ações destrutivas e ambiente sem a chave LiteLLM.
@@ -53,6 +62,8 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Chave virtual LiteLLM armazenada exclusivamente no Secret Storage do VS Code.
 - Transporte externo restrito às rotas HTTPS exatas de Chat Completions e embeddings derivadas do gateway configurado; métodos inesperados, parâmetros na URL e redirects são recusados antes que credenciais possam sair para outro destino.
 - Bundle PEM corporativo opcional, importado uma vez para o armazenamento global local da extensão.
+- Conexões MCP corporativas via ícone de plugue: importe o template JSON do catálogo pela área de transferência ou por arquivo, preencha placeholders em diálogos nativos do VS Code e exponha somente as ferramentas selecionadas.
+- Adaptador MCP oficial do LangChain com URL HTTPS exata, redirects bloqueados, CA corporativa reutilizada, credenciais por header no Secret Storage e aprovação antes de cada chamada de ferramenta.
 - Catálogo de modelos opcional carregado da URL informada pelo usuário com `Cache-Control: no-cache` e `api-key` usando a chave do Secret Storage.
 - Aviso de primeiro uso na própria sidebar enquanto gateway, alias de chat e chave segura ainda não estiverem configurados.
 - Diagnósticos acionáveis que oferecem correções locais para reasoning, sampling, header de autenticação, rota, modelo e CA corporativa; parâmetros corrigidos são testados novamente antes de o usuário salvá-los.
@@ -111,6 +122,8 @@ Quando concluir, o comando imprime `NATIVE_VSIX_READY` seguido do caminho absolu
 
 No Windows, esse fluxo não exige habilitar o Modo de Desenvolvedor nem conceder ao usuário permissão para criar links simbólicos.
 
+O uso normal também não requer privilégio de administrador. A extensão usa APIs públicas do VS Code, processos pertencentes ao usuário e Edge/Chrome já instalado. Ferramentas de desenvolvimento que o projeto exige — por exemplo Node.js, Python ou o próprio servidor da aplicação — precisam estar disponíveis para esse usuário. Políticas corporativas ainda podem bloquear instalação de VSIX, execução de processos ou automação do navegador; nesses casos a extensão relata a limitação e não tenta contorná-la.
+
 Para mantenedores, `npm run package:verified` executa antes do empacotamento o type-check, todos os testes e os smokes locais de roteamento de Chat Completions e Chroma. Esses smokes usam serviços temporários locais, nunca a configuração ou as credenciais do usuário. O CI continua exigindo todas essas verificações antes de publicar seus artifacts.
 
 Cada build também produz `dist/licenses/third-party-manifest.json` e `dist/licenses/THIRD_PARTY-LICENSES.txt` a partir das dependências que realmente entraram no bundle. Ambos seguem dentro do VSIX. O empacotamento falha se uma dependência não declarar uma licença revisada ou se o texto correspondente não estiver disponível, evitando distribuir componentes sem inventário auditável.
@@ -140,6 +153,17 @@ Falhas reproduzíveis podem ser registradas pelo formulário **Relatar uma falha
 5. Abra **Local Companion** na barra lateral direita.
 
 O comando abre a Secondary Sidebar diretamente no único formulário de configuração da extensão. **Set up** apresenta o processo em três etapas curtas: **Gateway**, **Models** e **Verify**. A navegação só avança depois dos campos obrigatórios da etapa atual; parâmetros de compatibilidade permanecem recolhidos em **Advanced model settings**. Usuários que já possuem uma configuração também podem percorrer as etapas para revisar somente a parte desejada. Não existe um segundo wizard modal com valores ou regras diferentes.
+
+### Conectar um MCP corporativo
+
+1. Copie o JSON `mcpServers` fornecido pelo catálogo corporativo, ou salve-o como arquivo `.json`.
+2. Clique no ícone de plugue no cabeçalho do chat.
+3. Escolha **Add corporate MCP from clipboard** ou **from JSON file**.
+4. Substitua o placeholder do workspace na URL, informe a rota opcional e preencha cada credencial nos campos protegidos do VS Code.
+5. Revise a lista de ferramentas permitidas e confirme. Para o template Databricks SQL, mantenha apenas `execute_sql_read_only` e `poll_sql_result`.
+6. Execute **Test connection**. O teste faz somente o handshake e a descoberta do catálogo de ferramentas; não executa SQL.
+
+A URL resolvida, headers não sensíveis, estado habilitado e allowlist ficam no estado local do workspace. `apikey`, `Authorization` e outros headers reconhecidos como segredo ficam individualmente no Secret Storage. O valor `Bearer` é montado localmente. O JSON colado não é persistido. O certificado corporativo importado para o LiteLLM é reutilizado pelo MCP. Antes de cada ferramenta, o VS Code exibe uma aprovação modal e informa que o resultado corporativo pode ser incluído na próxima chamada ao modelo LiteLLM configurado. **Plan only** não conecta nem disponibiliza ferramentas MCP.
 
 O VS Code precisa considerar a pasta confiável antes de ativar o agente, pois a extensão lê arquivos e pode executar ferramentas locais após as confirmações aplicáveis. Ao enviar uma mensagem, uma pré-verificação exclusivamente local confirma workspace, concorrência entre janelas, gateway, chave no Secret Storage, perfil do modelo e certificado corporativo. Se algo estiver incompleto, a mensagem volta intacta ao compositor e a configuração relevante é aberta; nenhuma thread, execução ou chamada externa é criada pela pré-verificação.
 
@@ -259,6 +283,8 @@ As escritas diretas do agente são acompanhadas por snapshots locais limitados e
 
 Ao final do turno, **Review run** abre uma gaveta única de evidências. Ela preserva até dez revisões na sessão da sidebar, associa cada botão ao turno correto e diferencia verificações conhecidas de outros comandos. Quando todos os arquivos da execução foram capturados, **Undo all file changes** pré-valida o conjunto inteiro e aplica uma única edição do workspace; se qualquer arquivo tiver mudado depois, nenhum deles é restaurado. A ação é intencionalmente descrita como restauração de arquivos: comandos e atualizações de memória não são revertidos. Se houve snapshots omitidos por tamanho ou limite, a ação em conjunto não é oferecida. Depois que a edição é aplicada, todos os documentos restaurados são salvos; uma falha isolada de gravação não impede as demais tentativas nem deixa o estado da revisão incorreto, e a interface identifica os documentos que precisam ser salvos manualmente. Saídas são mantidas limitadas e mudanças feitas por comandos continuam sendo conferidas pelo Source Control.
 
+Por padrão, execuções que alteram arquivos ou coletam evidência recebem uma segunda chamada conservadora ao mesmo alias LiteLLM. Esse revisor não possui ferramentas e recebe somente o pedido, a resposta preliminar, recortes limitados e redigidos das mudanças e o recibo local de comandos, Problems, navegador e processos. A escolha **Final review** no controle de execução permite revisar mudanças/evidências, revisar todo run executável ou desativar a chamada. O revisor pode marcar riscos e itens não verificados; uma falha nessa chamada não apaga o trabalho nem é apresentada como aprovação.
+
 Cada resposta do agente oferece ações discretas para **Copy** e **Add memory…**. A cópia usa o clipboard local do VS Code. A ação de memória abre o mesmo formulário vazio e validado da central, exigindo que o usuário registre uma decisão, fato ou convenção concisa; o texto bruto da resposta nunca é usado como entrada automática de `memory.md`.
 
 Conversas longas mostram inicialmente os turnos completos mais recentes. Mensagens anteriores permanecem na projeção local da thread e podem ser reveladas em blocos pelo controle **Show earlier messages**; a posição de leitura é preservada e o limite nunca separa artificialmente uma resposta do pedido imediatamente anterior.
@@ -280,6 +306,8 @@ Para permitir que o agente confira uma interface que está rodando na raiz do pr
 5. A mesma URL é aberta para acompanhamento. No VS Code 1.109 ou posterior, mantenha `workbench.browser.openLocalhostLinks` habilitado para que links locais apareçam no navegador integrado.
 
 O agente recebe ferramentas LangChain para abrir, inspecionar, clicar, preencher campos que não sejam de senha, selecionar opções, pressionar teclas, alterar o viewport, recarregar, voltar, capturar a tela e encerrar a sessão. DOM, texto visível, console e a captura solicitada passam somente pelo endpoint LiteLLM já configurado; a análise da imagem requer que o alias selecionado aceite conteúdo multimodal em Chat Completions. Se o modelo rejeitar imagens, a inspeção estrutural continua disponível.
+
+Quando houver um estado anterior significativo, o agente pode manter uma baseline somente durante o run e comparar o viewport final com ela. A imagem é efêmera; a revisão conserva apenas a observação textual redigida do modelo e as contagens de erros da página/console.
 
 A sessão usa perfil efêmero, bloqueia downloads, service workers, campos de senha e qualquer requisição HTTP, HTTPS ou WebSocket que não seja loopback. Recursos externos usados pela página, como fontes ou scripts em CDN, aparecem em `blockedRequests` e precisam ser servidos localmente para essa validação. A última captura fica no armazenamento privado da extensão e é substituída na próxima conferência; ao fechar a sessão, ela é apagada.
 
@@ -313,7 +341,7 @@ code --install-extension codex-dev-companion-0.11.0-<plataforma>.vsix --force
 
 ## Memória
 
-O arquivo `.codex-agent/memory.md` é a fonte de verdade da memória do projeto. Ele deve conter somente decisões, fatos e convenções duráveis e verificáveis. A central da sidebar projeta no máximo 200 entradas recentes sem criar um segundo armazenamento; entradas antigas continuam preservadas no Markdown. Cada entrada gerenciada tem limite de 4.000 caracteres e o arquivo é recusado para mutações automáticas acima de 2 MB, evitando regravações parciais. Quando um alias de embeddings está configurado, a extensão transforma essas entradas em chunks limitados, gera embeddings pelo LiteLLM e mantém o índice no ChromaDB local.
+O arquivo `.codex-agent/memory.md` é a fonte de verdade da memória do projeto. Ele deve conter somente decisões, fatos, convenções, follow-ups e resumos de módulo duráveis e verificáveis. Entradas derivadas do código podem registrar caminhos e fingerprints das fontes; se uma fonte mudar ou desaparecer, a entrada continua auditável no Markdown, mas é omitida do contexto do agente até ser atualizada. A central da sidebar projeta no máximo 200 entradas recentes sem criar um segundo armazenamento; entradas antigas continuam preservadas no Markdown. Cada entrada gerenciada tem limite de 4.000 caracteres e o arquivo é recusado para mutações automáticas acima de 2 MB, evitando regravações parciais. Quando um alias de embeddings está configurado, a extensão transforma essas entradas em chunks limitados, gera embeddings pelo LiteLLM e mantém o índice no ChromaDB local.
 
 Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status transitório ou transcrições do chat.
 
@@ -334,7 +362,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 - A política de comandos é uma defesa local em profundidade, não um sandbox do sistema operacional: um script já presente no workspace e aprovado pelo usuário pode conter comportamento próprio. Revise o comando e os scripts associados antes de autorizar.
 - O histórico do agente fica no armazenamento local do workspace do VS Code; não é copiado para `memory.md`.
 - A projeção limitada da conversa fica no estado local do workspace; os vetores Chroma ficam no armazenamento privado local da extensão, fora do repositório.
-- O LiteLLM recebe apenas as mensagens necessárias para inferência, incluindo trechos de arquivos e resultados de ferramentas usados naquele turno.
+- O LiteLLM recebe apenas as mensagens necessárias para inferência, incluindo trechos de arquivos e resultados de ferramentas usados naquele turno. Isso inclui resultados de um MCP corporativo quando o usuário aprovou a chamada e o agente precisa usá-los como contexto.
 - Revise as alterações antes de fazer commit.
 
 ## Configurações
@@ -356,6 +384,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 | `codexDevCompanion.embeddingModel` | vazio | Alias LiteLLM usado em `POST /embeddings`; vazio mantém somente memória textual. |
 | `codexDevCompanion.semanticMemoryResults` | `5` | Número máximo de chunks relevantes recuperados por turno. |
 | `codexDevCompanion.standardRecursionLimit` | `200` | Limite LangGraph do runtime padrão; o Deep Agent usa o limite nativo alto. |
+| `codexDevCompanion.finalReviewMode` | `changes` | Segunda revisão pelo mesmo alias LiteLLM: `changes`, `always` ou `off`. |
 | `codexDevCompanion.localBrowserToolsEnabled` | `false` | Disponibiliza, após ativação pelo ícone do chat, ferramentas LangChain protegidas por aprovação para aplicações em loopback. |
 | `codexDevCompanion.localBrowserChannel` | `auto` | Usa Edge primeiro no Windows e Chrome primeiro nas demais plataformas, com fallback entre ambos. |
 | `codexDevCompanion.localBrowserExecutablePath` | vazio | Caminho absoluto opcional para um navegador Chromium corporativo já instalado. |
@@ -372,6 +401,9 @@ VS Code Secondary Sidebar
     ├── ContextCollector ─── editor, seleção, diagnósticos, arquivos e orientação do projeto
     ├── ProjectMemory ────── .codex-agent/memory.md (fonte de verdade)
     ├── ChangeReviewManager  snapshots efêmeros, diff e restauração protegida
+    ├── VsCodeIntelligence ─ Problems, símbolos, navegação, code actions e rename
+    ├── LocalProjectIndex ── mapa estrutural local, testes relacionados e playbooks
+    ├── LocalProcessManager  servidores/watchers do usuário, sem shell ou daemon
     └── DevelopmentAgent ─── orquestra primitivas LangChain
             │
             ├── runtime escolhido por workspace
@@ -384,12 +416,14 @@ VS Code Secondary Sidebar
             │     ├── list/search/read
             │     ├── edit/create
             │     ├── approved command execution
-            │     ├── plan/memory
+            │     ├── plan/memory/inteligência VS Code
+            │     ├── processos locais aprovados ──► loopback
             │     └── browser local aprovado ──► Chrome/Edge instalado ──► loopback
             │
             ├── HTTPS ──► LiteLLM POST /v1/chat/completions
             ├── HTTPS ──► LiteLLM POST /v1/embeddings (opcional)
-            └── HTTPS ──► catálogo GET /models (opcional e sob demanda)
+            ├── HTTPS ──► catálogo GET /models (opcional e sob demanda)
+            └── HTTPS ──► MCP corporativo exato (opcional, allowlist + aprovação)
 ```
 
 ## Limitações
@@ -407,5 +441,6 @@ VS Code Secondary Sidebar
 - A automação visual precisa de Edge, Chrome ou outro Chromium configurado já instalado no host do Extension Host. Políticas corporativas do navegador ainda podem impedir inicialização ou automação mesmo sem exigir privilégio administrativo.
 - A aba exibida no navegador integrado e a sessão automatizada carregam a mesma URL, mas não compartilham cookies, login ou armazenamento. A sessão do agente é deliberadamente efêmera e isolada.
 - A interpretação visual exige um modelo multimodal. Modelos somente de texto ainda podem validar DOM, controles, console e erros de página.
+- Esta versão aceita MCP corporativo por Streamable HTTP. Servidores locais `stdio` distribuídos por npm/npx ainda não são iniciados pela extensão; por isso o registry npm corporativo não é usado por este fluxo HTTP.
 - O inventário de terceiros é derivado do bundle no momento do build; consulte `dist/licenses/third-party-manifest.json` para versões, licenças, fontes e alertas de conformidade exatos do pacote gerado.
-- Não há suporte a ferramentas hospedadas, web search, MCP remoto ou execução em nuvem.
+- Não há suporte a ferramentas hospedadas, web search, descoberta pública de MCP ou execução do agente em nuvem. MCP remoto existe somente para endpoints corporativos HTTPS importados explicitamente.

@@ -1,6 +1,8 @@
 import type { ConnectionDiagnosticFix } from "./connection-remediation";
+import type { CompletionReview } from "./completion-review";
 import type { RunOutcome } from "./completion-notification";
 import type { ProjectGuidanceDocument } from "./project-guidance";
+import type { RunEvidenceSnapshot } from "./run-evidence";
 
 export type RunMode = "review" | "execute" | "plan";
 export type AgentRuntime = "standard" | "deep";
@@ -56,6 +58,7 @@ export type AgentContextReceipt = {
     recalledChunks: number;
     estimatedTokens: number;
     fallback: boolean;
+    references: string[];
   };
 };
 
@@ -88,6 +91,8 @@ export type AgentUiEvent =
   | { type: "plan"; items: Array<{ text: string; completed: boolean }> }
   | { type: "activity"; kind: string; title: string; detail?: string }
   | { type: "changes"; items: RunFileChange[]; omitted: number }
+  | { type: "evidence"; evidence: RunEvidenceSnapshot }
+  | { type: "verification"; review: CompletionReview }
   | { type: "contextReceipt"; receipt: AgentContextReceipt }
   | { type: "assistant"; text: string }
   | { type: "usage"; input: number; output: number }

@@ -1,4 +1,7 @@
 import * as vscode from "vscode";
+import { createHash } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import * as path from "node:path";
 import {
   deleteDurableMemoryEntry,
   durableMemorySnapshot,
@@ -11,6 +14,7 @@ import { redactSensitiveText } from "./redaction";
 const MEMORY_DIRECTORY = ".codex-agent";
 const MEMORY_FILE = "memory.md";
 const MAX_MEMORY_FILE_BYTES = 2_000_000;
+const MAX_MEMORY_SOURCE_BYTES = 1_500_000;
 const DEFAULT_MEMORY = `# Project memory
 
 Durable facts, decisions, conventions, and follow-ups for the development agent.
@@ -25,7 +29,7 @@ export class ProjectMemory {
   }
 
   public async read(maxCharacters = 12_000): Promise<string> {
-    const text = await this.readSource();
+    const text = await this.withoutStaleSourceEntries(await this.readSource());
     return text.slice(-maxCharacters);
   }
 
@@ -116,5 +120,42 @@ export class ProjectMemory {
       throw new Error("Project memory would exceed 2 MB. Remove obsolete entries before adding more.");
     }
     await vscode.workspace.fs.writeFile(uri, bytes);
+  }
+
+  private async withoutStaleSourceEntries(source: string): Promise<string> {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) return source;
+    const lines = source.split(/\r?\n/);
+    const retained: string[] = [];
+    for (const line of lines) {
+      const metadata = /\s\[sources:\s*([^\]]+)\]\s*$/.exec(line);
+      if (!metadata) {
+        retained.push(line);
+        continue;
+      }
+      const sources = metadata[1]?.split(",").map((entry) => entry.trim()).filter(Boolean) ?? [];
+      const valid = sources.length > 0 && (await Promise.all(sources.map((entry) => this.sourceFingerprintMatches(root, entry))))
+        .every(Boolean);
+      if (valid) retained.push(line);
+    }
+    return retained.join(source.includes("\r\n") ? "\r\n" : "\n");
+  }
+
+  private async sourceFingerprintMatches(root: string, entry: string): Promise<boolean> {
+    const match = /^(.+?)#([a-f0-9]{16})$/.exec(entry);
+    if (!match?.[1] || !match[2]) return false;
+    const candidate = path.resolve(root, match[1]);
+    try {
+      const [realRoot, realFile] = await Promise.all([realpath(root), realpath(candidate)]);
+      const relative = path.relative(realRoot, realFile);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return false;
+      const uri = vscode.Uri.file(realFile);
+      const metadata = await vscode.workspace.fs.stat(uri);
+      if ((metadata.type & vscode.FileType.File) === 0 || metadata.size > MAX_MEMORY_SOURCE_BYTES) return false;
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      return createHash("sha256").update(bytes).digest("hex").slice(0, 16) === match[2];
+    } catch {
+      return false;
+    }
   }
 }
