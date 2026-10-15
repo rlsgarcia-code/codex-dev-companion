@@ -105,6 +105,8 @@ code --install-extension ./codex-dev-companion-0.11.0-<plataforma>.vsix --force
 
 `npm run package` executa somente o build local e o empacotamento. A chave, o endpoint, o certificado e os aliases serão configurados pelo usuário dentro do VS Code depois da instalação.
 
+Quando concluir, o comando imprime `NATIVE_VSIX_READY` seguido do caminho absoluto do arquivo criado. Use exatamente esse caminho na instalação. O empacotador chama a cópia local do VSCE diretamente pelo Node, sem `npx`, shell, download ou dependência do terminal escolhido.
+
 No Windows, esse fluxo não exige habilitar o Modo de Desenvolvedor nem conceder ao usuário permissão para criar links simbólicos.
 
 Para mantenedores, `npm run package:verified` executa antes do empacotamento o type-check, todos os testes e os smokes locais de roteamento de Chat Completions e Chroma. Esses smokes usam serviços temporários locais, nunca a configuração ou as credenciais do usuário. O CI continua exigindo todas essas verificações antes de publicar seus artifacts.

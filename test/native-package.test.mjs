@@ -3,7 +3,8 @@ import test from "node:test";
 import {
   nativePackageName,
   nativeTarget,
-  packageArguments
+  packageArguments,
+  packageInvocation
 } from "../scripts/package-native.mjs";
 
 test("maps every supported build host to an explicit VSIX target", () => {
@@ -24,8 +25,6 @@ test("builds a versioned target-specific package command", () => {
     "codex-dev-companion-0.11.0-darwin-arm64.vsix"
   );
   assert.deepEqual(packageArguments("0.11.0", "win32-x64"), [
-    "--no-install",
-    "vsce",
     "package",
     "--no-dependencies",
     "--target",
@@ -35,4 +34,23 @@ test("builds a versioned target-specific package command", () => {
   ]);
   assert.throws(() => nativePackageName("latest", "linux-x64"), /Invalid package version/);
   assert.throws(() => nativePackageName("0.11.0", "universal"), /Unsupported VSIX target/);
+});
+
+test("invokes the local VSCE CLI through Node without a shell or npx shim", () => {
+  const invocation = packageInvocation("0.11.0", "win32-x64", {
+    nodeExecutable: "C:\\Program Files\\nodejs\\node.exe",
+    vsceCli: "C:\\repo\\node_modules\\@vscode\\vsce\\vsce"
+  });
+
+  assert.equal(invocation.executable, "C:\\Program Files\\nodejs\\node.exe");
+  assert.deepEqual(invocation.args, [
+    "C:\\repo\\node_modules\\@vscode\\vsce\\vsce",
+    "package",
+    "--no-dependencies",
+    "--target",
+    "win32-x64",
+    "--out",
+    "codex-dev-companion-0.11.0-win32-x64.vsix"
+  ]);
+  assert.doesNotMatch(invocation.args.join(" "), /npx(?:\.cmd)?/i);
 });

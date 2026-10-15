@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { RELEASE_TARGETS } from "./verify-release-metadata.mjs";
+
+const require = createRequire(import.meta.url);
 
 const TARGET_BY_HOST = new Map([
   ["darwin-arm64", "darwin-arm64"],
@@ -35,8 +38,6 @@ export function nativePackageName(version, target) {
 
 export function packageArguments(version, target) {
   return [
-    "--no-install",
-    "vsce",
     "package",
     "--no-dependencies",
     "--target",
@@ -46,6 +47,15 @@ export function packageArguments(version, target) {
   ];
 }
 
+export function packageInvocation(version, target, options = {}) {
+  const executable = options.nodeExecutable ?? process.execPath;
+  const vsceCli = options.vsceCli ?? require.resolve("@vscode/vsce/vsce");
+  return {
+    executable,
+    args: [vsceCli, ...packageArguments(version, target)]
+  };
+}
+
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
 if (import.meta.url === invokedPath) {
   const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -53,13 +63,13 @@ if (import.meta.url === invokedPath) {
   const version = String(manifest.version ?? "").trim();
   const target = nativeTarget();
   const output = nativePackageName(version, target);
-  const executable = process.platform === "win32" ? "npx.cmd" : "npx";
-  const result = spawnSync(executable, packageArguments(version, target), {
+  const invocation = packageInvocation(version, target);
+  const result = spawnSync(invocation.executable, invocation.args, {
     cwd: projectRoot,
     stdio: "inherit",
     shell: false
   });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exitCode = result.status ?? 1;
-  else process.stdout.write(`NATIVE_VSIX_READY ${target} ${output}\n`);
+  else process.stdout.write(`NATIVE_VSIX_READY ${target} ${path.join(projectRoot, output)}\n`);
 }
