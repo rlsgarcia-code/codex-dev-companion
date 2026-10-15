@@ -123,6 +123,8 @@ O pipeline usa GitHub Actions fixadas por commit imutável. Atualizações de de
 
 Antes de promover uma versão para uso amplo, execute o [roteiro de piloto corporativo](https://github.com/rlsgarcia-code/codex-dev-companion/blob/main/docs/CORPORATE-PILOT.md) na máquina e rede de destino. Ele cobre compatibilidade do Extension Host, gateway/PEM, modelos, Chroma, duas janelas, recuperação e privacidade, e inclui um formato de retorno que não expõe dados internos.
 
+Falhas reproduzíveis podem ser registradas pelo formulário **Relatar uma falha**, depois da revisão local do bundle sanitizado. O formulário exige confirmação explícita de que nenhum dado corporativo foi incluído. Vulnerabilidades devem usar exclusivamente o [relatório privado de segurança](https://github.com/rlsgarcia-code/codex-dev-companion/security/advisories/new).
+
 ## Primeiro uso
 
 1. Abra uma pasta de projeto no VS Code.

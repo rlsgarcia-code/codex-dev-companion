@@ -1,0 +1,39 @@
+name: Sugerir uma melhoria
+description: Proponha uma melhoria de produto sem compartilhar informações corporativas.
+title: "[Melhoria]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explique a necessidade e o resultado desejado. Não publique chave, certificado, endpoint privado, nomes ou caminhos internos, conversa, prompt, código proprietário ou log.
+
+  - type: textarea
+    id: need
+    attributes:
+      label: Qual necessidade deve ser atendida?
+      description: Descreva o problema de uso, sem dados internos ou uma solução obrigatória.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Resultado desejado
+      description: Explique como o usuário perceberia que a melhoria funcionou.
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Restrições relevantes
+      description: Opcional. Considere operação local, Chat Completions via LiteLLM, VS Code e políticas corporativas.
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Confirmação de privacidade
+      options:
+        - label: Revisei a sugestão e ela não contém informações corporativas, credenciais ou conteúdo de projeto.
+          required: true
+

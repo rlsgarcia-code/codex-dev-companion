@@ -62,6 +62,10 @@ O CI repete type-check, testes, smoke local e empacotamento em macOS arm64/x64, 
 
 Referências de GitHub Actions devem permanecer fixadas por SHA completo e conservar um comentário de versão revisável, como `# v6` ou `# v7.0.1`. O Dependabot abre pull requests semanais para npm e Actions; atualizações `minor` e `patch` de cada grupo são combinadas, mas majors permanecem isoladas para exigir uma migração explícita. Revise changelog, release upstream, licenças, auditoria e toda a matriz antes de aceitar uma atualização.
 
+## Issues
+
+Use os formulários estruturados para falhas e melhorias; issues em branco ficam desabilitadas. Antes de publicar, revise o bundle de suporte e remova qualquer dado que a política da empresa trate como interno. Vulnerabilidades, provas de conceito sensíveis e suspeitas de exposição devem seguir o canal privado indicado em [SECURITY.md](SECURITY.md), nunca uma issue pública.
+
 ## Releases
 
 1. Atualize a versão em `package.json` e `package-lock.json` e crie a seção correspondente em `CHANGELOG.md`.
