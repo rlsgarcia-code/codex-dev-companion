@@ -110,6 +110,9 @@ test("tagged releases publish a complete, immutable, checksummed native package 
 });
 
 test("repository policy documents stay present", () => {
+  const readme = readFileSync("README.md", "utf8");
+  assert.match(readme, /code --install-extension .*<plataforma>\.vsix --force/);
+  assert.doesNotMatch(readme, /code --install-extension codex-dev-companion-0\.11\.0\.vsix/);
   assert.match(readFileSync("CONTRIBUTING.md", "utf8"), /Contrato arquitetural/);
   assert.match(readFileSync("SECURITY.md", "utf8"), /Report a vulnerability/);
   assert.match(readFileSync("docs/CORPORATE-PILOT.md", "utf8"), /Critério de aprovação/);

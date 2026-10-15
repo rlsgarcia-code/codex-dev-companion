@@ -1742,39 +1742,52 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       </section>
     </div>
 
-    <section class="timeline" id="timeline" aria-label="Conversation">
-      <div class="welcome" id="welcome">
-        <div class="monogram">C</div>
-        <h2>What would you like<br/>to accomplish?</h2>
-        <p>Choose a starting point or write your own request. Suggested tasks only prepare an editable draft.</p>
-        <div class="starters" aria-label="Suggested development tasks">
-          <button type="button" data-prompt="Explain this project in plain language. Inspect the repository structure and the most relevant documentation, then describe what it does, its main parts, how they connect, and the safest place to start. Do not change files.">
-            <span><strong>Understand this project</strong><small>Map the architecture in plain language</small></span><span class="starter-arrow" aria-hidden="true">→</span>
-          </button>
-          <button type="button" data-prompt="Investigate the current editor diagnostics and failing checks. Explain the likely cause, then propose the smallest safe correction and the checks that would prove it works.">
-            <span><strong>Fix a problem</strong><small>Investigate diagnostics and failing checks</small></span><span class="starter-arrow" aria-hidden="true">→</span>
-          </button>
-          <button type="button" data-prompt="I want to implement this change: [describe the expected behavior]. Start by identifying any missing acceptance criteria, inspect the relevant code, and present a short plan before editing.">
-            <span><strong>Implement a change</strong><small>Turn expected behavior into a safe plan</small></span><span class="starter-arrow" aria-hidden="true">→</span>
-          </button>
-          <button type="button" data-prompt="Review the current workspace changes for correctness, security, regressions, and missing tests. Do not modify files. Report findings by severity with precise file references.">
-            <span><strong>Review current changes</strong><small>Find risks before committing</small></span><span class="starter-arrow" aria-hidden="true">→</span>
-          </button>
+    <div class="conversation-stage">
+      <section class="timeline" id="timeline" aria-label="Conversation">
+        <div class="welcome" id="welcome">
+          <div class="monogram">C</div>
+          <h2>What would you like<br/>to accomplish?</h2>
+          <p>Choose a starting point or write your own request. Suggested tasks only prepare an editable draft.</p>
+          <div class="starters" aria-label="Suggested development tasks">
+            <button type="button" data-prompt="Explain this project in plain language. Inspect the repository structure and the most relevant documentation, then describe what it does, its main parts, how they connect, and the safest place to start. Do not change files.">
+              <span><strong>Understand this project</strong><small>Map the architecture in plain language</small></span><span class="starter-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" data-prompt="Investigate the current editor diagnostics and failing checks. Explain the likely cause, then propose the smallest safe correction and the checks that would prove it works.">
+              <span><strong>Fix a problem</strong><small>Investigate diagnostics and failing checks</small></span><span class="starter-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" data-prompt="I want to implement this change: [describe the expected behavior]. Start by identifying any missing acceptance criteria, inspect the relevant code, and present a short plan before editing.">
+              <span><strong>Implement a change</strong><small>Turn expected behavior into a safe plan</small></span><span class="starter-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" data-prompt="Review the current workspace changes for correctness, security, regressions, and missing tests. Do not modify files. Report findings by severity with precise file references.">
+              <span><strong>Review current changes</strong><small>Find risks before committing</small></span><span class="starter-arrow" aria-hidden="true">→</span>
+            </button>
+          </div>
+          <small class="starter-note">Nothing runs until you review the draft and press Send.</small>
         </div>
-        <small class="starter-note">Nothing runs until you review the draft and press Send.</small>
-      </div>
-    </section>
+      </section>
+      <button class="jump-latest hidden" id="jump-latest" type="button" aria-label="Jump to the latest conversation activity">Latest activity ↓</button>
+    </div>
 
     <section class="activity-dock" id="activity-dock">
       <button class="presence" id="activity-toggle" type="button" aria-expanded="false" aria-controls="plan-panel" aria-disabled="true" title="Agent activity">
         <span class="signal" id="signal" aria-hidden="true"></span>
-        <span id="status" role="status" aria-live="polite" aria-atomic="true">Ready</span>
-        <span class="workspace" id="workspace"></span>
+        <span class="presence-copy">
+          <strong id="status" role="status" aria-live="polite" aria-atomic="true">Ready</strong>
+          <small class="workspace" id="workspace"></small>
+        </span>
+        <span class="activity-meta" id="activity-meta"></span>
         <span class="activity-chevron" aria-hidden="true">⌃</span>
       </button>
       <div class="plan" id="plan-panel" role="region" aria-labelledby="plan-title" aria-hidden="true">
-        <div class="section-label" id="plan-title">CURRENT PLAN</div>
+        <div class="plan-heading">
+          <div class="section-label" id="plan-title">RUN PROGRESS</div>
+          <span id="plan-summary">Waiting for plan updates</span>
+        </div>
         <ol id="plan-items"></ol>
+        <div class="plan-latest hidden" id="plan-latest">
+          <div class="section-label">LATEST ACTIVITY</div>
+          <ol id="plan-activity-items"></ol>
+        </div>
       </div>
     </section>
 
@@ -1865,24 +1878,36 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .icon-button { border: 0; background: transparent; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 18px; opacity: .7; transition: opacity .15s, background .15s; }
 .icon-button:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .icon-button:disabled { cursor: default; opacity: .3; }
-.activity-dock { min-height: 34px; border-top: 1px solid var(--line); background: var(--vscode-sideBar-background); }
-.presence { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 33px; padding: 7px 18px; border: 0; color: var(--muted); background: transparent; text-align: left; font-size: 11px; }
+.activity-dock { min-height: 43px; border-top: 1px solid var(--line); background: var(--vscode-sideBar-background); }
+.presence { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto 12px; align-items: center; gap: 9px; width: 100%; min-height: 42px; padding: 7px 18px; border: 0; color: var(--muted); background: transparent; text-align: left; font-size: 11px; }
 .activity-dock.has-plan .presence { cursor: pointer; }
 .activity-dock.has-plan .presence:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
 .presence:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -2px; }
+.presence-copy { display: grid; min-width: 0; gap: 1px; }
+.presence-copy strong, .presence-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.presence-copy strong { color: var(--vscode-foreground); font-size: 10px; font-weight: 650; }
+.presence-copy small { color: var(--muted); font: 9px/1.35 var(--vscode-editor-font-family); }
 .signal { width: 7px; height: 7px; border-radius: 50%; background: #6ddc72; box-shadow: 0 0 0 3px color-mix(in srgb, #6ddc72 16%, transparent); }
 .signal.busy { background: var(--accent); animation: pulse 1.2s infinite; }
-.workspace { margin-left: auto; max-width: 38%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.activity-meta { color: var(--muted); font: 9px var(--vscode-editor-font-family); white-space: nowrap; }
 .activity-chevron { width: 12px; opacity: 0; transform: rotate(0); transition: transform .16s, opacity .16s; }
 .activity-dock.has-plan .activity-chevron { opacity: .7; }
 .activity-dock.expanded .activity-chevron { transform: rotate(180deg); }
 .plan { max-height: 0; overflow: hidden; padding: 0 18px; opacity: 0; background: color-mix(in srgb, var(--vscode-sideBar-background) 90%, var(--accent)); transition: max-height .2s ease, padding .2s ease, opacity .14s ease; }
 .activity-dock.expanded .plan { max-height: min(38vh, 360px); overflow-y: auto; padding: 11px 18px 12px; opacity: 1; border-top: 1px solid var(--line); }
+.plan-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.plan-heading > span { overflow: hidden; color: var(--muted); font: 9px var(--vscode-editor-font-family); text-overflow: ellipsis; white-space: nowrap; }
 .plan ol { list-style: none; margin: 9px 0 0; padding: 0; display: grid; gap: 7px; }
 .plan li { position: relative; padding-left: 18px; color: var(--muted); font-size: 11px; }
 .plan li::before { content: ''; position: absolute; left: 0; top: .45em; width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
 .plan li.done { color: var(--vscode-foreground); text-decoration: line-through; opacity: .66; }
 .plan li.done::before { background: var(--accent); border-color: var(--accent); }
+.plan-latest { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.plan-latest ol { gap: 0; margin-top: 5px; }
+.plan-latest li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px; padding: 5px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 62%, transparent); font: 9px/1.4 var(--vscode-editor-font-family); }
+.plan-latest li::before { display: none; }
+.plan-latest strong { color: var(--vscode-foreground); font: 650 8px/1.55 var(--vscode-font-family); letter-spacing: .07em; }
+.plan-latest span { min-width: 0; overflow-wrap: anywhere; }
 .top-drawers { min-height: 0; }
 .top-drawers.panel-open > .setup-callout { display: none; }
 .setup-callout { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); }
@@ -2027,7 +2052,10 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .model-compatibility-copy { display: grid; min-width: 0; gap: 2px; }
 .model-compatibility-copy strong { font-size: 10px; font-weight: 600; }
 .model-compatibility-copy small { color: var(--muted); font-size: 9px; line-height: 1.4; }
-.timeline { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 18px 20px; }
+.conversation-stage { position: relative; min-height: 0; overflow: hidden; }
+.timeline { height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 18px 20px; }
+.jump-latest { position: absolute; right: 14px; bottom: 10px; z-index: 2; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 999px; padding: 5px 9px; color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-sideBar-background) 90%, var(--accent)); box-shadow: 0 5px 18px color-mix(in srgb, #000 24%, transparent); cursor: pointer; font-size: 9px; font-weight: 650; animation: reveal .16s ease-out; }
+.jump-latest:hover { border-color: var(--accent); background: color-mix(in srgb, var(--vscode-sideBar-background) 82%, var(--accent)); }
 .welcome { padding: 48px 0 24px; animation: reveal .35s ease-out; }
 .monogram { display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 24px; border-radius: 10px; background: var(--accent); color: #111; font-weight: 800; font-size: 18px; transform: rotate(-3deg); }
 .welcome h2 { margin: 0; font-size: 22px; line-height: 1.12; letter-spacing: -.035em; }
@@ -2186,6 +2214,7 @@ const vscode = acquireVsCodeApi();
 const restoredWebviewState = vscode.getState() || {};
 const modelCapabilityCatalog = ${JSON.stringify(LITELLM_MODEL_CAPABILITIES)};
 const timeline = document.getElementById('timeline');
+const jumpLatest = document.getElementById('jump-latest');
 const topDrawers = document.getElementById('top-drawers');
 const welcomeMarkup = timeline.innerHTML;
 const prompt = document.getElementById('prompt');
@@ -2196,7 +2225,11 @@ const status = document.getElementById('status');
 const signal = document.getElementById('signal');
 const activityDock = document.getElementById('activity-dock');
 const activityToggle = document.getElementById('activity-toggle');
+const activityMeta = document.getElementById('activity-meta');
 const planItems = document.getElementById('plan-items');
+const planSummary = document.getElementById('plan-summary');
+const planLatest = document.getElementById('plan-latest');
+const planActivityItems = document.getElementById('plan-activity-items');
 const threadPanel = document.getElementById('thread-panel');
 const threadsToggle = document.getElementById('threads-toggle');
 const threadList = document.getElementById('thread-list');
@@ -2290,7 +2323,10 @@ let liveRunTimer;
 const messageSources = new WeakMap();
 const RECENT_HISTORY_MESSAGES = 14;
 const HISTORY_REVEAL_BATCH = 20;
+const SCROLL_STICK_THRESHOLD = 48;
 let hiddenHistoryMessages = [];
+let conversationPinnedToBottom = true;
+let unseenConversationUpdates = 0;
 const runReviews = new Map();
 let activeRunReviewId = '';
 let activeThreadId = '';
@@ -2387,9 +2423,38 @@ function renderText(value) {
   return '<p>' + escapeHtml(value).replace(/\n/g, '<br>') + '</p>';
 }
 
-function scrollConversationToBottom() {
+function conversationIsNearBottom() {
+  return timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= SCROLL_STICK_THRESHOLD;
+}
+
+function renderJumpToLatest() {
+  const visible = !conversationPinnedToBottom && unseenConversationUpdates > 0;
+  jumpLatest.classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const label = unseenConversationUpdates === 1
+    ? '1 new update ↓'
+    : Math.min(unseenConversationUpdates, 99) + (unseenConversationUpdates > 99 ? '+ new updates ↓' : ' new updates ↓');
+  jumpLatest.textContent = label;
+  jumpLatest.setAttribute('aria-label', label.replace(' ↓', '') + '. Jump to the latest conversation activity.');
+}
+
+function resetConversationScroll() {
+  conversationPinnedToBottom = true;
+  unseenConversationUpdates = 0;
+  renderJumpToLatest();
+}
+
+function scrollConversationToBottom({ force = false, countUpdate = true } = {}) {
+  if (!force && !conversationPinnedToBottom) {
+    const firstUnseenUpdate = unseenConversationUpdates === 0;
+    if (countUpdate) unseenConversationUpdates += 1;
+    renderJumpToLatest();
+    if (firstUnseenUpdate && countUpdate) announce('New conversation activity is available below.');
+    return;
+  }
   requestAnimationFrame(() => {
     timeline.scrollTop = timeline.scrollHeight;
+    resetConversationScroll();
   });
 }
 
@@ -2414,7 +2479,7 @@ function appendMessage(message, announceResponse = true) {
   document.getElementById('welcome')?.remove();
   const element = createMessageElement(message);
   timeline.appendChild(element);
-  scrollConversationToBottom();
+  scrollConversationToBottom({ force: message.role === 'user' });
   if (announceResponse && message.role === 'assistant') announce('Agent response added to the conversation.');
 }
 
@@ -2445,7 +2510,7 @@ function renderConversationHistory(history) {
   hiddenHistoryMessages = messages.slice(0, start);
   messages.slice(start).forEach(message => timeline.appendChild(createMessageElement(message)));
   renderHistoryFold();
-  scrollConversationToBottom();
+  scrollConversationToBottom({ force: true, countUpdate: false });
 }
 
 function revealEarlierHistory() {
@@ -2472,6 +2537,29 @@ function elapsedRunTime(startedAt) {
   return minutes + 'm ' + String(seconds % 60).padStart(2, '0') + 's';
 }
 
+function renderActivityOverview() {
+  const total = currentRunSummary.plan.length;
+  const completed = currentRunSummary.plan.filter(item => item.completed).length;
+  const events = liveRunState?.events.slice(-3) || [];
+  const progress = total ? completed + '/' + total : '';
+  activityMeta.textContent = [busy ? elapsedRunTime(currentRunSummary.startedAt) : '', progress]
+    .filter(Boolean)
+    .join(' · ');
+  const stats = [
+    total ? completed + '/' + total + ' complete' : '',
+    currentRunSummary.files.size ? currentRunSummary.files.size + ' file' + (currentRunSummary.files.size === 1 ? '' : 's') : '',
+    currentRunSummary.commands.length ? currentRunSummary.commands.length + ' command' + (currentRunSummary.commands.length === 1 ? '' : 's') : ''
+  ].filter(Boolean);
+  planSummary.textContent = stats.length ? stats.join(' · ') : 'Waiting for plan updates';
+  planLatest.classList.toggle('hidden', !events.length);
+  planActivityItems.innerHTML = events.map(event =>
+    '<li><strong>' + escapeHtml(event.kind) + '</strong><span>' + escapeHtml(event.title) + '</span></li>'
+  ).join('');
+  const canExpand = total > 0 || events.length > 0;
+  activityDock.classList.toggle('has-plan', canExpand);
+  if (!canExpand && activityDock.classList.contains('expanded')) setActivityExpanded(false);
+}
+
 function ensureLiveRun() {
   if (liveRunState) return liveRunState;
   const element = document.createElement('section');
@@ -2489,9 +2577,8 @@ function ensureLiveRun() {
   liveRunTimer = setInterval(() => {
     const elapsed = liveRunState?.element.querySelector('.live-run-time');
     if (elapsed && liveRunState) elapsed.textContent = elapsedRunTime(liveRunState.startedAt);
+    renderActivityOverview();
   }, 1000);
-  renderLiveRun();
-  scrollConversationToBottom();
   return liveRunState;
 }
 
@@ -2530,6 +2617,8 @@ function renderLiveRun() {
   [...state.element.querySelectorAll('.live-run-events details')].forEach((entry, index) => {
     entry.open = openOutputs.includes(index);
   });
+  renderActivityOverview();
+  scrollConversationToBottom();
 }
 
 function setLiveRunExpanded(expanded) {
@@ -2558,6 +2647,7 @@ function finishLiveRun() {
   liveRunTimer = undefined;
   liveRunState?.element.remove();
   liveRunState = null;
+  renderActivityOverview();
 }
 
 function updatePendingMessage(text, html = '') {
@@ -2686,6 +2776,7 @@ function preserveRunReview(summary) {
 function renderRunSummary() {
   finishLiveRun();
   currentRunSummary.finishedAt = Date.now();
+  renderActivityOverview();
   const summary = preserveRunReview(currentRunSummary);
   const stats = runSummaryStats(summary);
   const element = document.createElement('section');
@@ -2827,7 +2918,8 @@ function setBusy(value) {
   renderThreadList();
   if (!value && remoteRunActive) status.textContent = 'Agent active in another VS Code window';
   else if (!value && status.textContent !== 'Ready') status.textContent = 'Ready';
-  if (value) scrollConversationToBottom();
+  renderActivityOverview();
+  if (value) scrollConversationToBottom({ force: true });
 }
 
 function setCancellationPending(value) {
@@ -3056,9 +3148,12 @@ function relativeThreadTime(value) {
 }
 
 function clearCurrentPlan() {
+  currentRunSummary.plan = [];
   planItems.innerHTML = '';
-  activityDock.classList.remove('has-plan');
+  planActivityItems.innerHTML = '';
+  planLatest.classList.add('hidden');
   planManuallyCollapsed = false;
+  renderActivityOverview();
   setActivityExpanded(false);
 }
 
@@ -3498,6 +3593,7 @@ function resetConversation(context, history, threads, draft = '') {
   finishLiveRun();
   hiddenHistoryMessages = [];
   timeline.innerHTML = welcomeMarkup;
+  resetConversationScroll();
   clearCurrentPlan();
   renderContextState(context || currentContextState);
   if (threads) renderThreads(threads);
@@ -3735,6 +3831,16 @@ activityToggle.addEventListener('click', () => {
   planManuallyCollapsed = !expand;
   setActivityExpanded(expand);
 });
+jumpLatest.addEventListener('click', () => {
+  scrollConversationToBottom({ force: true, countUpdate: false });
+  announce('Moved to the latest conversation activity.');
+});
+timeline.addEventListener('scroll', () => {
+  const nearBottom = conversationIsNearBottom();
+  conversationPinnedToBottom = nearBottom;
+  if (nearBottom) unseenConversationUpdates = 0;
+  renderJumpToLatest();
+}, { passive: true });
 advancedSetupButton.addEventListener('click', () => vscode.postMessage({ type: 'configureGatewayCa' }));
 document.getElementById('litellm-load-models').addEventListener('click', () => {
   liteLlmSettingsError.classList.add('hidden');
@@ -4075,16 +4181,17 @@ window.addEventListener('message', ({ data }) => {
     case 'status':
       status.textContent = data.label;
       updateLiveRunStatus(data.label);
+      renderActivityOverview();
       break;
     case 'plan':
-      const firstPlanUpdate = !activityDock.classList.contains('has-plan');
-      activityDock.classList.add('has-plan');
+      const firstPlanUpdate = currentRunSummary.plan.length === 0;
       currentRunSummary.plan = (data.items || []).map(item => ({ text: item.text, completed: Boolean(item.completed) }));
       planItems.innerHTML = data.items.map(item => '<li class="' + (item.completed ? 'done' : '') + '">' + escapeHtml(item.text) + '</li>').join('');
       if (busy) {
         ensureLiveRun();
         renderLiveRun();
       }
+      renderActivityOverview();
       if (firstPlanUpdate && !planManuallyCollapsed) setActivityExpanded(true);
       break;
     case 'contextReceipt':
@@ -4096,11 +4203,13 @@ window.addEventListener('message', ({ data }) => {
       currentRunSummary.files = new Map((data.items || []).map(item => [item.path, item]));
       currentRunSummary.omittedChanges = Number(data.omitted || 0);
       if (liveRunState) renderLiveRun();
+      renderActivityOverview();
       break;
     case 'usage':
       currentRunSummary.usage = { input: data.input, output: data.output };
       status.textContent = 'Ready · ' + data.input + ' in / ' + data.output + ' out';
       if (liveRunState) renderLiveRun();
+      renderActivityOverview();
       break;
     case 'error':
       currentRunSummary.failed = true;

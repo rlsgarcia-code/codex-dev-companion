@@ -69,6 +69,10 @@ test("keeps webview element identifiers unique", () => {
   assert.ok(ids.includes("run-review-close"));
   assert.ok(ids.includes("setup-callout"));
   assert.ok(ids.includes("setup-callout-action"));
+  assert.ok(ids.includes("jump-latest"));
+  assert.ok(ids.includes("activity-meta"));
+  assert.ok(ids.includes("plan-summary"));
+  assert.ok(ids.includes("plan-activity-items"));
 });
 
 test("keeps recovery actions and per-thread draft persistence wired", () => {
@@ -193,6 +197,12 @@ test("keeps live execution activity consolidated and expandable", () => {
   assert.match(source, /data-toggle-live-run/);
   assert.match(source, /live-run-events/);
   assert.match(source, /state\.events\.push/);
+  assert.match(source, /function renderActivityOverview/);
+  assert.match(source, /RUN PROGRESS/);
+  assert.match(source, /LATEST ACTIVITY/);
+  assert.match(source, /liveRunState\?\.events\.slice\(-3\)/);
+  assert.match(source, /completed \+ '\/' \+ total \+ ' complete'/);
+  assert.match(source, /function clearCurrentPlan\(\) \{\s+currentRunSummary\.plan = \[\]/);
   assert.match(source, /finishLiveRun\(\);\s+currentRunSummary\.finishedAt/);
   assert.doesNotMatch(source, /element\.className = 'activity'/);
   assert.match(readFileSync("src/local-approval.ts", "utf8"), /kind: "approval"/);
@@ -390,6 +400,20 @@ test("keeps long conversations compact and reveals older complete turns incremen
   assert.match(source, /timeline\.scrollTop \+= Math\.max\(0, timeline\.scrollHeight - previousHeight\)/);
   assert.match(source, /renderConversationHistory\(history\)/);
   assert.doesNotMatch(source, /\(history \|\| \[\]\)\.forEach\(message => appendMessage/);
+});
+
+test("preserves the reader position and offers an explicit jump to new activity", () => {
+  assert.match(source, /class="conversation-stage"/);
+  assert.match(source, /id="jump-latest"/);
+  assert.match(source, /const SCROLL_STICK_THRESHOLD = 48/);
+  assert.match(source, /let conversationPinnedToBottom = true/);
+  assert.match(source, /if \(!force && !conversationPinnedToBottom\)/);
+  assert.match(source, /unseenConversationUpdates \+= 1/);
+  assert.match(source, /New conversation activity is available below/);
+  assert.match(source, /jumpLatest\.addEventListener\('click'/);
+  assert.match(source, /timeline\.addEventListener\('scroll'/);
+  assert.match(source, /scrollConversationToBottom\(\{ force: message\.role === 'user' \}\)/);
+  assert.match(source, /scrollConversationToBottom\(\{ force: true, countUpdate: false \}\)/);
 });
 
 test("renders trusted locally sanitized Markdown instead of parsing model HTML in the webview", () => {

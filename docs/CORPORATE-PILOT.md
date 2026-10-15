@@ -17,7 +17,7 @@ Instale o VSIX correspondente ao sistema em que o **Extension Host** executa. Em
 
 ## Validação essencial
 
-1. Instale o VSIX em um perfil de teste do VS Code e reinicie a janela.
+1. Instale o VSIX em um perfil de teste do VS Code e reinicie a janela. Ao substituir outro build com o mesmo número de versão, use `code --install-extension <arquivo>.vsix --force` e execute **Developer: Reload Window**.
 2. Abra **Developer: Show Running Extensions** e confirme que **Local Dev Companion** está ativo e sem erro.
 3. Abra a sidebar direita, crie duas threads, alterne entre elas e recarregue a janela. Os rascunhos e títulos devem permanecer corretos, sem congelamento.
 4. Configure gateway, alias, chave segura e, se necessário, importe o PEM. Feche e abra outra janela do VS Code; a conexão deve continuar funcionando sem solicitar o PEM novamente.

@@ -2,6 +2,8 @@
 
 ## 0.11.0
 
+- Expanded the persistent run strip into a two-line progress monitor with elapsed time, plan completion, file/command counts, and the three latest actions, while preserving the compact collapsed state.
+- Stopped live updates from pulling readers away from earlier messages; a bounded new-activity indicator now offers an explicit jump back to the latest conversation point.
 - Added structured GitHub forms for sanitized bug reports and feature requests, disabled unstructured public issues, and routed vulnerability reports to the repository's private security channel.
 - Pinned every CI and release GitHub Action to a reviewed immutable commit and added weekly Dependabot pull requests for npm and workflow dependencies without automatic merge or publication.
 - Restricted provider transport to exact configured HTTPS Chat Completions and embeddings routes, POST-only with redirects disabled, and disabled redirects for the explicit model catalog so gateway credentials cannot be forwarded to an unconfigured destination.

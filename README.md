@@ -30,7 +30,8 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Orientação local do repositório por `AGENTS.md` (inclusive o mais próximo do arquivo ativo), `.github/copilot-instructions.md`, `CONTRIBUTING.md` e `README.md`, com limites, precedência explícita e proteção contra links que escapem do workspace.
 - Contexto fixado por seleção ou arquivo completo, com Quick Pick nativo, inspeção e remoção diretamente acima do compositor.
 - Orçamento de contexto visível antes do envio, com estimativa local de tokens, percentual do limite, contribuição automática, anexos fixados, prompt e modo da memória do projeto.
-- Atividade ao vivo consolidada em uma faixa expansível, com etapa atual, última ação, duração, progresso do plano e contadores de arquivos/comandos sem poluir a conversa.
+- Atividade ao vivo consolidada em uma faixa expansível junto ao compositor, com status em duas linhas, duração, progresso do plano, contadores e as três ações mais recentes sem exigir rolagem pela conversa.
+- Rolagem consciente em conversas longas: atualizações continuam acompanhando o final somente quando o usuário já está nele; ao ler mensagens anteriores, a posição é preservada e um indicador mostra quantas novidades aguardam abaixo.
 - Configuração de execução progressiva: um único controle compacto resume autonomia e runtime, enquanto explicações e escolhas técnicas ficam disponíveis sob demanda sem reduzir a área de escrita.
 - Navegação completa por teclado na sidebar, com foco devolvido ao controle de origem, fechamento de painéis por `Esc`, anúncios concisos para leitores de tela e suporte a alto contraste/redução de movimento.
 - Centro de revisão ao final de cada execução, reunindo resultado, plano final, arquivos, diffs, restauração, comandos, saídas, verificações, memória e uso do modelo.
@@ -100,10 +101,10 @@ npm test
 npm run test:extension-host
 npm run package
 npm run test:vsix-install -- ./codex-dev-companion-0.11.0-<plataforma>.vsix
-code --install-extension ./codex-dev-companion-0.11.0-<plataforma>.vsix
+code --install-extension ./codex-dev-companion-0.11.0-<plataforma>.vsix --force
 ```
 
-`npm run package` detecta sistema e arquitetura, grava o `TargetPlatform` no manifesto e gera um nome explícito como `codex-dev-companion-0.11.0-win32-x64.vsix`. O VSIX contém o binário local do ChromaDB para a plataforma em que foi gerado. Gere o pacote no mesmo sistema/arquitetura em que ele será instalado (macOS arm64/x64, Linux arm64/x64 ou Windows x64). Hosts não suportados são recusados em vez de gerar um pacote incorretamente identificado como universal. Não é necessário Docker nem instalar um servidor Chroma separadamente. Os binários necessários são fornecidos por pacotes npm específicos da plataforma e o projeto desabilita scripts de lifecycle durante a instalação de dependências.
+`npm run package` detecta sistema e arquitetura, grava o `TargetPlatform` no manifesto e gera um nome explícito como `codex-dev-companion-0.11.0-win32-x64.vsix`. Use `--force` durante o piloto quando estiver substituindo outro build com o mesmo número de versão; depois execute **Developer: Reload Window** para carregar a cópia instalada. O VSIX contém o binário local do ChromaDB para a plataforma em que foi gerado. Gere o pacote no mesmo sistema/arquitetura em que ele será instalado (macOS arm64/x64, Linux arm64/x64 ou Windows x64). Hosts não suportados são recusados em vez de gerar um pacote incorretamente identificado como universal. Não é necessário Docker nem instalar um servidor Chroma separadamente. Os binários necessários são fornecidos por pacotes npm específicos da plataforma e o projeto desabilita scripts de lifecycle durante a instalação de dependências.
 
 `npm run package` funciona como gate de release local: executa type-check, todos os testes, build, smoke de Chat Completions e smoke do Chroma nativo antes de criar o VSIX. Se qualquer verificação falhar, nenhum pacote novo é produzido.
 
@@ -288,7 +289,7 @@ Para gerar e reinstalar o pacote:
 
 ```bash
 npm run package
-code --install-extension codex-dev-companion-0.11.0.vsix
+code --install-extension codex-dev-companion-0.11.0-<plataforma>.vsix --force
 ```
 
 ## Memória
