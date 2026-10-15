@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as path from "node:path";
 import test from "node:test";
 import { rootCertificates } from "node:tls";
 import {
@@ -168,7 +169,7 @@ test("derives the embeddings route from the same LiteLLM base URL", () => {
 test("keeps the gateway CA certificate inside the workspace", () => {
   assert.equal(
     resolveWorkspaceCertificatePath("/workspace/project", "corporate-root.pem"),
-    "/workspace/project/corporate-root.pem"
+    path.resolve("/workspace/project", "corporate-root.pem")
   );
   assert.throws(
     () => resolveWorkspaceCertificatePath("/workspace/project", "../outside.pem"),
