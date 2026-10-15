@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import * as path from "node:path";
 import test from "node:test";
 
 const sourceFiles = readdirSync("src")
   .filter((name) => name.endsWith(".ts"))
-  .map((name) => path.join("src", name));
+  .map((name) => `src/${name}`);
 const sources = new Map(sourceFiles.map((file) => [file, readFileSync(file, "utf8")]));
 const agent = sources.get("src/agent.ts") ?? "";
 const semanticMemory = sources.get("src/semantic-memory.ts") ?? "";
