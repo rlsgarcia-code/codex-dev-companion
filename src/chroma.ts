@@ -1,17 +1,39 @@
-import { spawn } from "node:child_process";
-import { open, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { releaseChromaClientLease } from "./chroma-client-leases";
+import {
+  CHROMA_HEARTBEAT_TIMEOUT_MS,
+  CHROMA_LOCK_WAIT_TIMEOUT_MS,
+  CHROMA_POLL_INTERVAL_MS,
+  CHROMA_STARTUP_TIMEOUT_MS,
+  parseChromaHeartbeat,
+  parseChromaServerMetadata,
+  parseChromaStartLock,
+  shouldReclaimChromaStartLock,
+  type ChromaServerMetadata,
+  type ChromaStartLock,
+  type ChromaClientLease
+} from "./chroma-lifecycle";
 
-type ServerMetadata = { pid: number; port: number };
+const SERVER_METADATA_FILE = "server.json";
+const START_LOCK_FILE = "starting.lock";
+const CLIENT_DIRECTORY = "clients";
 
-export class LocalChromaServer {
+export class LocalChromaServer implements vscode.Disposable {
   private endpoint: Promise<string> | undefined;
+  private ownedChild: ChildProcess | undefined;
+  private readonly clientId = crypto.randomUUID();
+  private clientLeasePath: string | undefined;
+  private clientRoot: string | undefined;
+  private disposed = false;
 
   public constructor(private readonly context: vscode.ExtensionContext) {}
 
   public async start(): Promise<string> {
+    if (this.disposed) throw new Error("The local ChromaDB service has already been disposed.");
     if (this.endpoint) {
       const existing = await this.endpoint;
       if (await heartbeat(existing)) return existing;
@@ -26,75 +48,179 @@ export class LocalChromaServer {
     }
   }
 
+  public dispose(): void {
+    this.disposed = true;
+    this.endpoint = undefined;
+    const child = this.ownedChild;
+    this.ownedChild = undefined;
+    const clientRoot = this.clientRoot;
+    const clientLeasePath = this.clientLeasePath;
+    this.clientRoot = undefined;
+    this.clientLeasePath = undefined;
+    if (!clientRoot || !clientLeasePath) {
+      if (child?.pid) terminateChild(child);
+      return;
+    }
+    const lastClient = releaseChromaClientLease(clientRoot, clientLeasePath);
+    if (!lastClient) {
+      child?.unref();
+      return;
+    }
+    if (child?.pid) {
+      terminateChild(child);
+    } else {
+      void terminateRecordedServer(path.join(path.dirname(clientRoot), SERVER_METADATA_FILE));
+    }
+  }
+
   private async startOrReuse(): Promise<string> {
     const root = vscode.Uri.joinPath(this.context.globalStorageUri, "chroma").fsPath;
     const database = path.join(root, "data");
-    const metadataPath = path.join(root, "server.json");
-    const lockPath = path.join(root, "starting.lock");
+    const metadataPath = path.join(root, SERVER_METADATA_FILE);
+    const lockPath = path.join(root, START_LOCK_FILE);
     await vscode.workspace.fs.createDirectory(vscode.Uri.file(database));
+    await this.ensureClientLease(root);
 
     const existing = await this.readHealthyServer(metadataPath);
     if (existing) return existing;
 
-    let lock;
-    try {
-      lock = await open(lockPath, "wx");
-    } catch {
-      for (let attempt = 0; attempt < 40; attempt += 1) {
-        await delay(250);
-        const running = await this.readHealthyServer(metadataPath);
-        if (running) return running;
-        if (await isOlderThan(lockPath, 15_000)) {
-          await unlink(lockPath).catch(() => undefined);
-          return this.startOrReuse();
-        }
-      }
-      throw new Error("Timed out waiting for the local ChromaDB service to start.");
-    }
+    const lock = await this.acquireStartLock(lockPath, metadataPath);
+    if (!lock) return this.startOrReuse();
 
     try {
       const afterLock = await this.readHealthyServer(metadataPath);
       if (afterLock) return afterLock;
-      const port = await availablePort();
-      const launcher = vscode.Uri.joinPath(this.context.extensionUri, "dist", "chroma", "server.cjs").fsPath;
-      const child = spawn(process.execPath, [
-        launcher,
-        "run",
-        "--path",
-        database,
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(port)
-      ], {
-        detached: true,
-        stdio: "ignore",
-        env: chromaEnvironment()
-      });
-      child.unref();
-      if (!child.pid) throw new Error("The bundled local ChromaDB service could not be started.");
-      const endpoint = `http://127.0.0.1:${port}`;
-      await waitForHeartbeat(endpoint, child.pid);
-      await writeFile(metadataPath, JSON.stringify({ pid: child.pid, port } satisfies ServerMetadata), {
-        encoding: "utf8",
-        mode: 0o600
-      });
-      return endpoint;
+      return await this.startOwnedServer(database, metadataPath);
     } finally {
       await lock.close();
       await unlink(lockPath).catch(() => undefined);
     }
   }
 
-  private async readHealthyServer(metadataPath: string): Promise<string | undefined> {
+  private async ensureClientLease(root: string): Promise<void> {
+    if (this.clientLeasePath) return;
+    const clientRoot = path.join(root, CLIENT_DIRECTORY);
+    await mkdir(clientRoot, { recursive: true, mode: 0o700 });
+    const leasePath = path.join(clientRoot, `${this.clientId}.json`);
+    const lease: ChromaClientLease = {
+      version: 1,
+      id: this.clientId,
+      pid: process.pid,
+      createdAt: Date.now()
+    };
+    await writeFile(leasePath, `${JSON.stringify(lease)}\n`, { encoding: "utf8", mode: 0o600 });
+    if (this.disposed) {
+      await unlink(leasePath).catch(() => undefined);
+      throw new Error("The local ChromaDB service was disposed during startup.");
+    }
+    this.clientRoot = clientRoot;
+    this.clientLeasePath = leasePath;
+  }
+
+  private async acquireStartLock(lockPath: string, metadataPath: string) {
     try {
-      const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as ServerMetadata;
-      if (!Number.isInteger(metadata.port) || metadata.port < 1 || metadata.port > 65535) return undefined;
-      const endpoint = `http://127.0.0.1:${metadata.port}`;
-      return await heartbeat(endpoint) ? endpoint : undefined;
-    } catch {
+      const lock = await open(lockPath, "wx", 0o600);
+      try {
+        const record: ChromaStartLock = { version: 1, pid: process.pid, createdAt: Date.now() };
+        await lock.writeFile(`${JSON.stringify(record)}\n`, "utf8");
+        return lock;
+      } catch (error) {
+        await lock.close();
+        await unlink(lockPath).catch(() => undefined);
+        throw error;
+      }
+    } catch (error) {
+      if (!isFileExistsError(error)) throw error;
+    }
+
+    const deadline = Date.now() + CHROMA_LOCK_WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await delay(CHROMA_POLL_INTERVAL_MS);
+      const running = await this.readHealthyServer(metadataPath);
+      if (running) return undefined;
+
+      const lockState = await readStartLockState(lockPath);
+      if (!lockState.exists) return undefined;
+      if (shouldReclaimChromaStartLock(
+        lockState.lock,
+        lockState.modifiedAt,
+        Date.now(),
+        processIsAlive
+      )) {
+        await unlink(lockPath).catch(() => undefined);
+        return undefined;
+      }
+    }
+    throw new Error("Timed out waiting for another VS Code window to start the local ChromaDB service.");
+  }
+
+  private async startOwnedServer(database: string, metadataPath: string): Promise<string> {
+    const port = await availablePort();
+    const launcher = vscode.Uri.joinPath(this.context.extensionUri, "dist", "chroma", "server.cjs").fsPath;
+    const child = spawn(process.execPath, [
+      launcher,
+      "run",
+      "--path",
+      database,
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(port)
+    ], {
+      stdio: "ignore",
+      env: chromaEnvironment(),
+      windowsHide: true
+    });
+    if (!child.pid) {
+      child.kill();
+      throw new Error("The bundled local ChromaDB service could not be started.");
+    }
+
+    this.ownedChild = child;
+    const pid = child.pid;
+    child.once("exit", () => {
+      if (this.ownedChild === child) {
+        this.ownedChild = undefined;
+        this.endpoint = undefined;
+      }
+      void removeMetadataIfOwned(metadataPath, pid);
+    });
+
+    const endpoint = `http://127.0.0.1:${port}`;
+    try {
+      await waitForHeartbeat(endpoint, pid, CHROMA_STARTUP_TIMEOUT_MS);
+      if (this.disposed) throw new Error("The local ChromaDB service was disposed during startup.");
+      const metadata: ChromaServerMetadata = { version: 1, pid, port, startedAt: Date.now() };
+      await writeMetadataAtomically(metadataPath, metadata);
+      return endpoint;
+    } catch (error) {
+      terminateChild(child);
+      throw error;
+    }
+  }
+
+  private async readHealthyServer(metadataPath: string): Promise<string | undefined> {
+    let metadata: ChromaServerMetadata | undefined;
+    try {
+      metadata = parseChromaServerMetadata(JSON.parse(await readFile(metadataPath, "utf8")));
+    } catch (error) {
+      if (!isFileNotFoundError(error)) await unlink(metadataPath).catch(() => undefined);
       return undefined;
     }
+    if (!metadata) {
+      await unlink(metadataPath).catch(() => undefined);
+      return undefined;
+    }
+    if (!processIsAlive(metadata.pid)) {
+      await removeMetadataIfOwned(metadataPath, metadata.pid);
+      return undefined;
+    }
+    const endpoint = `http://127.0.0.1:${metadata.port}`;
+    if (await heartbeat(endpoint)) return endpoint;
+    throw new Error(
+      `Local ChromaDB process ${metadata.pid} is running but did not return a valid heartbeat on 127.0.0.1:${metadata.port}. ` +
+      "Reload the VS Code window before retrying semantic memory."
+    );
   }
 }
 
@@ -110,11 +236,12 @@ async function availablePort(): Promise<number> {
   });
 }
 
-async function waitForHeartbeat(endpoint: string, pid: number | undefined): Promise<void> {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+async function waitForHeartbeat(endpoint: string, pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (await heartbeat(endpoint)) return;
-    if (pid && !processIsAlive(pid)) break;
-    await delay(250);
+    if (!processIsAlive(pid)) break;
+    await delay(CHROMA_POLL_INTERVAL_MS);
   }
   throw new Error("The bundled local ChromaDB service did not become ready.");
 }
@@ -122,9 +249,11 @@ async function waitForHeartbeat(endpoint: string, pid: number | undefined): Prom
 async function heartbeat(endpoint: string): Promise<boolean> {
   try {
     const response = await fetch(`${endpoint}/api/v2/heartbeat`, {
-      signal: AbortSignal.timeout(750)
+      cache: "no-store",
+      signal: AbortSignal.timeout(CHROMA_HEARTBEAT_TIMEOUT_MS)
     });
-    return response.ok;
+    if (!response.ok) return false;
+    return parseChromaHeartbeat(await response.json()) !== undefined;
   } catch {
     return false;
   }
@@ -139,16 +268,93 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-async function isOlderThan(filename: string, ageMs: number): Promise<boolean> {
+async function readStartLockState(lockPath: string): Promise<{
+  exists: boolean;
+  lock?: ChromaStartLock;
+  modifiedAt: number;
+}> {
   try {
-    return Date.now() - (await stat(filename)).mtimeMs > ageMs;
+    const [contents, fileStat] = await Promise.all([readFile(lockPath, "utf8"), stat(lockPath)]);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents);
+    } catch {
+      parsed = undefined;
+    }
+    const lock = parseChromaStartLock(parsed);
+    return { exists: true, ...(lock ? { lock } : {}), modifiedAt: fileStat.mtimeMs };
+  } catch (error) {
+    if (isFileNotFoundError(error)) return { exists: false, modifiedAt: 0 };
+    throw error;
+  }
+}
+
+async function writeMetadataAtomically(metadataPath: string, metadata: ChromaServerMetadata): Promise<void> {
+  const temporaryPath = `${metadataPath}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(metadata)}\n`, { encoding: "utf8", mode: 0o600 });
+  try {
+    await rename(temporaryPath, metadataPath);
+  } finally {
+    await unlink(temporaryPath).catch(() => undefined);
+  }
+}
+
+async function removeMetadataIfOwned(metadataPath: string, pid: number): Promise<void> {
+  try {
+    const metadata = parseChromaServerMetadata(JSON.parse(await readFile(metadataPath, "utf8")));
+    if (metadata?.pid === pid) await unlink(metadataPath);
   } catch {
-    return false;
+    // Missing or malformed metadata cannot identify this process as the owner.
+  }
+}
+
+async function terminateRecordedServer(metadataPath: string): Promise<void> {
+  try {
+    const metadata = parseChromaServerMetadata(JSON.parse(await readFile(metadataPath, "utf8")));
+    if (!metadata || !processIsAlive(metadata.pid)) return;
+    const endpoint = `http://127.0.0.1:${metadata.port}`;
+    if (!await heartbeat(endpoint)) return;
+    terminatePid(metadata.pid);
+  } catch {
+    // Never signal a process unless valid metadata and the strict Chroma heartbeat agree.
   }
 }
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function terminateChild(child: ChildProcess): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGINT");
+  const forceTimer = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }, 3_000);
+  child.once("exit", () => clearTimeout(forceTimer));
+}
+
+function terminatePid(pid: number): void {
+  try {
+    process.kill(pid, "SIGINT");
+  } catch {
+    return;
+  }
+  setTimeout(() => {
+    if (!processIsAlive(pid)) return;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // The process may have exited between the liveness check and the signal.
+    }
+  }, 3_000);
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 function chromaEnvironment(): NodeJS.ProcessEnv {

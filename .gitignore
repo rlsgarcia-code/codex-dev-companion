@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-tests/
+dist-extension-tests/
+.vscode-test/
 *.vsix
 .DS_Store
 .codex-agent/session.json

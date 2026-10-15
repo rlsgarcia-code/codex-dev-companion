@@ -15,9 +15,10 @@ export type SemanticMemoryOptions = {
   defaultHeaders?: Record<string, string | null>;
   fetch?: typeof globalThis.fetch;
   results: number;
+  signal?: AbortSignal;
 };
 
-export class SemanticProjectMemory {
+export class SemanticProjectMemory implements vscode.Disposable {
   private readonly server: LocalChromaServer;
   private readonly indexedCollections = new Map<string, string>();
 
@@ -26,12 +27,14 @@ export class SemanticProjectMemory {
   }
 
   public async recall(options: SemanticMemoryOptions): Promise<string[]> {
+    options.signal?.throwIfAborted();
     const model = options.embeddingModel.trim();
     if (!model) return [];
     const chunks = memoryChunks(options.memoryText);
     if (!chunks.length) return [];
 
     const endpoint = await this.server.start();
+    options.signal?.throwIfAborted();
     const workspaceId = createHash("sha256")
       .update(vscode.workspace.workspaceFolders?.[0]?.uri.toString() ?? "no-workspace")
       .digest("hex")
@@ -57,6 +60,7 @@ export class SemanticProjectMemory {
     const memoryHash = createHash("sha256").update(options.memoryText).digest("hex");
     if (this.indexedCollections.get(collectionName) !== memoryHash) {
       await store.delete({ filter: { workspace_id: workspaceId } }).catch(() => undefined);
+      options.signal?.throwIfAborted();
       const documents = chunks.map((pageContent, index) => new Document({
         pageContent,
         metadata: { workspace_id: workspaceId, source: ".codex-agent/memory.md", chunk: index }
@@ -65,12 +69,20 @@ export class SemanticProjectMemory {
         .update(`${workspaceId}\0${modelId}\0${index}\0${chunk}`)
         .digest("hex"));
       await store.addDocuments(documents, { ids });
+      options.signal?.throwIfAborted();
       this.indexedCollections.set(collectionName, memoryHash);
     }
 
+    options.signal?.throwIfAborted();
     const matches = await store.similaritySearch(options.query, Math.max(1, Math.min(options.results, 12)), {
       workspace_id: workspaceId
     });
+    options.signal?.throwIfAborted();
     return matches.map((match) => match.pageContent.trim()).filter(Boolean);
+  }
+
+  public dispose(): void {
+    this.indexedCollections.clear();
+    this.server.dispose();
   }
 }

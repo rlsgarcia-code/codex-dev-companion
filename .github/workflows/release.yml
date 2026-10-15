@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-and-package:
+    name: Package ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: macos-15-intel
+            target: darwin-x64
+          - runner: windows-2025
+            target: win32-x64
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v6
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify tag, package version, and changelog
+        run: node scripts/verify-release-metadata.mjs "${{ github.ref_name }}"
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Audit production dependencies and time-bounded mitigations
+        run: npm run audit:prod
+
+      - name: Type-check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      - name: Verify local Chat Completions routing
+        run: npm run smoke:litellm
+
+      - name: Build extension with the runner-native ChromaDB binary
+        run: npm run build
+
+      - name: Verify activation and sidebar commands in VS Code Extension Host
+        if: matrix.target == 'linux-x64'
+        run: xvfb-run -a npm run test:extension-host
+
+      - name: Verify bundled local ChromaDB lifecycle
+        run: npm run smoke:chroma
+
+      - name: Package target-specific VSIX
+        shell: bash
+        run: |
+          mkdir -p release
+          npx --no-install vsce package --no-dependencies --target "${{ matrix.target }}" --out "release/codex-dev-companion-${GITHUB_REF_NAME#v}-${{ matrix.target }}.vsix"
+
+      - name: Upload native package
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: release/*.vsix
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: verify-and-package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v6
+
+      - name: Download every native package
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Verify the complete release set
+        run: node scripts/verify-release-metadata.mjs "${{ github.ref_name }}" release
+
+      - name: Generate SHA-256 checksums
+        working-directory: release
+        run: sha256sum *.vsix > SHA256SUMS.txt
+
+      - name: Publish version assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != "true" ]; then
+              echo "Release $GITHUB_REF_NAME is already published and will not be overwritten." >&2
+              exit 1
+            fi
+            gh release upload "$GITHUB_REF_NAME" release/*.vsix release/SHA256SUMS.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/*.vsix release/SHA256SUMS.txt --draft --verify-tag --generate-notes --title "Local Dev Companion ${GITHUB_REF_NAME#v}"
+          fi
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

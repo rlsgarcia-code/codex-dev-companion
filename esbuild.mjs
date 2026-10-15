@@ -1,6 +1,7 @@
 import * as esbuild from "esbuild";
 import { copyFile, mkdir, readdir, rm } from "node:fs/promises";
 import * as path from "node:path";
+import { generateThirdPartyNotices } from "./scripts/generate-third-party-notices.mjs";
 
 const watch = process.argv.includes("--watch");
 const context = await esbuild.context({
@@ -13,15 +14,20 @@ const context = await esbuild.context({
   external: ["vscode"],
   sourcemap: true,
   minify: false,
+  metafile: true,
   logLevel: "info"
 });
 
-await copyNativeAssets();
+const result = await context.rebuild();
+const nativePackage = await copyNativeAssets();
+await generateThirdPartyNotices({
+  metafile: result.metafile,
+  additionalPackages: [nativePackage]
+});
 
 if (watch) {
   await context.watch();
 } else {
-  await context.rebuild();
   await context.dispose();
 }
 
@@ -44,9 +50,6 @@ async function copyNativeAssets() {
   await copyFile(path.join(chromaDirectory, chromaBinary), path.join("dist", "chroma", "chromadb.node"));
   await copyFile(path.join("scripts", "chroma-server.cjs"), path.join("dist", "chroma", "server.cjs"));
 
-  await mkdir(path.join("dist", "licenses"), { recursive: true });
   await rm(path.join("dist", "build"), { recursive: true, force: true });
-  await rm(path.join("dist", "licenses", "better-sqlite3-mit.txt"), { force: true });
-  await copyFile(path.join("node_modules", "chromadb", "LICENSE"), path.join("dist", "licenses", "chromadb-apache-2.0.txt"));
-  await copyFile(path.join("node_modules", "@langchain", "community", "LICENSE"), path.join("dist", "licenses", "langchain-community-mit.txt"));
+  return chromaPackage;
 }

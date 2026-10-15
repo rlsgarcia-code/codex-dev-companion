@@ -1,6 +1,22 @@
 import * as vscode from "vscode";
 import { DevelopmentAgent } from "./agent";
-import { hasImportedGatewayCa } from "./certificate";
+import { ChangeReviewManager } from "./change-review";
+import {
+  clearImportedGatewayCa,
+  hasImportedGatewayCa,
+  importGatewayCa
+} from "./certificate";
+import { connectionDiagnosticFixes } from "./connection-remediation";
+import {
+  completionNotification,
+  parseCompletionNotificationMode
+} from "./completion-notification";
+import type { RunOutcome } from "./completion-notification";
+import {
+  createConnectionProfile,
+  parseConnectionProfile,
+  serializeConnectionProfile
+} from "./connection-profile";
 import {
   LITELLM_API_KEY_SECRET,
   LITELLM_MODEL_CAPABILITIES,
@@ -25,38 +41,44 @@ import type {
   LiteLlmModelProfiles,
   LiteLlmReasoningEffort
 } from "./litellm";
+import { parseRunMode, runModeLabel } from "./autonomy";
 import { ContextCollector } from "./context";
+import { estimateContextTokens } from "./context-budget";
 import { ProjectMemory } from "./memory";
+import { memoryChunks } from "./memory-chunks";
+import { redactSensitiveText, safeErrorMessage } from "./redaction";
 import { agentRuntimeLabel, parseAgentRuntime } from "./runtime";
-import type { AgentRuntime, AgentUiEvent, ChatMessage, RunMode } from "./types";
+import { renderSafeMarkdown } from "./safe-markdown";
+import { isSensitiveWorkspacePath } from "./sensitive-files";
+import { createSupportBundle, serializeSupportBundle } from "./support-bundle";
+import type { ThreadSnapshot } from "./thread-state";
+import type {
+  AgentRuntime,
+  AgentUiEvent,
+  ChatMessage,
+  ConnectionDiagnostic,
+  RunMode
+} from "./types";
+import { parseIncomingMessage } from "./webview-protocol";
+import type { IncomingMessage } from "./webview-protocol";
 
-const HISTORY_KEY = "codexDevCompanion.history";
-const MAX_HISTORY = 60;
+const LEGACY_HISTORY_KEY = "codexDevCompanion.history";
+const DRAFTS_KEY = "codexDevCompanion.threadDrafts";
+const MAX_DRAFT_CHARACTERS = 50_000;
 
-type IncomingMessage =
-  | { type: "ready" }
-  | { type: "send"; text: string; mode: RunMode }
-  | { type: "cancel" }
-  | { type: "newThread" }
-  | { type: "remember"; text: string }
-  | { type: "openMemory" }
-  | { type: "configureLiteLlm" }
-  | { type: "listModels"; endpoint: string; apiKey: string }
-  | { type: "selectRuntime"; runtime: AgentRuntime }
-  | {
-      type: "saveLiteLlm";
-      endpoint: string;
-      model: string;
-      apiKey: string;
-      authHeader: LiteLlmAuthHeader;
-      modelsEndpoint: string;
-      preset: string;
-      reasoningEffort: string;
-      temperature: string;
-      topP: string;
-      semanticMemoryEnabled: boolean;
-      embeddingModel: string;
-    };
+type LiteLlmFormFields = {
+  endpoint: string;
+  model: string;
+  apiKey: string;
+  authHeader: LiteLlmAuthHeader;
+  modelsEndpoint: string;
+  preset: string;
+  reasoningEffort: string;
+  temperature: string;
+  topP: string;
+  semanticMemoryEnabled: boolean;
+  embeddingModel: string;
+};
 
 type LiteLlmSettingsSnapshot = {
   endpoint: string;
@@ -79,42 +101,174 @@ type LiteLlmSettingsSnapshot = {
 
 export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
+  private draftCache: Record<string, string> | undefined;
+  private connectionSettingsRequested = false;
+  private sendPending = false;
   private readonly disposables: vscode.Disposable[] = [];
 
   public constructor(
     private readonly extensionContext: vscode.ExtensionContext,
     private readonly agent: DevelopmentAgent,
     private readonly collector: ContextCollector,
-    private readonly memory: ProjectMemory
-  ) {}
+    private readonly memory: ProjectMemory,
+    private readonly changeReview: ChangeReviewManager
+  ) {
+    this.disposables.push(
+      vscode.window.onDidChangeActiveTextEditor(() => this.postContextState()),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("codexDevCompanion.autoContext")) this.postContextState();
+        if (event.affectsConfiguration("codexDevCompanion.autonomyMode")) {
+          const mode = this.autonomyMode();
+          this.post({ type: "autonomyChanged", mode, message: `${runModeLabel(mode)} selected` });
+        }
+      })
+    );
+  }
 
   public resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
     view.webview.options = { enableScripts: true };
     view.webview.html = this.html(view.webview);
     this.disposables.push(
-      view.webview.onDidReceiveMessage((message: IncomingMessage) => void this.handleMessage(message))
+      view.webview.onDidReceiveMessage((message: unknown) => void this.receiveMessage(message)),
+      view.onDidChangeVisibility(() => {
+        if (view.visible) view.badge = undefined;
+      }),
+      view.onDidDispose(() => {
+        if (this.view === view) this.view = undefined;
+      })
     );
   }
 
   public reveal(): void {
+    if (this.view) this.view.badge = undefined;
     this.view?.show?.(true);
   }
 
-  public async addSelection(): Promise<void> {
-    const filename = this.collector.pinSelection();
-    if (!filename) {
-      void vscode.window.showInformationMessage("Select code before adding it to the local agent context.");
-      return;
-    }
-    this.post({ type: "contextPinned", filename });
+  public async openConnectionSettings(): Promise<void> {
+    this.connectionSettingsRequested = true;
+    await vscode.commands.executeCommand("workbench.view.extension.codexDevCompanion");
     this.reveal();
+    await this.postConnectionSettings();
+  }
+
+  public async addSelection(): Promise<void> {
+    try {
+      const pinned = this.collector.pinSelection();
+      if (!pinned) {
+        void vscode.window.showInformationMessage("Select code before adding it to the local agent context.");
+        return;
+      }
+      this.postContextState();
+      this.post({ type: "toast", message: `Pinned ${pinned.filename}:${pinned.range}` });
+      this.reveal();
+    } catch (error) {
+      void vscode.window.showErrorMessage(await this.safeError(error));
+    }
+  }
+
+  public async addFileContext(): Promise<void> {
+    try {
+      const files = await this.collector.workspaceFiles();
+      if (!files.length) {
+        void vscode.window.showInformationMessage("No workspace files are available to add as context.");
+        return;
+      }
+      const items = files
+        .map((uri) => {
+          const folder = vscode.workspace.getWorkspaceFolder(uri);
+          return {
+            label: vscode.workspace.asRelativePath(uri, false),
+            description: folder && (vscode.workspace.workspaceFolders?.length ?? 0) > 1 ? folder.name : undefined,
+            uri
+          };
+        })
+        .sort((left, right) => left.label.localeCompare(right.label));
+      const selected = await vscode.window.showQuickPick(items, {
+        title: "Add file to message context",
+        placeHolder: "Search workspace files",
+        matchOnDescription: true,
+        ignoreFocusOut: true
+      });
+      if (!selected) return;
+      const pinned = await this.collector.pinFile(selected.uri);
+      this.postContextState();
+      this.post({ type: "toast", message: `Pinned ${pinned.filename}` });
+      this.reveal();
+    } catch (error) {
+      void vscode.window.showErrorMessage(await this.safeError(error));
+    }
   }
 
   public async newThread(): Promise<void> {
+    await this.assertThreadEditable();
     await this.agent.newThread();
-    await this.saveHistory([]);
-    this.post({ type: "reset" });
+    const [context, payload] = await Promise.all([this.contextState(), this.threadPayload()]);
+    this.post({ type: "reset", context, ...payload });
+  }
+
+  private async selectThread(threadId: string): Promise<void> {
+    try {
+      await this.assertThreadEditable();
+      await this.agent.selectThread(threadId);
+      const [context, payload] = await Promise.all([this.contextState(), this.threadPayload()]);
+      this.post({ type: "reset", context, ...payload });
+    } catch (error) {
+      this.post({ type: "threadError", message: await this.safeError(error) });
+    }
+  }
+
+  private async renameThread(threadId: string): Promise<void> {
+    try {
+      await this.assertThreadEditable();
+      const snapshot = await this.agent.threadSnapshot();
+      const thread = snapshot.threads.find((candidate) => candidate.id === threadId);
+      if (!thread) throw new Error("The selected local thread no longer exists.");
+      const title = await vscode.window.showInputBox({
+        title: "Rename local thread",
+        value: thread.title,
+        prompt: "Thread titles stay only in this VS Code workspace.",
+        validateInput: (value) => value.trim() ? undefined : "Thread title cannot be empty."
+      });
+      if (title === undefined) return;
+      await this.assertThreadEditable();
+      await this.agent.renameThread(threadId, title);
+      this.post({ type: "threadsUpdated", ...await this.threadPayload() });
+    } catch (error) {
+      this.post({ type: "threadError", message: await this.safeError(error) });
+    }
+  }
+
+  private async toggleThreadPinned(threadId: string): Promise<void> {
+    try {
+      await this.assertThreadEditable();
+      await this.agent.toggleThreadPinned(threadId);
+      this.post({ type: "threadsUpdated", ...await this.threadPayload() });
+    } catch (error) {
+      this.post({ type: "threadError", message: await this.safeError(error) });
+    }
+  }
+
+  private async deleteThread(threadId: string): Promise<void> {
+    try {
+      await this.assertThreadEditable();
+      const snapshot = await this.agent.threadSnapshot();
+      const thread = snapshot.threads.find((candidate) => candidate.id === threadId);
+      if (!thread) throw new Error("The selected local thread no longer exists.");
+      const confirmation = await vscode.window.showWarningMessage(
+        `Delete the local thread “${thread.title}”?`,
+        { modal: true, detail: "This removes its local conversation history. Project memory is not changed." },
+        "Delete thread"
+      );
+      if (confirmation !== "Delete thread") return;
+      await this.assertThreadEditable();
+      await this.agent.deleteThread(threadId);
+      await this.discardDraft(threadId);
+      const [context, payload] = await Promise.all([this.contextState(), this.threadPayload()]);
+      this.post({ type: "reset", context, ...payload });
+    } catch (error) {
+      this.post({ type: "threadError", message: await this.safeError(error) });
+    }
   }
 
   public dispose(): void {
@@ -123,22 +277,92 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
   }
 
+  private async receiveMessage(value: unknown): Promise<void> {
+    const message = parseIncomingMessage(value);
+    if (!message) {
+      this.post({
+        type: "protocolError",
+        message: "The sidebar sent an invalid or oversized local request. No action was performed.",
+        active: this.agent.running || this.sendPending
+      });
+      return;
+    }
+    try {
+      await this.handleMessage(message);
+    } catch (error) {
+      const active = this.agent.running;
+      if (!active) this.sendPending = false;
+      this.post({
+        type: "protocolError",
+        message: await this.safeError(error),
+        active
+      });
+    }
+  }
+
   private async handleMessage(message: IncomingMessage): Promise<void> {
     switch (message.type) {
       case "ready":
+        await this.migrateLegacyHistory();
+        const [payload, context, liteLlm] = await Promise.all([
+          this.threadPayload(),
+          this.contextState(),
+          this.liteLlmSettingsSnapshot()
+        ]);
         this.post({
           type: "hydrate",
-          history: this.history(),
+          ...payload,
           workspace: vscode.workspace.name ?? "No workspace",
-          activeFile: this.activeFileLabel(),
-          liteLlm: await this.liteLlmSettingsSnapshot()
+          context,
+          liteLlm
         });
+        if (this.connectionSettingsRequested) await this.postConnectionSettings();
         break;
       case "send":
-        await this.send(message.text, message.mode);
+        await this.send(message.text, parseRunMode(message.mode), Boolean(message.replacePending));
+        break;
+      case "retry":
+        await this.retry(parseRunMode(message.mode));
+        break;
+      case "discardRecovery":
+        await this.discardRecovery(message.threadId, message.messageId);
+        break;
+      case "refreshRunState":
+        const [refreshedContext, refreshedPayload] = await Promise.all([
+          this.contextState(),
+          this.threadPayload()
+        ]);
+        this.post({ type: "reset", context: refreshedContext, ...refreshedPayload });
+        break;
+      case "draftChanged":
+        await this.saveDraft(message.threadId, message.text);
+        break;
+      case "copyMessage":
+        try {
+          const text = String(message.text).slice(0, 200_000);
+          if (!text.trim()) throw new Error("There is no response text to copy.");
+          await vscode.env.clipboard.writeText(text);
+          this.post({ type: "messageCopied", id: String(message.id).slice(0, 128) });
+        } catch (error) {
+          this.post({
+            type: "messageCopyError",
+            id: String(message.id).slice(0, 128),
+            message: await this.safeError(error)
+          });
+        }
         break;
       case "cancel":
-        this.agent.cancel();
+        const cancellation = this.agent.cancel();
+        this.post({ type: "cancelState", state: cancellation });
+        if (cancellation === "requested") {
+          this.post({ type: "status", label: "Stopping current operation" });
+          this.post({
+            type: "activity",
+            kind: "cancellation",
+            title: "Stop requested",
+            detail: "Waiting for the active model request or local tool to acknowledge cancellation."
+          });
+        }
         break;
       case "newThread":
         try {
@@ -146,25 +370,90 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         } catch (error) {
           this.post({
             type: "newThreadError",
-            message: error instanceof Error ? error.message : String(error)
+            message: await this.safeError(error)
           });
         }
         break;
-      case "remember":
-        await this.remember(message.text);
+      case "selectThread":
+        await this.selectThread(message.id);
         break;
-      case "openMemory":
-        await this.memory.open();
+      case "toggleThreadPinned":
+        await this.toggleThreadPinned(message.id);
         break;
-      case "configureLiteLlm":
-        await vscode.commands.executeCommand("codexDevCompanion.configureLiteLlm");
-        this.post({ type: "liteLlmSettings", liteLlm: await this.liteLlmSettingsSnapshot() });
+      case "renameThread":
+        await this.renameThread(message.id);
+        break;
+      case "deleteThread":
+        await this.deleteThread(message.id);
+        break;
+      case "openMemoryCenter":
+        await this.postMemoryState();
+        break;
+      case "openMemoryFile":
+        try {
+          await this.memory.open();
+        } catch (error) {
+          this.post({ type: "memoryActionError", message: await this.safeError(error) });
+        }
+        break;
+      case "addMemoryEntry":
+        await this.addMemoryEntry();
+        break;
+      case "editMemoryEntry":
+        await this.editMemoryEntry(message.id);
+        break;
+      case "deleteMemoryEntry":
+        await this.deleteMemoryEntry(message.id);
+        break;
+      case "openChanges":
+        await vscode.commands.executeCommand("workbench.view.scm");
+        break;
+      case "openChangeDiff":
+        await this.openChangeDiff(message.id);
+        break;
+      case "restoreChange":
+        await this.restoreChange(message.id);
+        break;
+      case "restoreRunChanges":
+        await this.restoreRunChanges(message.runId, message.changeIds);
+        break;
+      case "addFileContext":
+        await this.addFileContext();
+        break;
+      case "removePinnedContext":
+        this.collector.removePinned(message.id);
+        this.postContextState();
+        break;
+      case "clearPinnedContext":
+        this.collector.clearPinned();
+        this.postContextState();
+        break;
+      case "connectionSettingsOpened":
+        this.connectionSettingsRequested = false;
+        break;
+      case "configureGatewayCa":
+        await this.configureGatewayCa();
+        break;
+      case "exportConnectionProfile":
+        await this.exportConnectionProfile();
+        break;
+      case "importConnectionProfile":
+        await this.importConnectionProfile();
+        break;
+      case "exportSupportBundle":
+        await this.exportSupportBundle(message.diagnostics);
         break;
       case "listModels":
         await this.listModels(message.endpoint, message.apiKey);
         break;
       case "selectRuntime":
         await this.selectRuntime(message.runtime);
+        break;
+      case "selectAutonomy":
+        await this.selectAutonomy(message.mode);
+        break;
+      case "testLiteLlm":
+        await this.testLiteLlmSettings(message);
         break;
       case "saveLiteLlm":
         await this.saveLiteLlmSettings(message);
@@ -204,6 +493,262 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     };
   }
 
+  private async configureGatewayCa(): Promise<void> {
+    try {
+      await this.assertProviderConfigurationEditable();
+      const hasCertificate = await hasImportedGatewayCa(this.extensionContext);
+      const choice = await vscode.window.showQuickPick(
+        [
+          {
+            label: hasCertificate ? "Replace corporate CA PEM" : "Import corporate CA PEM",
+            description: "Select a trusted PEM bundle and store one private local copy",
+            value: "import" as const
+          },
+          ...(hasCertificate
+            ? [{
+                label: "Use operating system trust only",
+                description: "Remove the imported CA from this VS Code profile and environment",
+                value: "remove" as const
+              }]
+            : [])
+        ],
+        {
+          title: "LiteLLM gateway certificate",
+          placeHolder: hasCertificate
+            ? "A corporate CA is currently imported"
+            : "Import only when the gateway is not trusted by the operating system",
+          ignoreFocusOut: true
+        }
+      );
+      if (!choice) return;
+      if (choice.value === "remove") {
+        await clearImportedGatewayCa(this.extensionContext);
+        await this.agent.reloadProviderConfiguration();
+        this.post({
+          type: "liteLlmSettings",
+          liteLlm: await this.liteLlmSettingsSnapshot(),
+          message: "Imported corporate CA removed; system trust is active"
+        });
+        return;
+      }
+      const selected = await vscode.window.showOpenDialog({
+        title: hasCertificate ? "Replace the LiteLLM gateway CA PEM" : "Import the LiteLLM gateway CA PEM",
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { "PEM certificate bundle": ["pem"] },
+        openLabel: hasCertificate ? "Replace PEM" : "Import PEM"
+      });
+      if (!selected?.[0]) return;
+      await importGatewayCa(this.extensionContext, selected[0]);
+      await this.agent.reloadProviderConfiguration();
+      this.post({
+        type: "liteLlmSettings",
+        liteLlm: await this.liteLlmSettingsSnapshot(),
+        message: hasCertificate ? "Corporate CA replaced" : "Corporate CA imported"
+      });
+    } catch (error) {
+      this.post({ type: "gatewayCaError", message: await this.safeError(error) });
+    }
+  }
+
+  private async exportConnectionProfile(): Promise<void> {
+    try {
+      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const requiresCorporateCa = await hasImportedGatewayCa(this.extensionContext)
+        || Boolean(configuration.get<string>("gatewayCaCertificatePath", "").trim());
+      const profile = createConnectionProfile({
+        gateway: {
+          endpoint: configuration.get<string>("liteLlmEndpoint", ""),
+          modelsEndpoint: configuration.get<string>("liteLlmModelsEndpoint", ""),
+          authHeader: parseLiteLlmAuthHeader(configuration.get("liteLlmAuthHeader")),
+          requiresKey: true,
+          requiresCorporateCa
+        },
+        models: {
+          chat: configuration.get<string>("liteLlmModel", ""),
+          embedding: configuration.get<string>("embeddingModel", ""),
+          semanticMemoryEnabled: configuration.get<boolean>("semanticMemoryEnabled", true),
+          profiles: parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"))
+        },
+        workspace: {
+          runtime: parseAgentRuntime(configuration.get("agentRuntime")),
+          autonomyMode: this.autonomyMode()
+        }
+      });
+      const destination = await vscode.window.showSaveDialog({
+        title: "Export Local Dev Companion connection profile",
+        saveLabel: "Export profile",
+        filters: { "Local Dev Companion profile": ["json"] }
+      });
+      if (!destination) return;
+      await vscode.workspace.fs.writeFile(
+        destination,
+        new TextEncoder().encode(serializeConnectionProfile(profile))
+      );
+      this.post({
+        type: "profileExported",
+        message: "Connection profile exported without the gateway key or corporate CA"
+      });
+    } catch (error) {
+      this.post({ type: "profileActionError", message: await this.safeError(error) });
+    }
+  }
+
+  private async importConnectionProfile(): Promise<void> {
+    try {
+      await this.assertProviderConfigurationEditable();
+      const selected = await vscode.window.showOpenDialog({
+        title: "Import Local Dev Companion connection profile",
+        openLabel: "Review profile",
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { "Local Dev Companion profile": ["json"] }
+      });
+      if (!selected?.[0]) return;
+      const stat = await vscode.workspace.fs.stat(selected[0]);
+      if (stat.size > 256_000) throw new Error("Connection profile exceeds the 256 KB safety limit.");
+      const source = new TextDecoder().decode(await vscode.workspace.fs.readFile(selected[0]));
+      const profile = parseConnectionProfile(JSON.parse(source) as unknown);
+      const confirmation = await vscode.window.showInformationMessage(
+        "Import this Local Dev Companion connection profile?",
+        {
+          modal: true,
+          detail: [
+            `Gateway: ${profile.gateway.endpoint}`,
+            `Chat model: ${profile.models.chat}`,
+            `Runtime: ${agentRuntimeLabel(profile.workspace.runtime)}`,
+            "",
+            "The gateway key and corporate CA are never imported. Existing Secret Storage credentials remain unchanged."
+          ].join("\n")
+        },
+        "Import profile"
+      );
+      if (confirmation !== "Import profile") return;
+      await this.assertProviderConfigurationEditable();
+
+      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      await Promise.all([
+        configuration.update("liteLlmEndpoint", profile.gateway.endpoint, vscode.ConfigurationTarget.Global),
+        configuration.update("liteLlmModelsEndpoint", profile.gateway.modelsEndpoint, vscode.ConfigurationTarget.Global),
+        configuration.update("liteLlmAuthHeader", profile.gateway.authHeader, vscode.ConfigurationTarget.Global),
+        configuration.update("liteLlmModel", profile.models.chat, vscode.ConfigurationTarget.Global),
+        configuration.update("liteLlmModelProfiles", profile.models.profiles, vscode.ConfigurationTarget.Global),
+        configuration.update("semanticMemoryEnabled", profile.models.semanticMemoryEnabled, vscode.ConfigurationTarget.Global),
+        configuration.update("embeddingModel", profile.models.embedding, vscode.ConfigurationTarget.Global),
+        configuration.update("agentRuntime", profile.workspace.runtime, vscode.ConfigurationTarget.Workspace),
+        configuration.update("autonomyMode", profile.workspace.autonomyMode, vscode.ConfigurationTarget.Workspace)
+      ]);
+      await this.agent.reloadProviderConfiguration();
+      const [liteLlm, hasApiKey, hasCorporateCa] = await Promise.all([
+        this.liteLlmSettingsSnapshot(),
+        this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET).then(Boolean),
+        hasImportedGatewayCa(this.extensionContext)
+      ]);
+      this.post({
+        type: "profileImported",
+        liteLlm,
+        autonomyMode: profile.workspace.autonomyMode,
+        needsKey: !hasApiKey,
+        needsCorporateCa: profile.gateway.requiresCorporateCa && !hasCorporateCa,
+        message: "Connection profile imported. Test the connection before use."
+      });
+      this.postContextState();
+    } catch (error) {
+      this.post({ type: "profileActionError", message: await this.safeError(error) });
+    }
+  }
+
+  private async exportSupportBundle(diagnostics: unknown): Promise<void> {
+    try {
+      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const model = configuration.get<string>("liteLlmModel", "");
+      const modelProfiles = parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"));
+      const profile = liteLlmModelProfile(modelProfiles, model);
+      const [threadSnapshot, memorySnapshot, keyPresent, corporateCaPresent] = await Promise.all([
+        this.agent.threadSnapshot(),
+        this.memory.snapshot().catch(() => undefined),
+        this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET).then(Boolean),
+        hasImportedGatewayCa(this.extensionContext)
+      ]);
+      const recoveryStates = threadSnapshot.threads.reduce<Record<string, number>>((counts, thread) => {
+        if (thread.recoveryStatus) counts[thread.recoveryStatus] = (counts[thread.recoveryStatus] ?? 0) + 1;
+        return counts;
+      }, {});
+      const extensionVersion = String(
+        (this.extensionContext.extension.packageJSON as { version?: unknown }).version ?? "unknown"
+      );
+      const bundle = createSupportBundle({
+        application: {
+          extensionVersion,
+          vscodeVersion: vscode.version,
+          nodeVersion: process.version,
+          platform: process.platform,
+          architecture: process.arch,
+          remote: Boolean(vscode.env.remoteName)
+        },
+        workspace: {
+          folderCount: vscode.workspace.workspaceFolders?.length ?? 0,
+          trusted: vscode.workspace.isTrusted
+        },
+        agent: {
+          runtime: parseAgentRuntime(configuration.get("agentRuntime")),
+          autonomyMode: this.autonomyMode(),
+          autoContext: configuration.get<boolean>("autoContext", true),
+          maxContextCharacters: configuration.get<number>("maxContextCharacters", 24_000),
+          maxConversationCharacters: configuration.get<number>("maxConversationCharacters", 48_000),
+          standardRecursionLimit: configuration.get<number>("standardRecursionLimit", 200)
+        },
+        connection: {
+          endpoint: configuration.get<string>("liteLlmEndpoint", ""),
+          modelsEndpoint: configuration.get<string>("liteLlmModelsEndpoint", ""),
+          authHeader: parseLiteLlmAuthHeader(configuration.get("liteLlmAuthHeader")),
+          keyPresent,
+          corporateCaPresent: corporateCaPresent
+            || Boolean(configuration.get<string>("gatewayCaCertificatePath", "").trim()),
+          chatModel: model,
+          embeddingModel: configuration.get<string>("embeddingModel", ""),
+          semanticMemoryEnabled: configuration.get<boolean>("semanticMemoryEnabled", true),
+          modelProfileCount: Object.keys(modelProfiles).length,
+          selectedPreset: parseLiteLlmModelPreset(profile.preset),
+          resolvedPreset: resolveLiteLlmModelPreset(model, profile.preset),
+          reasoningEffort: profile.reasoningEffort,
+          temperatureConfigured: profile.temperature !== undefined,
+          topPConfigured: profile.topP !== undefined
+        },
+        memory: {
+          readable: Boolean(memorySnapshot),
+          entryCount: memorySnapshot?.total ?? 0,
+          projectedEntries: memorySnapshot?.entries.length ?? 0,
+          omittedEntries: memorySnapshot?.omitted ?? 0
+        },
+        conversations: {
+          threadCount: threadSnapshot.threads.length,
+          activeMessageCount: threadSnapshot.messages.length,
+          recoveryStates
+        },
+        diagnostics
+      });
+      const destination = await vscode.window.showSaveDialog({
+        title: "Export sanitized Local Dev Companion support bundle",
+        saveLabel: "Export support bundle",
+        filters: { "Sanitized support bundle": ["json"] }
+      });
+      if (!destination) return;
+      await vscode.workspace.fs.writeFile(
+        destination,
+        new TextEncoder().encode(serializeSupportBundle(bundle))
+      );
+      this.post({
+        type: "supportBundleExported",
+        message: "Sanitized support bundle exported without user content or connection identifiers"
+      });
+    } catch (error) {
+      this.post({ type: "profileActionError", message: await this.safeError(error) });
+    }
+  }
+
   private async listModels(endpointInput: string, transientApiKey: string): Promise<void> {
     try {
       const endpoint = normalizeLiteLlmModelsEndpoint(endpointInput);
@@ -214,13 +759,22 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     } catch (error) {
       this.post({
         type: "modelsLoadError",
-        message: error instanceof Error ? error.message : String(error)
+        message: await this.safeError(error, transientApiKey)
       });
     }
   }
 
+  private async postConnectionSettings(): Promise<void> {
+    if (!this.connectionSettingsRequested || !this.view) return;
+    this.post({
+      type: "openConnectionSettings",
+      liteLlm: await this.liteLlmSettingsSnapshot()
+    });
+  }
+
   private async selectRuntime(value: unknown): Promise<void> {
     try {
+      await this.assertProviderConfigurationEditable();
       const runtime = parseAgentRuntime(value);
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       await configuration.update("agentRuntime", runtime, vscode.ConfigurationTarget.Workspace);
@@ -234,40 +788,16 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.post({
         type: "runtimeChangeError",
         liteLlm: await this.liteLlmSettingsSnapshot(),
-        message: error instanceof Error ? error.message : String(error)
+        message: await this.safeError(error)
       });
     }
   }
 
   private async saveLiteLlmSettings(message: Extract<IncomingMessage, { type: "saveLiteLlm" }>): Promise<void> {
     try {
+      await this.assertProviderConfigurationEditable();
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-      const existingApiKey = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
-      const apiKey = message.apiKey.trim() || existingApiKey || "";
-      const connection = validateLiteLlmConnection({
-        endpoint: normalizeLiteLlmEndpoint(message.endpoint),
-        model: message.model,
-        apiKey,
-        authHeader: parseLiteLlmAuthHeader(message.authHeader)
-      });
-      const modelsEndpoint = message.modelsEndpoint.trim()
-        ? normalizeLiteLlmModelsEndpoint(message.modelsEndpoint)
-        : "";
-      const preset = parseLiteLlmModelPreset(message.preset);
-      const reasoningEffort = message.reasoningEffort === "omit"
-        ? undefined
-        : parseLiteLlmReasoningEffort(message.reasoningEffort);
-      if (message.reasoningEffort !== "omit" && !reasoningEffort) {
-        throw new Error("Choose a supported reasoning effort or omit the parameter.");
-      }
-      const temperature = parseOptionalTemperature(message.temperature);
-      const topP = parseOptionalTopP(message.topP);
-      const modelProfiles = updateLiteLlmModelProfile(
-        configuration.get("liteLlmModelProfiles"),
-        connection.model,
-        { preset, reasoningEffort, temperature, topP }
-      );
-      validateLiteLlmModelProfile(connection.model, liteLlmModelProfile(modelProfiles, connection.model));
+      const { connection, modelsEndpoint, modelProfiles } = await this.parseLiteLlmForm(message);
       await Promise.all([
         configuration.update("liteLlmEndpoint", connection.endpoint, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModel", connection.model, vscode.ConfigurationTarget.Global),
@@ -289,27 +819,251 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     } catch (error) {
       this.post({
         type: "liteLlmSaveError",
-        message: error instanceof Error ? error.message : String(error)
+        message: await this.safeError(error, message.apiKey)
       });
     }
   }
 
-  private async send(text: string, mode: RunMode): Promise<void> {
+  private async testLiteLlmSettings(message: Extract<IncomingMessage, { type: "testLiteLlm" }>): Promise<void> {
+    this.post({ type: "connectionTestStarted" });
+    let parsed: Awaited<ReturnType<AgentViewProvider["parseLiteLlmForm"]>>;
+    try {
+      parsed = await this.parseLiteLlmForm(message);
+    } catch (error) {
+      const detail = await this.safeError(error, message.apiKey);
+      const fixes = connectionDiagnosticFixes(detail, {
+        authHeader: parseLiteLlmAuthHeader(message.authHeader),
+        surface: "configuration"
+      });
+      this.post({
+        type: "connectionTested",
+        diagnostics: [{
+          id: "configuration",
+          label: "Configuration",
+          status: "failed",
+          detail,
+          ...(fixes.length ? { fixes } : {})
+        } satisfies ConnectionDiagnostic]
+      });
+      return;
+    }
+
+    const diagnostics: ConnectionDiagnostic[] = [{
+        id: "configuration",
+        label: "Configuration",
+        status: "passed",
+        detail: "Endpoint, credentials, model alias and parameters are valid"
+    }];
+    try {
+      diagnostics.push(...await this.agent.diagnoseConnection({
+        connection: parsed.connection,
+        profile: liteLlmModelProfile(parsed.modelProfiles, parsed.connection.model),
+        modelsEndpoint: parsed.modelsEndpoint,
+        embeddingModel: message.semanticMemoryEnabled ? message.embeddingModel : ""
+      }));
+    } catch (error) {
+      const detail = await this.safeError(error, parsed.connection.apiKey);
+      const fixes = connectionDiagnosticFixes(detail, {
+        authHeader: parsed.connection.authHeader,
+        surface: "chat"
+      });
+      diagnostics.push({
+        id: "chat",
+        label: "Gateway connection",
+        status: "failed",
+        detail,
+        ...(fixes.length ? { fixes } : {})
+      });
+    }
+    this.post({ type: "connectionTested", diagnostics });
+  }
+
+  private async parseLiteLlmForm(message: LiteLlmFormFields) {
+    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const existingApiKey = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
+    const apiKey = message.apiKey.trim() || existingApiKey || "";
+    const connection = validateLiteLlmConnection({
+      endpoint: normalizeLiteLlmEndpoint(message.endpoint),
+      model: message.model,
+      apiKey,
+      authHeader: parseLiteLlmAuthHeader(message.authHeader)
+    });
+    const modelsEndpoint = message.modelsEndpoint.trim()
+      ? normalizeLiteLlmModelsEndpoint(message.modelsEndpoint)
+      : "";
+    const preset = parseLiteLlmModelPreset(message.preset);
+    const reasoningEffort = message.reasoningEffort === "omit"
+      ? undefined
+      : parseLiteLlmReasoningEffort(message.reasoningEffort);
+    if (message.reasoningEffort !== "omit" && !reasoningEffort) {
+      throw new Error("Choose a supported reasoning effort or omit the parameter.");
+    }
+    const temperature = parseOptionalTemperature(message.temperature);
+    const topP = parseOptionalTopP(message.topP);
+    const modelProfiles = updateLiteLlmModelProfile(
+      configuration.get("liteLlmModelProfiles"),
+      connection.model,
+      { preset, reasoningEffort, temperature, topP }
+    );
+    validateLiteLlmModelProfile(connection.model, liteLlmModelProfile(modelProfiles, connection.model));
+    return { connection, modelsEndpoint, modelProfiles };
+  }
+
+  private async send(text: string, mode: RunMode, replacePending = false): Promise<void> {
     const clean = text.trim();
     if (!clean) {
       return;
     }
-    const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      text: clean,
-      createdAt: Date.now()
-    };
-    await this.appendHistory(userMessage);
-    this.post({ type: "user", message: userMessage });
+    if (this.sendPending) {
+      this.post({
+        type: "sendRejected",
+        text: clean,
+        replacePending,
+        reason: "A request is already being checked or executed."
+      });
+      return;
+    }
+    this.sendPending = true;
+    let preflight;
+    try {
+      preflight = await this.agent.preflightRun();
+    } catch (error) {
+      this.post({
+        type: "preflightFailed",
+        kind: "workspace",
+        message: await this.safeError(error),
+        text: clean,
+        replacePending,
+        openConnectionSettings: false
+      });
+      this.sendPending = false;
+      return;
+    }
+    if (!preflight.ready) {
+      this.post({
+        type: "preflightFailed",
+        kind: preflight.kind,
+        message: preflight.message,
+        text: clean,
+        replacePending,
+        openConnectionSettings: preflight.openConnectionSettings
+      });
+      this.sendPending = false;
+      return;
+    }
     this.post({ type: "busy", value: true });
+    let requestAccepted = false;
+    let outcome: RunOutcome | undefined;
+    try {
+      const snapshot = await this.agent.threadSnapshot();
+      await this.saveDraft(snapshot.activeThreadId, "").catch(() => undefined);
+      await this.agent.run(
+        clean,
+        mode,
+        (event) => {
+          if (event.type === "thread" && !requestAccepted) {
+            requestAccepted = true;
+            if (replacePending) {
+              this.post({ type: "pendingUserReplaced", text: clean, html: renderSafeMarkdown(clean) });
+            } else {
+              const userMessage: ChatMessage = {
+                id: crypto.randomUUID(),
+                role: "user",
+                text: clean,
+                html: renderSafeMarkdown(clean),
+                createdAt: Date.now()
+              };
+              this.post({ type: "user", message: userMessage });
+            }
+          }
+          if (event.type === "done") outcome = event.outcome;
+          void this.forwardAgentEvent(event);
+        },
+        { replacePendingUser: replacePending }
+      );
+      if (requestAccepted && outcome) void this.notifyRunCompletion(outcome);
+    } catch (error) {
+      this.post({
+        type: "error",
+        message: await this.safeError(error),
+        recoverable: false
+      });
+      this.post({ type: "busy", value: false });
+    } finally {
+      try {
+        if (!requestAccepted) this.post({ type: "sendRejected", text: clean, replacePending });
+        this.post({ type: "threadsUpdated", ...await this.threadPayload() });
+        this.postContextState();
+        await this.postMemoryState();
+      } finally {
+        this.sendPending = false;
+      }
+    }
+  }
 
-    await this.agent.run(clean, mode, (event) => void this.forwardAgentEvent(event));
+  private async notifyRunCompletion(outcome: RunOutcome): Promise<void> {
+    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const mode = parseCompletionNotificationMode(configuration.get("completionNotifications"));
+    const notification = completionNotification(mode, Boolean(this.view?.visible), outcome);
+    if (!notification) return;
+    if (this.view) {
+      this.view.badge = { value: 1, tooltip: notification.message };
+    }
+    const selection = notification.level === "warning"
+      ? await vscode.window.showWarningMessage(notification.message, notification.action)
+      : await vscode.window.showInformationMessage(notification.message, notification.action);
+    if (selection !== notification.action) return;
+    await vscode.commands.executeCommand("workbench.view.extension.codexDevCompanion");
+    this.reveal();
+  }
+
+  private async retry(mode: RunMode): Promise<void> {
+    try {
+      const snapshot = await this.agent.threadSnapshot();
+      const pending = snapshot.messages.at(-1);
+      if (!pending || pending.role !== "user") {
+        this.post({ type: "threadError", message: "There is no unfinished request to retry in this thread." });
+        this.post({ type: "busy", value: false });
+        return;
+      }
+      await this.send(pending.content, mode, true);
+    } catch (error) {
+      this.post({
+        type: "error",
+        message: await this.safeError(error),
+        recoverable: false
+      });
+      this.post({ type: "busy", value: false });
+    }
+  }
+
+  private async discardRecovery(threadId: string, messageId: string): Promise<void> {
+    try {
+      await this.assertThreadEditable();
+      const snapshot = await this.agent.threadSnapshot();
+      const pending = snapshot.messages.at(-1);
+      if (snapshot.activeThreadId !== threadId || !pending || pending.role !== "user" || pending.id !== messageId) {
+        throw new Error("There is no unfinished request to discard in this thread.");
+      }
+      const confirmation = await vscode.window.showWarningMessage(
+        "Discard this unfinished request from the conversation?",
+        {
+          modal: true,
+          detail: "Completed earlier messages stay in the thread. Files, commands, or memory updates already made by the interrupted run are not reverted; review that run separately if needed."
+        },
+        "Discard request"
+      );
+      if (confirmation !== "Discard request") {
+        this.post({ type: "recoveryDiscardCancelled" });
+        return;
+      }
+      await this.agent.discardRecovery(threadId, messageId);
+      const [context, payload] = await Promise.all([this.contextState(), this.threadPayload()]);
+      this.post({ type: "reset", context, ...payload });
+      this.post({ type: "recoveryDiscarded", message: "Unfinished request discarded" });
+    } catch (error) {
+      this.post({ type: "recoveryDiscardError", message: await this.safeError(error) });
+    }
   }
 
   private async forwardAgentEvent(event: AgentUiEvent): Promise<void> {
@@ -318,10 +1072,41 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         id: crypto.randomUUID(),
         role: "assistant",
         text: event.text,
+        html: renderSafeMarkdown(event.text),
         createdAt: Date.now()
       };
-      await this.appendHistory(assistantMessage);
       this.post({ type: "assistant", message: assistantMessage });
+      return;
+    }
+    if (event.type === "error") {
+      this.post({ ...event, message: redactSensitiveText(event.message) });
+      return;
+    }
+    if (event.type === "activity") {
+      this.post({
+        ...event,
+        title: redactSensitiveText(event.title),
+        ...(event.detail ? { detail: redactSensitiveText(event.detail) } : {})
+      });
+      return;
+    }
+    if (event.type === "contextReceipt") {
+      const storedSecret = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
+      const sensitiveValues = storedSecret ? [storedSecret] : [];
+      this.post({
+        ...event,
+        receipt: {
+          ...event.receipt,
+          ...(event.receipt.activeFile
+            ? { activeFile: redactSensitiveText(event.receipt.activeFile, sensitiveValues) }
+            : {}),
+          guidanceFiles: event.receipt.guidanceFiles.map((file) => redactSensitiveText(file, sensitiveValues)),
+          pinnedSources: event.receipt.pinnedSources.map((source) => ({
+            ...source,
+            filename: redactSensitiveText(source.filename, sensitiveValues)
+          }))
+        }
+      });
       return;
     }
     if (event.type === "done") {
@@ -330,31 +1115,372 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.post(event);
   }
 
-  private async remember(note: string): Promise<void> {
+  private async memoryPayload() {
+    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const [snapshot, storedSecret] = await Promise.all([
+      this.memory.snapshot(),
+      this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET)
+    ]);
+    const embeddingModel = configuration.get<string>("embeddingModel", "").trim();
+    const semantic = configuration.get<boolean>("semanticMemoryEnabled", true) && Boolean(embeddingModel);
+    return {
+      entries: snapshot.entries.map((entry) => {
+        const text = redactSensitiveText(entry.text, storedSecret ? [storedSecret] : []);
+        return { ...entry, text, redacted: text !== entry.text };
+      }),
+      total: snapshot.total,
+      omitted: snapshot.omitted,
+      semantic,
+      embeddingModel: semantic ? embeddingModel : ""
+    };
+  }
+
+  private async postMemoryState(message = ""): Promise<void> {
     try {
-      const uri = await this.memory.append(note);
-      this.post({ type: "toast", message: `Saved to ${vscode.workspace.asRelativePath(uri)}` });
+      this.post({ type: "memoryState", memory: await this.memoryPayload(), message });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.post({ type: "error", message });
+      this.post({ type: "memoryActionError", message: await this.safeError(error) });
     }
   }
 
-  private history(): ChatMessage[] {
-    return this.extensionContext.workspaceState.get<ChatMessage[]>(HISTORY_KEY, []);
+  private async addMemoryEntry(): Promise<void> {
+    try {
+      await this.assertMemoryEditable();
+      const storedSecret = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
+      const note = await vscode.window.showInputBox({
+        title: "Add durable project memory",
+        prompt: "Save only a confirmed decision, fact, or convention. This writes to .codex-agent/memory.md.",
+        ignoreFocusOut: true,
+        validateInput: (value) => this.validateMemoryEntry(value, storedSecret)
+      });
+      if (note === undefined) return;
+      await this.assertMemoryEditable();
+      await this.memory.append(note);
+      await this.postMemoryState("Memory entry added");
+      this.postContextState();
+      this.post({ type: "toast", message: "Durable project memory updated" });
+    } catch (error) {
+      this.post({ type: "memoryActionError", message: await this.safeError(error) });
+    }
   }
 
-  private async appendHistory(message: ChatMessage): Promise<void> {
-    await this.saveHistory([...this.history(), message].slice(-MAX_HISTORY));
+  private async editMemoryEntry(id: string): Promise<void> {
+    try {
+      await this.assertMemoryEditable();
+      const [snapshot, storedSecret] = await Promise.all([
+        this.memory.snapshot(),
+        this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET)
+      ]);
+      const entry = snapshot.entries.find((candidate) => candidate.id === id);
+      if (!entry) throw new Error("This memory entry changed or no longer exists. Refresh and try again.");
+      const redacted = redactSensitiveText(entry.text, storedSecret ? [storedSecret] : []) !== entry.text;
+      const note = await vscode.window.showInputBox({
+        title: "Edit durable project memory",
+        prompt: redacted
+          ? "The existing entry contains redacted credential-like text. Enter a complete safe replacement."
+          : "Keep the entry concise, durable, and verifiable.",
+        value: redacted ? "" : entry.text,
+        ignoreFocusOut: true,
+        validateInput: (value) => this.validateMemoryEntry(value, storedSecret)
+      });
+      if (note === undefined) return;
+      await this.assertMemoryEditable();
+      await this.memory.replaceEntry(id, note);
+      await this.postMemoryState("Memory entry updated");
+      this.postContextState();
+    } catch (error) {
+      this.post({ type: "memoryActionError", message: await this.safeError(error) });
+    }
   }
 
-  private async saveHistory(messages: ChatMessage[]): Promise<void> {
-    await this.extensionContext.workspaceState.update(HISTORY_KEY, messages);
+  private async deleteMemoryEntry(id: string): Promise<void> {
+    try {
+      await this.assertMemoryEditable();
+      const snapshot = await this.memory.snapshot();
+      const entry = snapshot.entries.find((candidate) => candidate.id === id);
+      if (!entry) throw new Error("This memory entry changed or no longer exists. Refresh and try again.");
+      const confirmation = await vscode.window.showWarningMessage(
+        "Delete this durable project-memory entry?",
+        {
+          modal: true,
+          detail: `${entry.date ? `Saved ${entry.date}. ` : ""}This updates .codex-agent/memory.md and cannot be undone by the memory center.`
+        },
+        "Delete memory"
+      );
+      if (confirmation !== "Delete memory") return;
+      await this.assertMemoryEditable();
+      await this.memory.deleteEntry(id);
+      await this.postMemoryState("Memory entry deleted");
+      this.postContextState();
+    } catch (error) {
+      this.post({ type: "memoryActionError", message: await this.safeError(error) });
+    }
+  }
+
+  private validateMemoryEntry(value: string, storedSecret: string | undefined): string | undefined {
+    if (!value.trim()) return "Enter a durable decision, fact, or convention.";
+    if (value.length > 4_000) return "Keep one memory entry under 4,000 characters.";
+    if (redactSensitiveText(value, storedSecret ? [storedSecret] : []) !== value) {
+      return "Remove credentials, tokens, passwords, or private-key material before saving.";
+    }
+    return undefined;
+  }
+
+  private async assertMemoryEditable(): Promise<void> {
+    if (this.agent.running || await this.agent.externalRunActive()) {
+      throw new Error("Wait for the active agent run to finish before changing project memory.");
+    }
+  }
+
+  private async assertProviderConfigurationEditable(): Promise<void> {
+    if (this.agent.running || await this.agent.externalRunActive()) {
+      throw new Error("Wait for the active agent run to finish before changing provider configuration.");
+    }
+  }
+
+  private async assertThreadEditable(): Promise<void> {
+    if (this.agent.running || await this.agent.externalRunActive()) {
+      throw new Error("Wait for the active agent run to finish before changing conversations.");
+    }
+  }
+
+  private async openChangeDiff(changeId: string): Promise<void> {
+    try {
+      await this.changeReview.openDiff(changeId);
+    } catch (error) {
+      this.post({
+        type: "changeActionError",
+        id: changeId,
+        message: await this.safeError(error)
+      });
+    }
+  }
+
+  private async restoreChange(changeId: string): Promise<void> {
+    try {
+      await this.assertChangeReviewEditable();
+      const change = this.changeReview.change(changeId);
+      const action = change.kind === "created"
+        ? "Remove the file created by this run"
+        : change.kind === "deleted"
+          ? "Recreate the file deleted by this run"
+          : "Restore the file to its content before this run";
+      const confirmation = await vscode.window.showWarningMessage(
+        `${action}?`,
+        {
+          modal: true,
+          detail: `${change.path}\n\nThe operation is refused if the file changed after the run.`
+        },
+        "Restore file"
+      );
+      if (confirmation !== "Restore file") return;
+      const restored = await this.changeReview.restore(changeId);
+      this.post({
+        type: "changeRestored",
+        change: restored.item,
+        warning: this.restoreSaveWarning(restored.unsavedPaths)
+      });
+    } catch (error) {
+      this.post({
+        type: "changeActionError",
+        id: changeId,
+        message: await this.safeError(error)
+      });
+    }
+  }
+
+  private async restoreRunChanges(runId: string, changeIds: string[]): Promise<void> {
+    try {
+      await this.assertChangeReviewEditable();
+      const changes = changeIds.map((id) => this.changeReview.change(id));
+      const pending = changes.filter((change) => !change.restored);
+      if (!pending.length) {
+        this.post({ type: "runChangesRestored", runId, changes });
+        return;
+      }
+      const visiblePaths = pending.slice(0, 10).map((change) => `• ${change.path}`).join("\n");
+      const remaining = pending.length > 10 ? `\n• …and ${pending.length - 10} more` : "";
+      const confirmation = await vscode.window.showWarningMessage(
+        `Undo all ${pending.length} tracked file change${pending.length === 1 ? "" : "s"} from this run?`,
+        {
+          modal: true,
+          detail: `${visiblePaths}${remaining}\n\nThis restores file contents only; commands and memory updates are not reversed. The operation is refused if any file changed after the run.`
+        },
+        "Undo file changes"
+      );
+      if (confirmation !== "Undo file changes") {
+        this.post({ type: "runRestoreCancelled", runId });
+        return;
+      }
+      const restored = await this.changeReview.restoreRun(changeIds);
+      this.post({
+        type: "runChangesRestored",
+        runId,
+        changes: restored.items,
+        warning: this.restoreSaveWarning(restored.unsavedPaths)
+      });
+    } catch (error) {
+      this.post({
+        type: "runChangeActionError",
+        runId,
+        message: await this.safeError(error)
+      });
+    }
+  }
+
+  private async assertChangeReviewEditable(): Promise<void> {
+    if (this.agent.running || await this.agent.externalRunActive()) {
+      throw new Error("Wait for the active agent run to finish before restoring files.");
+    }
+  }
+
+  private restoreSaveWarning(paths: string[]): string | undefined {
+    if (!paths.length) return undefined;
+    const visible = paths.slice(0, 3).join(", ");
+    const remaining = paths.length > 3 ? `, and ${paths.length - 3} more` : "";
+    return `The content was restored in the editor, but ${paths.length} file${paths.length === 1 ? "" : "s"} could not be saved (${visible}${remaining}). Save the open document${paths.length === 1 ? "" : "s"} manually before closing VS Code.`;
+  }
+
+  private async safeError(error: unknown, transientSecret = ""): Promise<string> {
+    const storedSecret = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
+    return safeErrorMessage(error, [storedSecret ?? "", transientSecret]);
+  }
+
+  private async threadPayload() {
+    const [snapshot, externalRunActive] = await Promise.all([
+      this.agent.threadSnapshot(),
+      this.agent.externalRunActive()
+    ]);
+    const validThreadIds = new Set(snapshot.threads.map((thread) => thread.id));
+    const drafts = this.drafts();
+    let pruned = false;
+    for (const threadId of Object.keys(drafts)) {
+      if (validThreadIds.has(threadId)) continue;
+      delete drafts[threadId];
+      pruned = true;
+    }
+    if (pruned) await this.extensionContext.workspaceState.update(DRAFTS_KEY, drafts);
+    return {
+      activeThreadId: snapshot.activeThreadId,
+      threads: snapshot.threads,
+      history: this.threadMessages(snapshot),
+      draft: drafts[snapshot.activeThreadId] ?? "",
+      autonomyMode: this.autonomyMode(),
+      recovery: snapshot.recovery,
+      remoteRunActive: externalRunActive || (
+        !this.agent.running && snapshot.threads.some((thread) => thread.recoveryStatus === "running")
+      )
+    };
+  }
+
+  private autonomyMode(): RunMode {
+    return parseRunMode(
+      vscode.workspace.getConfiguration("codexDevCompanion").get("autonomyMode")
+    );
+  }
+
+  private async selectAutonomy(value: RunMode): Promise<void> {
+    const mode = parseRunMode(value);
+    await vscode.workspace
+      .getConfiguration("codexDevCompanion")
+      .update("autonomyMode", mode, vscode.ConfigurationTarget.Workspace);
+  }
+
+  private drafts(): Record<string, string> {
+    if (this.draftCache) return this.draftCache;
+    const stored = this.extensionContext.workspaceState.get<unknown>(DRAFTS_KEY);
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+      this.draftCache = {};
+      return this.draftCache;
+    }
+    this.draftCache = Object.fromEntries(
+      Object.entries(stored)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+        .map(([threadId, draft]) => [threadId, draft.slice(0, MAX_DRAFT_CHARACTERS)])
+    );
+    return this.draftCache;
+  }
+
+  private async saveDraft(threadId: string, text: string): Promise<void> {
+    const snapshot = await this.agent.threadSnapshot();
+    if (!snapshot.threads.some((thread) => thread.id === threadId)) return;
+    const drafts = this.drafts();
+    const bounded = text.slice(0, MAX_DRAFT_CHARACTERS);
+    if (bounded) drafts[threadId] = bounded;
+    else delete drafts[threadId];
+    await this.extensionContext.workspaceState.update(DRAFTS_KEY, drafts);
+  }
+
+  private async discardDraft(threadId: string): Promise<void> {
+    const drafts = this.drafts();
+    if (!(threadId in drafts)) return;
+    delete drafts[threadId];
+    await this.extensionContext.workspaceState.update(DRAFTS_KEY, drafts);
+  }
+
+  private async migrateLegacyHistory(): Promise<void> {
+    const legacy = this.extensionContext.workspaceState.get<unknown>(LEGACY_HISTORY_KEY);
+    if (legacy === undefined) return;
+    await this.agent.migrateLegacyHistory(legacy);
+    await this.extensionContext.workspaceState.update(LEGACY_HISTORY_KEY, undefined);
+  }
+
+  private threadMessages(snapshot: ThreadSnapshot): ChatMessage[] {
+    return snapshot.messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.content,
+      html: renderSafeMarkdown(message.content),
+      createdAt: message.createdAt
+    }));
   }
 
   private activeFileLabel(): string | undefined {
     const editor = vscode.window.activeTextEditor;
     return editor ? vscode.workspace.asRelativePath(editor.document.uri) : undefined;
+  }
+
+  private async contextState() {
+    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const autoContext = configuration.get<boolean>("autoContext", true);
+    const maximumCharacters = configuration.get<number>("maxContextCharacters", 24_000);
+    const semanticMemoryEnabled = configuration.get<boolean>("semanticMemoryEnabled", true);
+    const embeddingModel = configuration.get<string>("embeddingModel", "").trim();
+    const [budget, memoryText] = await Promise.all([
+      this.collector.preview(maximumCharacters, autoContext).catch(() => ({
+        maximumCharacters,
+        usedCharacters: 0,
+        estimatedTokens: 0,
+        utilizationPercent: 0,
+        automaticCharacters: 0,
+        guidanceCharacters: 0,
+        guidanceFiles: 0,
+        guidancePaths: [],
+        pinnedCharacters: 0,
+        truncated: false
+      })),
+      this.memory.read(200_000).catch(() => "")
+    ]);
+    const durableMemory = memoryChunks(memoryText).join("\n");
+    const activeFile = this.activeFileLabel();
+    return {
+      activeFile,
+      activeFileSensitive: Boolean(activeFile && isSensitiveWorkspacePath(activeFile)),
+      autoContext,
+      pinned: this.collector.pinnedContext(),
+      budget,
+      memory: {
+        characters: durableMemory.length,
+        estimatedTokens: estimateContextTokens(durableMemory.length),
+        mode: semanticMemoryEnabled && embeddingModel ? "semantic" : "recent",
+        maximumResults: configuration.get<number>("semanticMemoryResults", 5),
+        configured: Boolean(durableMemory)
+      }
+    };
+  }
+
+  private postContextState(): void {
+    void this.contextState().then((context) => this.post({ type: "contextState", context }));
   }
 
   private post(message: unknown): void {
@@ -378,152 +1504,346 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         <div class="eyebrow">LOCAL / DEVELOPMENT</div>
         <h1>Companion</h1>
       </div>
-      <button class="icon-button" id="new-thread" title="New thread" aria-label="New thread">↺</button>
+      <div class="topbar-actions">
+        <button class="icon-button" id="threads-toggle" title="Local threads" aria-label="Local threads" aria-expanded="false" aria-controls="thread-panel">☷</button>
+        <button class="icon-button" id="new-thread" title="New thread" aria-label="New thread">＋</button>
+      </div>
     </header>
 
-    <section class="settings-panel hidden" id="litellm-settings" aria-label="LiteLLM settings">
+    <div class="top-drawers" id="top-drawers">
+      <section class="thread-panel hidden" id="thread-panel" role="region" aria-labelledby="thread-panel-title" aria-hidden="true">
+        <div class="settings-heading">
+          <div>
+            <div class="section-label">LOCAL THREADS</div>
+            <h2 id="thread-panel-title" tabindex="-1">Conversations</h2>
+          </div>
+          <button class="icon-button settings-close" id="threads-close" title="Close threads" aria-label="Close threads">×</button>
+        </div>
+        <label class="thread-search">
+          <span class="sr-only">Search conversations</span>
+          <input id="thread-search" type="search" autocomplete="off" placeholder="Search conversations" />
+        </label>
+        <div class="thread-list" id="thread-list"></div>
+        <p class="thread-note" id="thread-note">Stored only in this VS Code workspace.</p>
+      </section>
+
+      <section class="memory-panel hidden" id="memory-panel" role="region" aria-labelledby="memory-panel-title" aria-hidden="true">
+        <div class="settings-heading">
+          <div>
+            <div class="section-label">PROJECT MEMORY</div>
+            <h2 id="memory-panel-title" tabindex="-1">Durable knowledge</h2>
+          </div>
+          <button class="icon-button settings-close" id="memory-close" title="Close memory center" aria-label="Close memory center">×</button>
+        </div>
+        <div class="memory-overview" id="memory-overview" role="status" aria-live="polite">Loading local memory…</div>
+        <div class="memory-list" id="memory-list"></div>
+        <div class="memory-actions">
+          <button class="primary-action" id="memory-add" type="button">Add memory</button>
+          <button class="secondary-action" id="memory-open-file" type="button">Open memory.md</button>
+        </div>
+        <p class="thread-note">Entries stay in <code>.codex-agent/memory.md</code>. Semantic vectors refresh automatically on the next retrieval.</p>
+      </section>
+
+      <section class="brief-panel hidden" id="brief-panel" role="region" aria-labelledby="brief-panel-title" aria-hidden="true">
+        <div class="settings-heading">
+          <div>
+            <div class="section-label">TASK BRIEF</div>
+            <h2 id="brief-panel-title" tabindex="-1">Structure your request</h2>
+          </div>
+          <button class="icon-button settings-close" id="brief-close" title="Close task brief" aria-label="Close task brief">×</button>
+        </div>
+        <p class="brief-intro">Add only what you know. The result becomes an editable local draft and is never sent automatically.</p>
+        <label class="brief-field">
+          <span>Objective <small>required</small></span>
+          <textarea id="brief-objective" rows="2" maxlength="4000" placeholder="What should be different when the work is finished?"></textarea>
+        </label>
+        <label class="brief-field">
+          <span>Scope <small>optional</small></span>
+          <textarea id="brief-scope" rows="2" maxlength="2000" placeholder="Relevant feature, folder, screen, or behavior"></textarea>
+        </label>
+        <label class="brief-field">
+          <span>Done when <small>optional</small></span>
+          <textarea id="brief-done" rows="2" maxlength="2000" placeholder="Observable acceptance criteria or checks"></textarea>
+        </label>
+        <label class="brief-field">
+          <span>Constraints <small>optional</small></span>
+          <textarea id="brief-constraints" rows="2" maxlength="2000" placeholder="Compatibility, security, files to avoid, or other limits"></textarea>
+        </label>
+        <p class="settings-error hidden" id="brief-error" role="alert"></p>
+        <div class="brief-actions">
+          <button class="secondary-action" id="brief-clear" type="button">Clear</button>
+          <button class="primary-action" id="brief-use" type="button">Use in message</button>
+        </div>
+      </section>
+
+      <section class="run-review-panel hidden" id="run-review-panel" role="region" aria-labelledby="run-review-title" aria-hidden="true">
+        <div class="settings-heading">
+          <div>
+            <div class="section-label">RUN REVIEW</div>
+            <h2 id="run-review-title" tabindex="-1">Execution evidence</h2>
+          </div>
+          <button class="icon-button settings-close" id="run-review-close" title="Close run review" aria-label="Close run review">×</button>
+        </div>
+        <div id="run-review-content"></div>
+      </section>
+
+      <section class="settings-panel hidden" id="litellm-settings" role="region" aria-labelledby="litellm-settings-title" aria-hidden="true">
       <div class="settings-heading">
         <div>
           <div class="section-label">LITELLM GATEWAY</div>
-          <h2>Connection</h2>
+          <h2 id="litellm-settings-title" tabindex="-1">Connection</h2>
         </div>
         <button class="icon-button settings-close" id="litellm-close" title="Close settings" aria-label="Close settings">×</button>
       </div>
-      <label class="field">
-        <span>Gateway Base URL</span>
-        <input id="litellm-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/v1 or …/chat/completions" />
-      </label>
-      <div class="field">
-        <span>Models URL <small>optional</small></span>
-        <div class="input-action">
-          <input id="litellm-models-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/models" />
-          <button class="secondary-action" id="litellm-load-models">Load</button>
+      <div class="connection-readiness" id="connection-readiness" role="status" aria-live="polite" aria-atomic="true">
+        <span class="readiness-signal" id="readiness-signal" aria-hidden="true"></span>
+        <span>
+          <strong id="readiness-title">Setup required</strong>
+          <small id="readiness-detail">Add the gateway, model alias and key.</small>
+        </span>
+      </div>
+      <nav class="setup-progress" aria-label="Connection setup steps">
+        <button type="button" data-setup-step-target="1" aria-current="step"><span>1</span>Gateway</button>
+        <button type="button" data-setup-step-target="2"><span>2</span>Models</button>
+        <button type="button" data-setup-step-target="3"><span>3</span>Verify</button>
+      </nav>
+      <section class="setup-step" data-setup-step="1" aria-labelledby="setup-step-gateway-title">
+        <div class="setup-step-heading">
+          <div class="section-label">STEP 1 OF 3</div>
+          <h3 id="setup-step-gateway-title" tabindex="-1">Connect the gateway</h3>
+          <p>Use the approved HTTPS route and keep the key in VS Code Secret Storage.</p>
         </div>
-      </div>
-      <label class="field">
-        <span>Model Alias</span>
-        <input id="litellm-model" type="text" list="litellm-model-aliases" autocomplete="off" spellcheck="false" placeholder="company-coding-model" />
-        <datalist id="litellm-model-aliases"></datalist>
-      </label>
-      <label class="field">
-        <span>Compatibility profile</span>
-        <select id="litellm-model-preset">
-          <option value="auto">Auto-detect from alias</option>
-          <option value="gpt-6-chat-tools">GPT-6 Sol / Luna · Chat tools</option>
-          <option value="gpt-6-responses-tools">GPT-6 Astra / 6.1 Sol</option>
-          <option value="gpt-5.6">GPT-5.6 family</option>
-          <option value="gpt-5-reasoning">GPT-5.2–5.5 reasoning</option>
-          <option value="gpt-standard">GPT-4 / 4o standard</option>
-          <option value="claude-modern">Claude 4.7+ / Claude 5</option>
-          <option value="claude-4.6">Claude 4.6 adaptive thinking</option>
-          <option value="claude-legacy">Claude 4.5 or earlier</option>
-          <option value="custom">Custom / gateway-defined</option>
-        </select>
-      </label>
-      <label class="field">
-        <span>Reasoning effort</span>
-        <select id="litellm-reasoning-effort">
-          <option value="omit">Omit from request</option>
-          <option value="none">none · function tools compatibility</option>
-          <option value="minimal">minimal</option>
-          <option value="low">low</option>
-          <option value="medium">medium</option>
-          <option value="high">high</option>
-          <option value="xhigh">xhigh</option>
-          <option value="max">max</option>
-        </select>
-      </label>
-      <div class="field-grid">
         <label class="field">
-          <span>Temperature <small>optional</small></span>
-          <input id="litellm-temperature" type="number" step="any" inputmode="decimal" placeholder="Omit" />
+          <span>Gateway Base URL</span>
+          <input id="litellm-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/v1 or …/chat/completions" />
         </label>
         <label class="field">
-          <span>Top P <small>optional</small></span>
-          <input id="litellm-top-p" type="number" min="0" max="1" step="any" inputmode="decimal" placeholder="Omit" />
+          <span>Key Header</span>
+          <select id="litellm-auth-header">
+            <option value="authorization">Authorization: Bearer</option>
+            <option value="api-key">api-key</option>
+            <option value="ocp-apim-subscription-key">Ocp-Apim-Subscription-Key</option>
+          </select>
         </label>
+        <label class="field">
+          <span>Gateway Key <small id="litellm-key-state"></small></span>
+          <input id="litellm-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the stored key" />
+        </label>
+      </section>
+      <section class="setup-step" data-setup-step="2" aria-labelledby="setup-step-models-title" hidden>
+        <div class="setup-step-heading">
+          <div class="section-label">STEP 2 OF 3</div>
+          <h3 id="setup-step-models-title" tabindex="-1">Choose the models</h3>
+          <p>Load the optional catalog or enter the exact aliases supplied by your gateway administrator.</p>
+        </div>
+        <div class="field">
+          <label for="litellm-models-endpoint">Models URL <small>optional</small></label>
+          <div class="input-action">
+            <input id="litellm-models-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/models" />
+            <button class="secondary-action" id="litellm-load-models">Load</button>
+          </div>
+        </div>
+        <label class="field">
+          <span>Chat Model Alias</span>
+          <input id="litellm-model" type="text" list="litellm-model-aliases" autocomplete="off" spellcheck="false" placeholder="company-coding-model" />
+          <datalist id="litellm-model-aliases"></datalist>
+        </label>
+        <div class="model-compatibility hidden" id="model-compatibility" role="status" aria-live="polite" aria-atomic="true">
+          <span class="model-compatibility-signal" aria-hidden="true"></span>
+          <span class="model-compatibility-copy"><strong id="model-compatibility-title"></strong><small id="model-compatibility-detail"></small></span>
+        </div>
+        <details class="advanced-settings" id="advanced-settings">
+          <summary>Advanced model settings</summary>
+          <label class="field">
+            <span>Compatibility profile</span>
+            <select id="litellm-model-preset">
+              <option value="auto">Auto-detect from alias</option>
+              <option value="gpt-6-chat-tools">GPT-6 Sol / Luna · Chat tools</option>
+              <option value="gpt-6-responses-tools">GPT-6 Astra / 6.1 Sol</option>
+              <option value="gpt-5.6">GPT-5.6 family</option>
+              <option value="gpt-5-reasoning">GPT-5.2–5.5 reasoning</option>
+              <option value="gpt-standard">GPT-4 / 4o standard</option>
+              <option value="claude-modern">Claude 4.7+ / Claude 5</option>
+              <option value="claude-4.6">Claude 4.6 adaptive thinking</option>
+              <option value="claude-legacy">Claude 4.5 or earlier</option>
+              <option value="custom">Custom / gateway-defined</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Reasoning effort</span>
+            <select id="litellm-reasoning-effort">
+              <option value="omit">Omit from request</option>
+              <option value="none">none · function tools compatibility</option>
+              <option value="minimal">minimal</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+              <option value="max">max</option>
+            </select>
+          </label>
+          <div class="field-grid">
+            <label class="field">
+              <span>Temperature <small>optional</small></span>
+              <input id="litellm-temperature" type="number" step="any" inputmode="decimal" placeholder="Omit" />
+            </label>
+            <label class="field">
+              <span>Top P <small>optional</small></span>
+              <input id="litellm-top-p" type="number" min="0" max="1" step="any" inputmode="decimal" placeholder="Omit" />
+            </label>
+          </div>
+          <p class="settings-note" id="litellm-capabilities"></p>
+        </details>
+        <div class="section-label settings-subheading">SEMANTIC MEMORY · LOCAL CHROMADB</div>
+        <label class="toggle-field">
+          <input id="semantic-memory-enabled" type="checkbox" />
+          <span>Retrieve relevant project memory with embeddings</span>
+        </label>
+        <label class="field">
+          <span>Embedding Model <small>optional · from Models URL</small></span>
+          <select id="embedding-model">
+            <option value="">Disabled · use memory.md only</option>
+          </select>
+        </label>
+        <p class="settings-note">The same model catalog and LiteLLM base are used for chat and embeddings. Vectors and Chroma data stay on this machine.</p>
+      </section>
+      <section class="setup-step" data-setup-step="3" aria-labelledby="setup-step-verify-title" hidden>
+        <div class="setup-step-heading">
+          <div class="section-label">STEP 3 OF 3</div>
+          <h3 id="setup-step-verify-title" tabindex="-1">Verify and save</h3>
+          <p>Run a read-only check before keeping these settings.</p>
+        </div>
+        <p class="settings-note" id="litellm-details"></p>
+        <div class="connection-diagnostics hidden" id="connection-diagnostics" role="status" aria-live="polite" aria-atomic="true"></div>
+      </section>
+      <p class="settings-error hidden" id="litellm-settings-error" role="alert"></p>
+      <div class="profile-actions">
+        <button class="secondary-action" id="profile-import" type="button">Import profile</button>
+        <button class="secondary-action" id="profile-export" type="button">Export profile</button>
+        <button class="secondary-action" id="support-export" type="button">Export support</button>
+        <small>Keys and CA certificates are never included in profile files. Support bundles also omit endpoints, aliases, chats, paths, commands and filenames.</small>
       </div>
-      <p class="settings-note" id="litellm-capabilities"></p>
-      <label class="field">
-        <span>Key Header</span>
-        <select id="litellm-auth-header">
-          <option value="authorization">Authorization: Bearer</option>
-          <option value="api-key">api-key</option>
-          <option value="ocp-apim-subscription-key">Ocp-Apim-Subscription-Key</option>
-        </select>
-      </label>
-      <label class="field">
-        <span>Gateway Key <small id="litellm-key-state"></small></span>
-        <input id="litellm-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the stored key" />
-      </label>
-      <div class="section-label settings-subheading">SEMANTIC MEMORY · LOCAL CHROMADB</div>
-      <label class="toggle-field">
-        <input id="semantic-memory-enabled" type="checkbox" />
-        <span>Retrieve relevant project memory with embeddings</span>
-      </label>
-      <label class="field">
-        <span>Embedding Model <small>optional · from Models URL</small></span>
-        <select id="embedding-model">
-          <option value="">Disabled · use memory.md only</option>
-        </select>
-      </label>
-      <p class="settings-note">The same model catalog and LiteLLM base are used for chat and embeddings. Vectors and Chroma data stay on this machine.</p>
-      <p class="settings-note" id="litellm-details"></p>
-      <p class="settings-error hidden" id="litellm-settings-error"></p>
       <div class="settings-actions">
-        <button class="secondary-action" id="litellm-advanced">Setup wizard / CA</button>
-        <button class="primary-action" id="litellm-save">Save connection</button>
+        <button class="secondary-action" id="litellm-advanced">Corporate CA…</button>
+        <button class="secondary-action hidden" id="setup-back">Back</button>
+        <span class="setup-step-count" id="setup-step-count">Step 1 of 3</span>
+        <button class="primary-action" id="setup-next">Next</button>
+        <button class="secondary-action hidden" id="litellm-test">Test connection</button>
+        <button class="primary-action hidden" id="litellm-save">Save connection</button>
       </div>
-    </section>
+      </section>
+      <section class="setup-callout hidden" id="setup-callout" role="region" aria-labelledby="setup-callout-title">
+        <span class="setup-callout-signal" aria-hidden="true"></span>
+        <span class="setup-callout-copy">
+          <strong id="setup-callout-title">Connect your LiteLLM gateway</strong>
+          <small>Add the approved base URL, chat model alias and key before starting.</small>
+        </span>
+        <button type="button" id="setup-callout-action">Set up</button>
+      </section>
+    </div>
 
-    <section class="timeline" id="timeline" aria-live="polite">
+    <section class="timeline" id="timeline" aria-label="Conversation">
       <div class="welcome" id="welcome">
         <div class="monogram">C</div>
-        <h2>Work with the codebase,<br/>not around it.</h2>
-        <p>I can inspect files, reason across the project, make scoped changes, run checks, and remember durable decisions.</p>
-        <div class="starters">
-          <button data-prompt="Mapeie a arquitetura deste projeto e identifique os principais fluxos.">Map architecture</button>
-          <button data-prompt="Analise os diagnósticos atuais e proponha a correção mais segura.">Fix diagnostics</button>
-          <button data-prompt="Revise as mudanças atuais, encontre riscos e sugira melhorias.">Review changes</button>
+        <h2>What would you like<br/>to accomplish?</h2>
+        <p>Choose a starting point or write your own request. Suggested tasks only prepare an editable draft.</p>
+        <div class="starters" aria-label="Suggested development tasks">
+          <button type="button" data-prompt="Explain this project in plain language. Inspect the repository structure and the most relevant documentation, then describe what it does, its main parts, how they connect, and the safest place to start. Do not change files.">
+            <span><strong>Understand this project</strong><small>Map the architecture in plain language</small></span><span class="starter-arrow" aria-hidden="true">→</span>
+          </button>
+          <button type="button" data-prompt="Investigate the current editor diagnostics and failing checks. Explain the likely cause, then propose the smallest safe correction and the checks that would prove it works.">
+            <span><strong>Fix a problem</strong><small>Investigate diagnostics and failing checks</small></span><span class="starter-arrow" aria-hidden="true">→</span>
+          </button>
+          <button type="button" data-prompt="I want to implement this change: [describe the expected behavior]. Start by identifying any missing acceptance criteria, inspect the relevant code, and present a short plan before editing.">
+            <span><strong>Implement a change</strong><small>Turn expected behavior into a safe plan</small></span><span class="starter-arrow" aria-hidden="true">→</span>
+          </button>
+          <button type="button" data-prompt="Review the current workspace changes for correctness, security, regressions, and missing tests. Do not modify files. Report findings by severity with precise file references.">
+            <span><strong>Review current changes</strong><small>Find risks before committing</small></span><span class="starter-arrow" aria-hidden="true">→</span>
+          </button>
         </div>
+        <small class="starter-note">Nothing runs until you review the draft and press Send.</small>
       </div>
     </section>
 
     <section class="activity-dock" id="activity-dock">
-      <button class="presence" id="activity-toggle" type="button" aria-expanded="false" aria-controls="plan-panel" title="Expand current plan">
-        <span class="signal" id="signal"></span>
-        <span id="status" aria-live="polite">Ready</span>
+      <button class="presence" id="activity-toggle" type="button" aria-expanded="false" aria-controls="plan-panel" aria-disabled="true" title="Agent activity">
+        <span class="signal" id="signal" aria-hidden="true"></span>
+        <span id="status" role="status" aria-live="polite" aria-atomic="true">Ready</span>
         <span class="workspace" id="workspace"></span>
         <span class="activity-chevron" aria-hidden="true">⌃</span>
       </button>
-      <div class="plan" id="plan-panel">
-        <div class="section-label">CURRENT PLAN</div>
+      <div class="plan" id="plan-panel" role="region" aria-labelledby="plan-title" aria-hidden="true">
+        <div class="section-label" id="plan-title">CURRENT PLAN</div>
         <ol id="plan-items"></ol>
       </div>
     </section>
 
     <footer class="composer-wrap">
+      <div class="context-inspector hidden" id="context-inspector" role="region" aria-labelledby="context-inspector-title" aria-hidden="true">
+        <div class="context-inspector-heading">
+          <span class="section-label" id="context-inspector-title">MESSAGE CONTEXT</span>
+          <button class="context-clear" id="context-clear" type="button">Clear pinned</button>
+        </div>
+        <div class="context-budget-card">
+          <div class="context-budget-copy">
+            <strong id="context-budget-label">Calculating context…</strong>
+            <small id="context-budget-detail">Only local estimates are shown.</small>
+          </div>
+          <div class="context-budget-track" id="context-budget-track" role="progressbar" aria-label="Workspace context budget" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <span id="context-budget-fill"></span>
+          </div>
+          <small id="prompt-token-estimate">Prompt · ~0 tokens</small>
+        </div>
+        <div class="context-entry" id="context-active-entry"></div>
+        <div class="context-entry" id="context-guidance-entry"></div>
+        <div class="pinned-context" id="pinned-context"></div>
+        <div class="context-entry" id="context-memory-entry"></div>
+        <p>Estimates use four characters per token. The provider reports exact usage after the run.</p>
+      </div>
       <div class="context-row">
-        <span class="context-chip" id="active-file">No active file</span>
-        <span class="utility-links"><button class="memory-link" id="litellm">LiteLLM</button><button class="memory-link" id="memory">Memory</button></span>
+        <span class="context-actions">
+          <button class="context-chip" id="context-toggle" type="button" aria-expanded="false" aria-controls="context-inspector">
+            <span id="active-file">No active file</span>
+            <span class="context-budget-chip" id="context-budget-chip"></span>
+            <span class="context-count hidden" id="context-count"></span>
+          </button>
+          <button class="context-add" id="context-add-file" type="button" title="Add a workspace file to message context" aria-label="Add a workspace file to message context">＋ File</button>
+        </span>
+        <span class="utility-links"><button class="memory-link" id="brief" type="button" aria-expanded="false" aria-controls="brief-panel">Brief</button><button class="memory-link" id="litellm" type="button" aria-expanded="false" aria-controls="litellm-settings">LiteLLM</button><button class="memory-link" id="memory" type="button" aria-expanded="false" aria-controls="memory-panel">Memory</button></span>
       </div>
       <div class="composer">
-        <textarea id="prompt" rows="3" placeholder="Ask about the code, request a change, or explore an idea…"></textarea>
+        <textarea id="prompt" rows="3" aria-label="Message to the development agent" aria-describedby="composer-hint" placeholder="Ask about the code, request a change, or explore an idea…"></textarea>
         <div class="composer-actions">
-          <select id="runtime" aria-label="Agent runtime" title="Choose the agent runtime">
-            <option value="standard">LangChain Agent</option>
-            <option value="deep">Deep Agent</option>
-          </select>
-          <select id="mode" aria-label="Agent mode">
-            <option value="execute">Execute</option>
-            <option value="plan">Plan only</option>
-          </select>
-          <button class="cancel hidden" id="cancel">Cancel</button>
-          <button class="send" id="send" aria-label="Send">↑</button>
+          <details class="run-controls" id="run-controls">
+            <summary aria-label="Configure how this request runs"><span id="run-controls-label">Ask first · Standard</span></summary>
+            <div class="run-controls-panel" role="group" aria-label="Run setup">
+              <div class="run-controls-heading"><strong>Run setup</strong><small>Saved for this workspace</small></div>
+              <label class="run-control-field" for="runtime">
+                <span>Agent</span>
+                <select id="runtime" aria-describedby="runtime-help">
+                  <option value="standard">Standard</option>
+                  <option value="deep">Deep Agent</option>
+                </select>
+                <small id="runtime-help">Predictable for most development work.</small>
+              </label>
+              <label class="run-control-field" for="mode">
+                <span>Changes</span>
+                <select id="mode" aria-describedby="mode-help">
+                  <option value="review">Ask first</option>
+                  <option value="execute">Auto edits</option>
+                  <option value="plan">Plan only</option>
+                </select>
+                <small id="mode-help">Confirm every workspace change and command.</small>
+              </label>
+            </div>
+          </details>
+          <button class="cancel hidden" id="cancel" type="button">Cancel run</button>
+          <button class="send" id="send" type="button" aria-label="Send message">↑</button>
         </div>
       </div>
-      <div class="hint">Enter to send · Shift+Enter for newline</div>
+      <div class="hint" id="composer-hint">Enter to send · Shift+Enter for newline</div>
     </footer>
+    <div class="sr-only" id="announcer" role="status" aria-live="polite" aria-atomic="true"></div>
   </main>
   <script nonce="${nonce}">${script}</script>
 </body>
@@ -539,6 +1859,7 @@ button, textarea, select { font: inherit; }
 button { color: inherit; }
 .shell { height: 100vh; min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
 .topbar { display: flex; align-items: flex-start; justify-content: space-between; padding: 20px 18px 13px; border-bottom: 1px solid var(--line); }
+.topbar-actions { display: flex; align-items: center; gap: 2px; }
 .eyebrow, .section-label { color: var(--muted); font: 600 9px/1.2 var(--vscode-editor-font-family); letter-spacing: .16em; }
 h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; }
 .icon-button { border: 0; background: transparent; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 18px; opacity: .7; transition: opacity .15s, background .15s; }
@@ -562,17 +1883,113 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .plan li::before { content: ''; position: absolute; left: 0; top: .45em; width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
 .plan li.done { color: var(--vscode-foreground); text-decoration: line-through; opacity: .66; }
 .plan li.done::before { background: var(--accent); border-color: var(--accent); }
+.top-drawers { min-height: 0; }
+.top-drawers.panel-open > .setup-callout { display: none; }
+.setup-callout { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); }
+.setup-callout-signal { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.setup-callout-copy { display: grid; min-width: 0; gap: 1px; }
+.setup-callout-copy strong { font-size: 10px; font-weight: 650; }
+.setup-callout-copy small { color: var(--muted); font-size: 9px; line-height: 1.35; }
+.setup-callout button { border: 0; border-radius: 4px; padding: 5px 7px; color: #111; background: var(--accent); cursor: pointer; font-size: 9px; font-weight: 650; }
+.thread-panel { max-height: 48vh; overflow-y: auto; padding: 14px 18px 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); animation: reveal .16s ease-out; }
+.thread-search { display: block; margin: 1px 0 9px; }
+.thread-search input { width: 100%; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); font-size: 10px; }
+.thread-search input::placeholder { color: var(--vscode-input-placeholderForeground); }
+.thread-list { display: grid; border-top: 1px solid var(--line); }
+.thread-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-bottom: 1px solid var(--line); }
+.thread-select { min-width: 0; padding: 9px 4px 9px 0; border: 0; color: var(--muted); background: transparent; cursor: pointer; text-align: left; }
+.thread-select strong, .thread-select small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-select strong { color: var(--vscode-foreground); font-size: 11px; font-weight: 500; }
+.thread-select small { margin-top: 2px; font-size: 9px; }
+.thread-item.active .thread-select { box-shadow: inset 2px 0 0 var(--accent); padding-left: 8px; }
+.thread-actions { display: flex; align-items: center; opacity: .45; }
+.thread-item:hover .thread-actions, .thread-item:focus-within .thread-actions, .thread-item.active .thread-actions { opacity: 1; }
+.thread-actions button { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; cursor: pointer; font-size: 12px; }
+.thread-actions button:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.thread-actions button.pinned { color: var(--accent); opacity: 1; }
+.thread-empty { padding: 18px 4px; border-bottom: 1px solid var(--line); color: var(--muted); text-align: center; font-size: 10px; }
+.thread-note { margin: 9px 0 0; color: var(--muted); font-size: 9px; }
+.memory-panel { max-height: 68vh; overflow-y: auto; padding: 14px 18px 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); animation: reveal .16s ease-out; }
+.memory-overview { margin: 1px 0 9px; padding: 8px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 9px; }
+.memory-list { display: grid; }
+.memory-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.memory-item-copy { min-width: 0; }
+.memory-item-copy p { margin: 0; color: var(--vscode-foreground); font-size: 10px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-item-copy small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
+.memory-item-actions { display: flex; align-items: flex-start; gap: 2px; }
+.memory-item-actions button { border: 0; border-radius: 4px; padding: 3px 5px; color: var(--muted); background: transparent; cursor: pointer; font-size: 9px; }
+.memory-item-actions button:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.memory-empty { padding: 16px 0; color: var(--muted); text-align: center; font-size: 10px; }
+.memory-actions { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.memory-actions button { font-size: 9px; }
+.brief-panel { max-height: 72vh; overflow-y: auto; padding: 14px 18px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); animation: reveal .16s ease-out; }
+.brief-intro { margin: 0 0 9px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.brief-field { display: grid; gap: 4px; margin-top: 9px; color: var(--vscode-foreground); font-size: 10px; }
+.brief-field > span { font-weight: 600; }
+.brief-field small { color: var(--muted); font-weight: 400; }
+.brief-field textarea { min-height: 42px; max-height: 110px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 4px; outline: 0; background: var(--vscode-input-background); font: 10px/1.4 var(--vscode-font-family); }
+.brief-field textarea:focus { border-color: color-mix(in srgb, var(--accent) 62%, transparent); }
+.brief-actions { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+.run-review-panel { max-height: 68vh; overflow-y: auto; padding: 14px 18px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); animation: reveal .18s ease-out; }
+.run-review-overview { display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: start; gap: 9px; padding: 9px 0 11px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.run-review-signal { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: #6ddc72; }
+.run-review-overview.failed .run-review-signal { background: var(--vscode-errorForeground); }
+.run-review-overview.cancelled .run-review-signal { background: var(--vscode-disabledForeground); }
+.run-review-copy { display: grid; min-width: 0; gap: 2px; }
+.run-review-copy strong { font-size: 11px; font-weight: 650; }
+.run-review-copy small, .run-review-stats { color: var(--muted); font-size: 9px; }
+.run-review-stats { margin-top: 2px; font-family: var(--vscode-editor-font-family); }
+.run-review-section { padding: 11px 0 3px; border-bottom: 1px solid var(--line); }
+.run-review-section:last-child { border-bottom: 0; }
+.run-review-section > .section-label { margin-bottom: 5px; }
+.run-review-list { list-style: none; margin: 0; padding: 0; }
+.run-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 5px 0; color: var(--muted); font-size: 9px; }
+.run-review-row + .run-review-row { border-top: 1px solid color-mix(in srgb, var(--line) 62%, transparent); }
+.run-review-row-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--vscode-editor-font-family); }
+.run-review-row-copy strong { color: var(--vscode-foreground); font: 650 8px var(--vscode-font-family); letter-spacing: .07em; }
+.run-review-row.done { color: var(--vscode-foreground); opacity: .65; }
+.run-review-row.failed { color: var(--vscode-errorForeground); }
+.run-review-output { grid-column: 1 / -1; width: 100%; }
+.run-review-output summary { cursor: pointer; color: var(--muted); font-size: 9px; }
+.run-review-output pre { max-height: 180px; overflow: auto; margin: 5px 0 0; padding: 7px; background: var(--vscode-textCodeBlock-background); white-space: pre-wrap; font: 9px/1.45 var(--vscode-editor-font-family); }
+.run-review-actions { display: flex; align-items: center; gap: 5px; }
+.run-review-actions button, .run-review-footer button { border: 0; border-radius: 4px; padding: 3px 5px; color: var(--muted); background: var(--vscode-button-secondaryBackground); cursor: pointer; font-size: 8px; }
+.run-review-actions button:hover, .run-review-footer button:hover { color: var(--vscode-foreground); }
+.run-review-actions button:disabled, .run-review-footer button:disabled { cursor: default; opacity: .55; }
+.run-review-footer { display: flex; justify-content: flex-end; gap: 6px; padding-top: 10px; }
+.run-review-footer .undo-run { margin-right: auto; color: var(--vscode-errorForeground); }
 .settings-panel { max-height: 68vh; overflow-y: auto; padding: 14px 18px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--accent)); animation: reveal .2s ease-out; }
 .settings-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
 .settings-heading h2 { margin: 3px 0 0; font-size: 16px; line-height: 1.1; letter-spacing: -.025em; }
 .settings-close { margin-top: -5px; }
+.connection-readiness { display: grid; grid-template-columns: 9px minmax(0, 1fr); align-items: start; gap: 9px; padding: 10px 0 11px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.connection-readiness > span:last-child { display: grid; gap: 1px; min-width: 0; }
+.connection-readiness strong { font-size: 11px; font-weight: 650; }
+.connection-readiness small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.readiness-signal { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--vscode-disabledForeground); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-disabledForeground) 12%, transparent); }
+.connection-readiness.configured .readiness-signal { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.connection-readiness.verified .readiness-signal { background: #6ddc72; box-shadow: 0 0 0 3px color-mix(in srgb, #6ddc72 16%, transparent); }
+.connection-readiness.failed .readiness-signal { background: var(--vscode-errorForeground); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); }
+.setup-progress { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin: 11px 0 13px; }
+.setup-progress button { display: flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; padding: 5px 3px; border: 0; border-bottom: 1px solid var(--line); color: var(--muted); background: transparent; cursor: pointer; font-size: 9px; }
+.setup-progress button span { display: grid; place-items: center; width: 15px; height: 15px; border: 1px solid currentColor; border-radius: 50%; font: 600 8px var(--vscode-editor-font-family); }
+.setup-progress button[aria-current="step"] { border-bottom-color: var(--accent); color: var(--vscode-foreground); }
+.setup-progress button[aria-current="step"] span { border-color: var(--accent); background: var(--accent); color: #111; }
+.setup-progress button.complete span { border-color: var(--accent); color: var(--accent); }
+.setup-step-heading { margin-bottom: 9px; }
+.setup-step-heading h3 { margin: 3px 0 2px; font-size: 13px; line-height: 1.2; }
+.setup-step-heading p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.setup-step[hidden] { display: none !important; }
 .field { display: grid; gap: 4px; margin-top: 9px; color: var(--muted); font-size: 10px; }
-.field span, .local-setting > div > span { font-weight: 600; letter-spacing: .02em; }
+.field span, .field > label, .local-setting > div > span { font-weight: 600; letter-spacing: .02em; }
 .field small, .local-setting small { font-weight: 400; opacity: .75; }
 .field input, .field select { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 4px; outline: 0; color: var(--vscode-input-foreground); background: var(--vscode-input-background); font: 11px/1.3 var(--vscode-editor-font-family); }
 .field input:focus, .field select:focus { border-color: color-mix(in srgb, var(--accent) 62%, transparent); }
 .input-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .field-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.advanced-settings { margin-top: 13px; padding-top: 10px; border-top: 1px solid var(--line); }
+.advanced-settings summary { color: var(--muted); cursor: pointer; font-size: 10px; font-weight: 600; list-style-position: outside; }
+.advanced-settings[open] summary { color: var(--vscode-foreground); }
 .settings-subheading { margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--line); }
 .toggle-field { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: var(--vscode-foreground); font-size: 11px; }
 .toggle-field input { accent-color: var(--accent); }
@@ -583,55 +2000,196 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .inline-actions button, .secondary-action, .primary-action { border: 0; border-radius: 4px; padding: 5px 7px; cursor: pointer; font-size: 10px; }
 .inline-actions button, .secondary-action { color: var(--muted); background: var(--vscode-button-secondaryBackground); }
 .primary-action { margin-left: auto; color: #111; background: var(--accent); font-weight: 650; }
+.settings-actions .primary-action { margin-left: 0; }
+.setup-step-count { margin-left: auto; color: var(--muted); font-size: 9px; white-space: nowrap; }
 .settings-note { min-height: 1.4em; margin: 8px 0 0; color: var(--muted); font-size: 10px; }
 .settings-error { margin: 8px 0 0; color: var(--vscode-errorForeground); font-size: 10px; white-space: pre-wrap; }
-.settings-actions { margin-top: 12px; }
+.connection-diagnostics { display: grid; margin-top: 10px; border-top: 1px solid var(--line); }
+.diagnostic { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 7px; align-items: start; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.diagnostic-dot { width: 6px; height: 6px; margin-top: 5px; border-radius: 50%; background: var(--vscode-disabledForeground); }
+.diagnostic.passed .diagnostic-dot { background: #6ddc72; }
+.diagnostic.failed .diagnostic-dot { background: var(--vscode-errorForeground); }
+.diagnostic-copy { display: grid; min-width: 0; }
+.diagnostic-copy strong { font-size: 10px; font-weight: 600; }
+.diagnostic-copy small { color: var(--muted); font-size: 9px; white-space: normal; }
+.diagnostic-fixes { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.diagnostic-fixes button { border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 4px; padding: 4px 6px; color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 88%, var(--accent)); cursor: pointer; font-size: 9px; text-align: left; }
+.diagnostic-fixes button:hover { border-color: var(--accent); }
+.diagnostic-time { color: var(--muted); font: 9px var(--vscode-editor-font-family); }
+.settings-actions { flex-wrap: wrap; margin-top: 12px; }
+.profile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--line); }
+.profile-actions small { flex-basis: 100%; color: var(--muted); font-size: 9px; }
+.model-compatibility { display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: start; gap: 8px; margin: -2px 0 10px; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--vscode-sideBar-background) 94%, var(--accent)); }
+.model-compatibility-signal { width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: var(--accent); }
+.model-compatibility.ready .model-compatibility-signal { background: #6ddc72; }
+.model-compatibility.warning .model-compatibility-signal { background: var(--vscode-editorWarning-foreground); }
+.model-compatibility.failed .model-compatibility-signal { background: var(--vscode-errorForeground); }
+.model-compatibility-copy { display: grid; min-width: 0; gap: 2px; }
+.model-compatibility-copy strong { font-size: 10px; font-weight: 600; }
+.model-compatibility-copy small { color: var(--muted); font-size: 9px; line-height: 1.4; }
 .timeline { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 18px 20px; }
 .welcome { padding: 48px 0 24px; animation: reveal .35s ease-out; }
 .monogram { display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 24px; border-radius: 10px; background: var(--accent); color: #111; font-weight: 800; font-size: 18px; transform: rotate(-3deg); }
 .welcome h2 { margin: 0; font-size: 22px; line-height: 1.12; letter-spacing: -.035em; }
 .welcome p { max-width: 310px; margin: 13px 0 23px; color: var(--muted); }
 .starters { display: grid; border-top: 1px solid var(--line); }
-.starters button { text-align: left; padding: 11px 2px; border: 0; border-bottom: 1px solid var(--line); background: transparent; cursor: pointer; transition: padding-left .15s, color .15s; }
+.starters button { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 11px 2px; border: 0; border-bottom: 1px solid var(--line); color: var(--vscode-foreground); background: transparent; cursor: pointer; text-align: left; transition: padding-left .15s, color .15s; }
 .starters button:hover { padding-left: 6px; color: var(--accent); }
+.starters button span:first-child { display: grid; gap: 3px; min-width: 0; }
+.starters button strong { font-size: 11px; font-weight: 600; }
+.starters button small, .starter-note { color: var(--muted); font-size: 9px; }
+.starter-arrow { color: var(--muted); transition: transform .15s, color .15s; }
+.starters button:hover .starter-arrow { color: var(--accent); transform: translateX(2px); }
+.starter-note { display: block; margin-top: 11px; }
 .message { padding: 18px 0; border-bottom: 1px solid var(--line); animation: reveal .2s ease-out; }
 .message-role { margin-bottom: 7px; color: var(--muted); font: 600 9px/1 var(--vscode-editor-font-family); letter-spacing: .14em; }
 .message.user .message-body { font-size: 14px; }
 .message.assistant .message-body { line-height: 1.62; }
+.message-body p { margin: 0 0 9px; }
+.message-body p:last-child { margin-bottom: 0; }
+.message-body h3, .message-body h4, .message-body h5 { margin: 14px 0 7px; line-height: 1.3; }
+.message-body h3:first-child, .message-body h4:first-child, .message-body h5:first-child { margin-top: 0; }
+.message-body ul, .message-body ol { margin: 7px 0; padding-left: 21px; }
+.message-body li { margin: 3px 0; }
+.message-body blockquote { margin: 8px 0; padding-left: 10px; border-left: 2px solid var(--line); color: var(--muted); }
 .message-body pre { overflow-x: auto; padding: 11px; background: var(--vscode-textCodeBlock-background); border-left: 2px solid var(--accent); font: 11px/1.55 var(--vscode-editor-font-family); }
 .message-body code { font-family: var(--vscode-editor-font-family); color: var(--vscode-textPreformat-foreground); }
-.activity { padding: 8px 0; color: var(--muted); font: 10px/1.45 var(--vscode-editor-font-family); border-bottom: 1px dotted var(--line); }
-.activity strong { color: var(--vscode-foreground); font-weight: 500; }
-.activity details pre { white-space: pre-wrap; max-height: 160px; overflow: auto; }
+.message-actions { display: flex; align-items: center; gap: 3px; margin-top: 8px; }
+.message-actions button { border: 0; border-radius: 4px; padding: 3px 6px; color: var(--muted); background: transparent; cursor: pointer; font-size: 9px; }
+.message-actions button:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.message-actions button:disabled { cursor: default; opacity: .5; }
+.history-fold { padding: 9px 0; border-bottom: 1px solid var(--line); text-align: center; }
+.history-fold button { border: 0; border-radius: 5px; padding: 5px 8px; color: var(--muted); background: transparent; cursor: pointer; font-size: 9px; }
+.history-fold button:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.live-run { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); animation: reveal .16s ease-out; }
+.live-run-heading { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto 12px; align-items: center; gap: 9px; width: 100%; padding: 11px 2px; border: 0; color: var(--vscode-foreground); background: transparent; cursor: pointer; text-align: left; }
+.live-run-heading:hover { background: color-mix(in srgb, var(--vscode-toolbar-hoverBackground) 48%, transparent); }
+.live-run-heading:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.live-run-signal { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); animation: pulse 1.2s infinite; }
+.live-run.failed .live-run-signal { background: var(--vscode-errorForeground); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); animation: none; }
+.live-run-copy { display: grid; min-width: 0; gap: 1px; }
+.live-run-copy strong, .live-run-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-run-copy strong { font-size: 11px; font-weight: 650; }
+.live-run-copy small { color: var(--muted); font: 9px/1.4 var(--vscode-editor-font-family); }
+.live-run-time { color: var(--muted); font: 9px var(--vscode-editor-font-family); }
+.live-run-chevron { color: var(--muted); opacity: .7; transition: transform .16s; }
+.live-run.expanded .live-run-chevron { transform: rotate(180deg); }
+.live-run-details { display: none; padding: 0 2px 10px 19px; }
+.live-run.expanded .live-run-details { display: block; }
+.live-run-stats { padding: 0 0 7px; color: var(--muted); font-size: 9px; }
+.live-run-events { list-style: none; margin: 0; padding: 0; border-top: 1px solid color-mix(in srgb, var(--line) 62%, transparent); }
+.live-run-events li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px; padding: 6px 0; color: var(--muted); font: 9px/1.4 var(--vscode-editor-font-family); border-bottom: 1px solid color-mix(in srgb, var(--line) 62%, transparent); }
+.live-run-kind { color: var(--vscode-foreground); font: 650 8px/1.55 var(--vscode-font-family); letter-spacing: .07em; }
+.live-run-event-copy { min-width: 0; overflow-wrap: anywhere; }
+.live-run-events details { grid-column: 1 / -1; }
+.live-run-events summary { cursor: pointer; }
+.live-run-events pre { max-height: 160px; overflow: auto; margin: 5px 0 0; padding: 7px; background: var(--vscode-textCodeBlock-background); white-space: pre-wrap; }
+.live-run-empty { margin: 0; color: var(--muted); font-size: 9px; }
+.run-summary { padding: 13px 0; border-bottom: 1px solid var(--line); animation: reveal .2s ease-out; }
+.run-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.run-summary-heading strong { font-size: 11px; font-weight: 650; }
+.run-summary-heading button { border: 0; border-radius: 4px; padding: 4px 6px; color: var(--muted); background: var(--vscode-button-secondaryBackground); cursor: pointer; font-size: 9px; }
+.run-summary-stats { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.run-summary details { margin-top: 7px; color: var(--muted); font-size: 9px; }
+.run-summary ul { margin: 6px 0 0; padding-left: 17px; }
+.run-summary li { margin-top: 3px; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); }
+.run-change { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 5px 0; }
+.run-change-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-change-copy strong { color: var(--vscode-foreground); font-size: 8px; font-weight: 650; letter-spacing: .08em; }
+.run-change-actions { display: flex; gap: 4px; }
+.run-change-actions button { border: 0; border-radius: 4px; padding: 3px 5px; color: var(--muted); background: var(--vscode-button-secondaryBackground); cursor: pointer; font-size: 8px; }
+.run-change-actions button:hover { color: var(--vscode-foreground); }
+.run-change-actions button:disabled { cursor: default; opacity: .55; }
+.review-note { margin-top: 7px; color: var(--muted); font-size: 9px; }
+.run-summary.failed { border-left: 2px solid var(--vscode-errorForeground); padding-left: 10px; }
 .error { margin: 12px 0; padding: 10px 0 10px 12px; border-left: 2px solid var(--vscode-errorForeground); color: var(--vscode-errorForeground); white-space: pre-wrap; }
+.recovery { margin: 10px 0; padding: 10px 0 10px 12px; border-left: 2px solid var(--accent); color: var(--muted); }
+.error .recovery-copy, .recovery-copy { color: inherit; white-space: pre-wrap; }
+.recovery-actions { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
+.recovery-actions button { border: 0; border-radius: 4px; padding: 5px 7px; color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground); cursor: pointer; font-size: 10px; }
+.recovery-actions button:first-child { color: #111; background: var(--accent); font-weight: 650; }
+.recovery-actions button:disabled { cursor: default; opacity: .45; }
 .composer-wrap { padding: 5px 12px 12px; background: var(--vscode-sideBar-background); }
 .context-row { display: flex; align-items: center; justify-content: space-between; min-height: 25px; padding: 0 5px; }
-.context-chip { max-width: 70%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font: 10px var(--vscode-editor-font-family); }
+.context-actions { display: flex; min-width: 0; max-width: 74%; align-items: center; gap: 7px; }
+.context-chip { display: flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; padding: 3px 0; border: 0; color: var(--muted); background: transparent; cursor: pointer; font: 10px var(--vscode-editor-font-family); }
+.context-chip > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.context-chip:hover, .context-chip[aria-expanded="true"] { color: var(--vscode-foreground); }
+.context-add { flex: none; padding: 2px 4px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; cursor: pointer; font-size: 9px; }
+.context-add:hover { color: var(--accent); background: var(--vscode-toolbar-hoverBackground); }
+.context-add:disabled { cursor: default; opacity: .4; }
+.context-count { flex: none; min-width: 16px; padding: 0 4px; border-radius: 8px; color: #111; background: var(--accent); text-align: center; font: 600 9px/16px var(--vscode-font-family); }
+.context-inspector { max-height: min(34vh, 260px); overflow-y: auto; margin: 0 -12px 3px; padding: 10px 17px 9px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--vscode-sideBar-background) 94%, var(--accent)); animation: reveal .14s ease-out; }
+.context-inspector-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.context-clear { border: 0; color: var(--muted); background: transparent; cursor: pointer; font-size: 9px; }
+.context-clear:hover { color: var(--vscode-foreground); }
+.context-clear:disabled { cursor: default; opacity: .4; }
+.context-budget-card { display: grid; gap: 5px; margin-bottom: 4px; padding: 7px 0 8px; border-bottom: 1px solid var(--line); }
+.context-budget-copy { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.context-budget-copy strong { font-size: 10px; font-weight: 600; }
+.context-budget-copy small, #prompt-token-estimate { color: var(--muted); font-size: 9px; }
+.context-budget-track { height: 3px; overflow: hidden; border-radius: 2px; background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); }
+.context-budget-track > span { display: block; width: 0; height: 100%; background: var(--accent); transition: width .15s ease-out; }
+.context-budget-chip { flex: none; color: var(--muted); font-size: 9px; }
+.context-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.context-entry-copy { display: grid; min-width: 0; }
+.context-entry-copy strong { overflow: hidden; font: 500 10px var(--vscode-editor-font-family); text-overflow: ellipsis; white-space: nowrap; }
+.context-entry-copy small { color: var(--muted); font-size: 9px; }
+.context-source-list { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.context-source-list summary { cursor: pointer; }
+.context-source-list ul { display: grid; gap: 2px; margin: 4px 0 0; padding-left: 16px; }
+.context-source-list li { overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family); }
+.context-entry button { display: grid; place-items: center; width: 20px; height: 20px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; cursor: pointer; }
+.context-entry button:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.context-inspector > p { margin: 8px 0 0; color: var(--muted); font-size: 9px; }
 .memory-link { border: 0; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
 .memory-link:hover { color: var(--accent); }
 .utility-links { display: flex; align-items: center; gap: 2px; }
 .composer { border: 1px solid color-mix(in srgb, var(--vscode-foreground) 22%, transparent); border-radius: 9px; background: var(--vscode-input-background); box-shadow: 0 10px 30px color-mix(in srgb, #000 18%, transparent); transition: border-color .15s, transform .15s; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 62%, transparent); transform: translateY(-1px); }
-textarea { display: block; width: 100%; resize: none; padding: 11px 12px 2px; color: var(--vscode-input-foreground); background: transparent; border: 0; outline: 0; }
+textarea { display: block; width: 100%; min-height: 58px; max-height: 180px; resize: none; overflow-y: auto; padding: 11px 12px 2px; color: var(--vscode-input-foreground); background: transparent; border: 0; outline: 0; }
 .composer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; padding: 5px 7px 7px; }
-select, .cancel { border: 0; border-radius: 5px; color: var(--muted); background: transparent; padding: 4px 6px; font-size: 10px; }
+.run-controls { position: relative; margin-right: auto; }
+.run-controls > summary { max-width: 170px; overflow: hidden; border: 0; border-radius: 5px; padding: 4px 6px; color: var(--muted); cursor: pointer; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; list-style: none; }
+.run-controls > summary::-webkit-details-marker { display: none; }
+.run-controls > summary::after { content: '⌃'; margin-left: 5px; font-size: 8px; }
+.run-controls[open] > summary { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.run-controls[open] > summary::after { content: '⌄'; }
+.run-controls.locked > summary { pointer-events: none; opacity: .5; }
+.run-controls-panel { position: absolute; z-index: 8; bottom: calc(100% + 7px); left: -1px; display: grid; gap: 9px; width: min(270px, calc(100vw - 30px)); padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)); box-shadow: 0 10px 28px color-mix(in srgb, #000 28%, transparent); }
+.run-controls-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding-bottom: 7px; border-bottom: 1px solid var(--line); }
+.run-controls-heading strong { font-size: 11px; }
+.run-controls-heading small, .run-control-field small { color: var(--muted); font-size: 9px; }
+.run-control-field { display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 3px 7px; color: var(--vscode-foreground); font-size: 10px; }
+.run-control-field > span { font-weight: 600; }
+.run-control-field select { min-width: 0; padding: 5px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--vscode-input-foreground); background: var(--vscode-dropdown-background); font-size: 10px; }
+.run-control-field small { grid-column: 2; line-height: 1.35; }
+.cancel { border: 0; border-radius: 5px; color: var(--muted); background: transparent; padding: 4px 6px; font-size: 10px; }
 .cancel { cursor: pointer; }
+.cancel:disabled { cursor: progress; opacity: .62; }
 .send { display: grid; place-items: center; width: 27px; height: 27px; border: 0; border-radius: 7px; background: var(--accent); color: #111; cursor: pointer; font-size: 17px; font-weight: 700; transition: transform .12s, opacity .12s; }
 .send:hover { transform: translateY(-1px); }
 .send:disabled { opacity: .35; cursor: default; transform: none; }
 .hint { padding: 5px 5px 0; color: var(--muted); text-align: center; font-size: 9px; }
+.sr-only { position: fixed; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+[tabindex="-1"]:focus { outline: none; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, [tabindex="0"]:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 .hidden { display: none !important; }
 @keyframes pulse { 0%,100% { opacity: .55; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); } 50% { opacity: 1; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 5%, transparent); } }
 @keyframes reveal { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+@media (forced-colors: active) { .signal, .readiness-signal, .model-compatibility-signal, .live-run-signal, .run-review-signal { border: 1px solid currentColor; } }
 `;
 
 const script = String.raw`
 const vscode = acquireVsCodeApi();
+const restoredWebviewState = vscode.getState() || {};
 const modelCapabilityCatalog = ${JSON.stringify(LITELLM_MODEL_CAPABILITIES)};
 const timeline = document.getElementById('timeline');
+const topDrawers = document.getElementById('top-drawers');
 const welcomeMarkup = timeline.innerHTML;
 const prompt = document.getElementById('prompt');
+const composerHint = document.getElementById('composer-hint');
 const send = document.getElementById('send');
 const cancel = document.getElementById('cancel');
 const status = document.getElementById('status');
@@ -639,11 +2197,34 @@ const signal = document.getElementById('signal');
 const activityDock = document.getElementById('activity-dock');
 const activityToggle = document.getElementById('activity-toggle');
 const planItems = document.getElementById('plan-items');
+const threadPanel = document.getElementById('thread-panel');
+const threadsToggle = document.getElementById('threads-toggle');
+const threadList = document.getElementById('thread-list');
+const threadSearch = document.getElementById('thread-search');
+const memoryPanel = document.getElementById('memory-panel');
+const memoryToggle = document.getElementById('memory');
+const memoryPanelTitle = document.getElementById('memory-panel-title');
+const memoryOverview = document.getElementById('memory-overview');
+const memoryList = document.getElementById('memory-list');
+const briefPanel = document.getElementById('brief-panel');
+const briefToggle = document.getElementById('brief');
+const briefObjective = document.getElementById('brief-objective');
+const briefScope = document.getElementById('brief-scope');
+const briefDone = document.getElementById('brief-done');
+const briefConstraints = document.getElementById('brief-constraints');
+const briefError = document.getElementById('brief-error');
+const runReviewPanel = document.getElementById('run-review-panel');
+const runReviewTitle = document.getElementById('run-review-title');
+const runReviewContent = document.getElementById('run-review-content');
 const liteLlmSettings = document.getElementById('litellm-settings');
+const liteLlmToggle = document.getElementById('litellm');
 const liteLlmEndpoint = document.getElementById('litellm-endpoint');
 const liteLlmModelsEndpoint = document.getElementById('litellm-models-endpoint');
 const liteLlmModel = document.getElementById('litellm-model');
 const liteLlmModelAliases = document.getElementById('litellm-model-aliases');
+const modelCompatibility = document.getElementById('model-compatibility');
+const modelCompatibilityTitle = document.getElementById('model-compatibility-title');
+const modelCompatibilityDetail = document.getElementById('model-compatibility-detail');
 const liteLlmReasoningEffort = document.getElementById('litellm-reasoning-effort');
 const liteLlmModelPreset = document.getElementById('litellm-model-preset');
 const liteLlmTemperature = document.getElementById('litellm-temperature');
@@ -652,32 +2233,158 @@ const liteLlmCapabilities = document.getElementById('litellm-capabilities');
 const liteLlmAuthHeader = document.getElementById('litellm-auth-header');
 const liteLlmApiKey = document.getElementById('litellm-api-key');
 const liteLlmSettingsError = document.getElementById('litellm-settings-error');
+const connectionReadiness = document.getElementById('connection-readiness');
+const readinessTitle = document.getElementById('readiness-title');
+const readinessDetail = document.getElementById('readiness-detail');
+const connectionDiagnostics = document.getElementById('connection-diagnostics');
+const connectionTestButton = document.getElementById('litellm-test');
+const connectionSaveButton = document.getElementById('litellm-save');
+const setupSteps = [...document.querySelectorAll('[data-setup-step]')];
+const setupStepButtons = [...document.querySelectorAll('[data-setup-step-target]')];
+const setupBackButton = document.getElementById('setup-back');
+const setupNextButton = document.getElementById('setup-next');
+const setupStepCount = document.getElementById('setup-step-count');
+const advancedSetupButton = document.getElementById('litellm-advanced');
+const contextToggle = document.getElementById('context-toggle');
+const contextInspector = document.getElementById('context-inspector');
+const contextActiveEntry = document.getElementById('context-active-entry');
+const pinnedContext = document.getElementById('pinned-context');
+const contextClear = document.getElementById('context-clear');
+const contextAddFile = document.getElementById('context-add-file');
+const contextCount = document.getElementById('context-count');
+const contextBudgetLabel = document.getElementById('context-budget-label');
+const contextBudgetDetail = document.getElementById('context-budget-detail');
+const contextBudgetTrack = document.getElementById('context-budget-track');
+const contextBudgetFill = document.getElementById('context-budget-fill');
+const contextBudgetChip = document.getElementById('context-budget-chip');
+const contextGuidanceEntry = document.getElementById('context-guidance-entry');
+const contextMemoryEntry = document.getElementById('context-memory-entry');
+const promptTokenEstimate = document.getElementById('prompt-token-estimate');
 const semanticMemoryEnabled = document.getElementById('semantic-memory-enabled');
 const embeddingModel = document.getElementById('embedding-model');
 const newThreadButton = document.getElementById('new-thread');
 const agentRuntime = document.getElementById('runtime');
+const autonomyMode = document.getElementById('mode');
+const runControls = document.getElementById('run-controls');
+const runControlsLabel = document.getElementById('run-controls-label');
+const runtimeHelp = document.getElementById('runtime-help');
+const modeHelp = document.getElementById('mode-help');
+const announcer = document.getElementById('announcer');
+const setupCallout = document.getElementById('setup-callout');
+const setupCalloutAction = document.getElementById('setup-callout-action');
+const topPanels = [threadPanel, memoryPanel, briefPanel, runReviewPanel, liteLlmSettings];
 let busy = false;
+let cancellationPending = false;
+let remoteRunActive = false;
 let liteLlmModelProfiles = {};
 let loadedModelCatalog = [];
+let lastConnectionDiagnostics = [];
+let diagnosticFixApplied = false;
+let connectionSetupStep = 1;
 let planManuallyCollapsed = false;
+let hasStoredLiteLlmKey = false;
+let currentContextState = { activeFile: '', autoContext: true, pinned: [] };
+let currentRunSummary = createRunSummary();
+let liveRunState = null;
+let liveRunTimer;
+const messageSources = new WeakMap();
+const RECENT_HISTORY_MESSAGES = 14;
+const HISTORY_REVEAL_BATCH = 20;
+let hiddenHistoryMessages = [];
+const runReviews = new Map();
+let activeRunReviewId = '';
+let activeThreadId = '';
+let currentThreadSummaries = [];
+let pendingRequestText = '';
+let pendingRequestId = '';
+let replacePendingOnSubmit = false;
+let activePanelTrigger = null;
+let draftTimer;
+let localDrafts = restoredWebviewState.drafts && typeof restoredWebviewState.drafts === 'object' && !Array.isArray(restoredWebviewState.drafts)
+  ? Object.fromEntries(Object.entries(restoredWebviewState.drafts)
+      .filter(([, value]) => typeof value === 'string')
+      .map(([threadId, value]) => [threadId, value.slice(0, 50000)]))
+  : {};
+let briefState = normalizeBriefState(restoredWebviewState.brief);
+briefObjective.value = briefState.objective;
+briefScope.value = briefState.scope;
+briefDone.value = briefState.done;
+briefConstraints.value = briefState.constraints;
+
+function createRunSummary() {
+  return {
+    id: crypto.randomUUID(),
+    startedAt: Date.now(),
+    finishedAt: undefined,
+    files: new Map(),
+    commands: [],
+    plan: [],
+    memoryUpdates: 0,
+    contextReceipt: undefined,
+    usage: undefined,
+    failed: false,
+    cancelled: false,
+    error: '',
+    omittedChanges: 0
+  };
+}
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 }
 
+function normalizeBriefState(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    objective: typeof source.objective === 'string' ? source.objective.slice(0, 4000) : '',
+    scope: typeof source.scope === 'string' ? source.scope.slice(0, 2000) : '',
+    done: typeof source.done === 'string' ? source.done.slice(0, 2000) : '',
+    constraints: typeof source.constraints === 'string' ? source.constraints.slice(0, 2000) : ''
+  };
+}
+
+function persistWebviewState() {
+  vscode.setState({ drafts: localDrafts, brief: briefState });
+}
+
+function announce(message) {
+  if (!message) return;
+  announcer.textContent = '';
+  requestAnimationFrame(() => { announcer.textContent = message; });
+}
+
+function setPanelHidden(panel, hidden) {
+  panel.classList.toggle('hidden', hidden);
+  panel.setAttribute('aria-hidden', String(hidden));
+}
+
+function closeTopPanels(restoreFocus = true) {
+  topPanels.forEach(panel => setPanelHidden(panel, true));
+  topDrawers.classList.remove('panel-open');
+  threadsToggle.setAttribute('aria-expanded', 'false');
+  liteLlmToggle.setAttribute('aria-expanded', 'false');
+  memoryToggle.setAttribute('aria-expanded', 'false');
+  briefToggle.setAttribute('aria-expanded', 'false');
+  if (activePanelTrigger) activePanelTrigger.setAttribute('aria-expanded', 'false');
+  const trigger = activePanelTrigger;
+  activePanelTrigger = null;
+  if (restoreFocus && trigger?.isConnected && !trigger.disabled) trigger.focus();
+}
+
+function openTopPanel(panel, trigger, focusTarget) {
+  closeTopPanels(false);
+  setPanelHidden(panel, false);
+  topDrawers.classList.add('panel-open');
+  activePanelTrigger = trigger || null;
+  if (activePanelTrigger) activePanelTrigger.setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(() => {
+    const target = typeof focusTarget === 'function' ? focusTarget() : focusTarget;
+    target?.focus();
+  });
+}
+
 function renderText(value) {
-  const safe = escapeHtml(value);
-  const parts = safe.split(/\`\`\`/);
-  return parts.map((part, index) => {
-    if (index % 2 === 1) {
-      const body = part.replace(/^[^\n]*\n?/, '');
-      return '<pre><code>' + body + '</code></pre>';
-    }
-    return part
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\`([^\`]+)\`/g, '<code>$1</code>')
-      .replace(/\n/g, '<br>');
-  }).join('');
+  return '<p>' + escapeHtml(value).replace(/\n/g, '<br>') + '</p>';
 }
 
 function scrollConversationToBottom() {
@@ -686,33 +2393,485 @@ function scrollConversationToBottom() {
   });
 }
 
-function appendMessage(message) {
-  document.getElementById('welcome')?.remove();
+function createMessageElement(message) {
   const element = document.createElement('article');
   element.className = 'message ' + message.role;
+  element.dataset.messageRole = message.role;
+  const messageId = message.id || crypto.randomUUID();
+  element.dataset.messageId = messageId;
+  messageSources.set(element, String(message.text || ''));
+  const actions = message.role === 'assistant'
+    ? '<div class="message-actions"><button type="button" data-copy-message aria-label="Copy agent response">Copy</button>' +
+      '<button type="button" data-add-memory-message aria-label="Add a confirmed project-memory entry from this response"' +
+      ((busy || remoteRunActive) ? ' disabled' : '') + '>Add memory…</button></div>'
+    : '';
   element.innerHTML = '<div class="message-role">' + (message.role === 'user' ? 'YOU' : 'AGENT') + '</div>' +
-    '<div class="message-body">' + renderText(message.text) + '</div>';
+    '<div class="message-body">' + (message.html || renderText(message.text)) + '</div>' + actions;
+  return element;
+}
+
+function appendMessage(message, announceResponse = true) {
+  document.getElementById('welcome')?.remove();
+  const element = createMessageElement(message);
   timeline.appendChild(element);
   scrollConversationToBottom();
+  if (announceResponse && message.role === 'assistant') announce('Agent response added to the conversation.');
+}
+
+function historyBatchStart(messages, preferredStart) {
+  let start = Math.max(0, preferredStart);
+  if (start > 0 && messages[start]?.role === 'assistant') start -= 1;
+  return start;
+}
+
+function renderHistoryFold() {
+  timeline.querySelector('[data-history-fold]')?.remove();
+  if (!hiddenHistoryMessages.length) return;
+  const fold = document.createElement('section');
+  fold.className = 'history-fold';
+  fold.dataset.historyFold = '';
+  const amount = Math.min(HISTORY_REVEAL_BATCH, hiddenHistoryMessages.length);
+  fold.innerHTML = '<button type="button" data-show-earlier aria-label="Show earlier conversation messages">Show ' +
+    amount + ' earlier message' + (amount === 1 ? '' : 's') + '</button>';
+  timeline.insertBefore(fold, timeline.firstChild);
+}
+
+function renderConversationHistory(history) {
+  const messages = Array.isArray(history) ? history : [];
+  hiddenHistoryMessages = [];
+  if (!messages.length) return;
+  document.getElementById('welcome')?.remove();
+  const start = historyBatchStart(messages, messages.length - RECENT_HISTORY_MESSAGES);
+  hiddenHistoryMessages = messages.slice(0, start);
+  messages.slice(start).forEach(message => timeline.appendChild(createMessageElement(message)));
+  renderHistoryFold();
+  scrollConversationToBottom();
+}
+
+function revealEarlierHistory() {
+  if (!hiddenHistoryMessages.length) return;
+  const previousHeight = timeline.scrollHeight;
+  const start = historyBatchStart(
+    hiddenHistoryMessages,
+    hiddenHistoryMessages.length - HISTORY_REVEAL_BATCH
+  );
+  const batch = hiddenHistoryMessages.splice(start);
+  const anchor = timeline.querySelector('.message');
+  batch.forEach(message => timeline.insertBefore(createMessageElement(message), anchor));
+  renderHistoryFold();
+  requestAnimationFrame(() => {
+    timeline.scrollTop += Math.max(0, timeline.scrollHeight - previousHeight);
+  });
+  announce(batch.length + ' earlier conversation messages shown.');
+}
+
+function elapsedRunTime(startedAt) {
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  if (seconds < 60) return seconds + 's';
+  const minutes = Math.floor(seconds / 60);
+  return minutes + 'm ' + String(seconds % 60).padStart(2, '0') + 's';
+}
+
+function ensureLiveRun() {
+  if (liveRunState) return liveRunState;
+  const element = document.createElement('section');
+  element.dataset.liveRun = currentRunSummary.id;
+  liveRunState = {
+    element,
+    status: 'Starting agent',
+    events: [],
+    expanded: false,
+    failed: false,
+    startedAt: currentRunSummary.startedAt
+  };
+  timeline.appendChild(element);
+  clearInterval(liveRunTimer);
+  liveRunTimer = setInterval(() => {
+    const elapsed = liveRunState?.element.querySelector('.live-run-time');
+    if (elapsed && liveRunState) elapsed.textContent = elapsedRunTime(liveRunState.startedAt);
+  }, 1000);
+  renderLiveRun();
+  scrollConversationToBottom();
+  return liveRunState;
+}
+
+function renderLiveRun() {
+  if (!liveRunState) return;
+  const state = liveRunState;
+  const openOutputs = [...state.element.querySelectorAll('.live-run-events details')]
+    .flatMap((entry, index) => entry.open ? [index] : []);
+  const latest = state.events.at(-1);
+  const completedPlanItems = currentRunSummary.plan.filter(item => item.completed).length;
+  const stats = [
+    currentRunSummary.plan.length ? completedPlanItems + '/' + currentRunSummary.plan.length + ' plan' : '',
+    currentRunSummary.files.size ? currentRunSummary.files.size + ' file' + (currentRunSummary.files.size === 1 ? '' : 's') : '',
+    currentRunSummary.commands.length ? currentRunSummary.commands.length + ' command' + (currentRunSummary.commands.length === 1 ? '' : 's') : '',
+    currentRunSummary.contextReceipt ? '~' + formatTokenEstimate(currentRunSummary.contextReceipt.estimatedTokens) + ' context tokens' : ''
+  ].filter(Boolean);
+  const detailsId = 'live-run-details-' + currentRunSummary.id;
+  const eventHistory = state.events.length
+    ? '<ol class="live-run-events">' + state.events.slice(-20).map(event =>
+        '<li><span class="live-run-kind">' + escapeHtml(event.kind) + '</span><span class="live-run-event-copy">' +
+        escapeHtml(event.title) + '</span>' +
+        (event.detail ? '<details><summary>Output</summary><pre>' + escapeHtml(event.detail) + '</pre></details>' : '') + '</li>'
+      ).join('') + '</ol>'
+    : '<p class="live-run-empty">Waiting for the first agent action…</p>';
+  state.element.className = 'live-run' + (state.expanded ? ' expanded' : '') + (state.failed ? ' failed' : '');
+  state.element.innerHTML = '<button class="live-run-heading" type="button" data-toggle-live-run aria-expanded="' +
+    String(state.expanded) + '" aria-controls="' + detailsId + '">' +
+    '<span class="live-run-signal" aria-hidden="true"></span>' +
+    '<span class="live-run-copy"><strong>' + escapeHtml(state.status) + '</strong><small>' +
+    escapeHtml(latest ? latest.title : 'Preparing the local workspace') + '</small></span>' +
+    '<span class="live-run-time" aria-hidden="true">' + elapsedRunTime(state.startedAt) + '</span>' +
+    '<span class="live-run-chevron" aria-hidden="true">⌃</span></button>' +
+    '<div class="live-run-details" id="' + detailsId + '">' +
+    '<div class="live-run-stats">' + (stats.length ? stats.map(escapeHtml).join(' · ') : 'No tools used yet') + '</div>' +
+    eventHistory + '</div>';
+  [...state.element.querySelectorAll('.live-run-events details')].forEach((entry, index) => {
+    entry.open = openOutputs.includes(index);
+  });
+}
+
+function setLiveRunExpanded(expanded) {
+  if (!liveRunState) return;
+  liveRunState.expanded = Boolean(expanded);
+  liveRunState.element.classList.toggle('expanded', liveRunState.expanded);
+  liveRunState.element.querySelector('[data-toggle-live-run]')
+    ?.setAttribute('aria-expanded', String(liveRunState.expanded));
+}
+
+function updateLiveRunStatus(label) {
+  if (!busy || !label || label === 'Ready') return;
+  const state = ensureLiveRun();
+  state.status = label;
+  renderLiveRun();
+}
+
+function moveLiveRunToEnd() {
+  if (!liveRunState) return;
+  timeline.appendChild(liveRunState.element);
+  scrollConversationToBottom();
+}
+
+function finishLiveRun() {
+  clearInterval(liveRunTimer);
+  liveRunTimer = undefined;
+  liveRunState?.element.remove();
+  liveRunState = null;
+}
+
+function updatePendingMessage(text, html = '') {
+  const userMessages = timeline.querySelectorAll('.message.user');
+  const latest = userMessages[userMessages.length - 1];
+  const body = latest?.querySelector('.message-body');
+  if (body) body.innerHTML = html || renderText(text);
+}
+
+function recoveryActions(primaryLabel = 'Try again') {
+  const disabled = busy || remoteRunActive || !pendingRequestId ? ' disabled' : '';
+  return '<div class="recovery-actions">' +
+    '<button type="button" data-retry-pending' + disabled + '>' + escapeHtml(primaryLabel) + '</button>' +
+    '<button type="button" data-edit-pending' + disabled + '>Edit & resend</button>' +
+    '<button type="button" data-discard-pending' + disabled + '>Discard request</button></div>';
+}
+
+function appendRecovery(message, isError = false, allowRecovery = true, primaryLabel = 'Try again', showRefresh = false) {
+  if (!pendingRequestText && !isError && !showRefresh) return;
+  const element = document.createElement('div');
+  element.className = isError ? 'error' : 'recovery';
+  element.setAttribute('role', isError ? 'alert' : 'status');
+  element.setAttribute('aria-atomic', 'true');
+  element.innerHTML = '<div class="recovery-copy">' + escapeHtml(message) + '</div>' +
+    (pendingRequestText && allowRecovery ? recoveryActions(primaryLabel) :
+      (showRefresh ? '<div class="recovery-actions"><button type="button" data-refresh-run>Refresh status</button></div>' : ''));
+  timeline.appendChild(element);
+  scrollConversationToBottom();
+}
+
+function resizePrompt() {
+  prompt.style.height = 'auto';
+  prompt.style.height = Math.min(prompt.scrollHeight, 180) + 'px';
+}
+
+function updateComposerHint() {
+  composerHint.textContent = prompt.value
+    ? 'Draft kept locally · Enter to send · Shift+Enter for newline'
+    : 'Enter to send · Shift+Enter for newline';
+}
+
+function rememberDraftLocally() {
+  if (!activeThreadId) return;
+  const draft = prompt.value.slice(0, 50000);
+  if (draft) localDrafts[activeThreadId] = draft;
+  else delete localDrafts[activeThreadId];
+  persistWebviewState();
+}
+
+function persistDraftNow() {
+  if (!activeThreadId) return;
+  clearTimeout(draftTimer);
+  rememberDraftLocally();
+  vscode.postMessage({ type: 'draftChanged', threadId: activeThreadId, text: prompt.value });
+  updateComposerHint();
+}
+
+function scheduleDraftPersist() {
+  clearTimeout(draftTimer);
+  rememberDraftLocally();
+  updateComposerHint();
+  draftTimer = setTimeout(persistDraftNow, 300);
 }
 
 function appendActivity(kind, title, detail) {
-  const element = document.createElement('div');
-  element.className = 'activity';
-  const details = detail ? '<details><summary>output</summary><pre>' + escapeHtml(detail) + '</pre></details>' : '';
-  element.innerHTML = '<strong>' + escapeHtml(kind.toUpperCase()) + '</strong> · ' + escapeHtml(title) + details;
+  if (kind === 'files') {
+    const fileMatch = /^(modified|created|deleted):\s+(.+)$/.exec(title);
+    if (fileMatch && !currentRunSummary.files.has(fileMatch[2])) {
+      currentRunSummary.files.set(fileMatch[2], {
+        id: '',
+        path: fileMatch[2],
+        kind: fileMatch[1],
+        restored: false
+      });
+    }
+  } else if (kind === 'command') {
+    const commandMatch = /^(.*) · exit (-?\d+)$/.exec(title);
+    if (commandMatch) currentRunSummary.commands.push({
+      title: commandMatch[1],
+      exitCode: Number(commandMatch[2]),
+      output: detail || '',
+      verification: /(?:^|\s)(?:test|tests|check|lint|build|typecheck|pytest|vitest|jest|mocha)(?:\s|:|$)/i.test(commandMatch[1])
+    });
+  } else if (kind === 'memory') {
+    currentRunSummary.memoryUpdates += 1;
+  }
+  const state = ensureLiveRun();
+  state.events.push({ kind: String(kind).toUpperCase(), title, detail: detail || '' });
+  if (state.events.length > 100) state.events.splice(0, state.events.length - 100);
+  renderLiveRun();
+}
+
+function runSummaryStats(summary) {
+  const files = Array.isArray(summary.files) ? summary.files : [...summary.files.values()];
+  const verifications = summary.commands.filter(command => command.verification);
+  const stats = [
+    files.length ? files.length + ' file' + (files.length === 1 ? '' : 's') + ' changed' : 'No direct file changes',
+    summary.commands.length ? summary.commands.length + ' command' + (summary.commands.length === 1 ? '' : 's') + ' completed' : '',
+    verifications.length ? verifications.filter(command => command.exitCode === 0).length + '/' + verifications.length + ' checks passed' : '',
+    summary.memoryUpdates ? summary.memoryUpdates + ' memory update' + (summary.memoryUpdates === 1 ? '' : 's') : '',
+    summary.contextReceipt ? '~' + formatTokenEstimate(summary.contextReceipt.estimatedTokens) + ' context tokens' : '',
+    summary.usage ? summary.usage.input + ' in / ' + summary.usage.output + ' out' : ''
+  ].filter(Boolean);
+  if (summary.omittedChanges) stats.push(summary.omittedChanges + ' change' + (summary.omittedChanges === 1 ? '' : 's') + ' not snapshotted');
+  return stats;
+}
+
+function preserveRunReview(summary) {
+  const review = {
+    ...summary,
+    files: [...summary.files.values()].map(file => ({ ...file })),
+    commands: summary.commands.map(command => ({ ...command })),
+    plan: summary.plan.map(item => ({ ...item })),
+    contextReceipt: summary.contextReceipt ? {
+      ...summary.contextReceipt,
+      guidanceFiles: [...summary.contextReceipt.guidanceFiles],
+      pinnedSources: summary.contextReceipt.pinnedSources.map(source => ({ ...source })),
+      memory: { ...summary.contextReceipt.memory }
+    } : undefined
+  };
+  runReviews.set(review.id, review);
+  while (runReviews.size > 10) runReviews.delete(runReviews.keys().next().value);
+  return review;
+}
+
+function renderRunSummary() {
+  finishLiveRun();
+  currentRunSummary.finishedAt = Date.now();
+  const summary = preserveRunReview(currentRunSummary);
+  const stats = runSummaryStats(summary);
+  const element = document.createElement('section');
+  element.className = 'run-summary' + (summary.failed ? ' failed' : '');
+  const title = summary.cancelled ? 'Run cancelled' : (summary.failed ? 'Run finished with an error' : 'Run complete');
+  element.setAttribute('aria-label', title);
+  element.innerHTML = '<div class="run-summary-heading"><strong>' + title + '</strong>' +
+    '<button type="button" data-open-run-review="' + escapeHtml(summary.id) + '" aria-expanded="false" aria-controls="run-review-panel">Review run</button></div>' +
+    '<div class="run-summary-stats">' + stats.map(escapeHtml).join(' · ') + '</div>' +
+    (summary.cancelled && pendingRequestText ? recoveryActions() : '');
   timeline.appendChild(element);
   scrollConversationToBottom();
+  announce(title + '. Review evidence is available.');
+}
+
+function renderRunReview(summary) {
+  const title = summary.cancelled ? 'Run cancelled' : (summary.failed ? 'Run finished with an error' : 'Run complete');
+  const outcomeClass = summary.cancelled ? ' cancelled' : (summary.failed ? ' failed' : '');
+  const duration = summary.finishedAt && summary.startedAt
+    ? Math.max(0, Math.round((summary.finishedAt - summary.startedAt) / 1000)) + 's'
+    : '';
+  const plan = summary.plan.length
+    ? '<section class="run-review-section"><div class="section-label">PLAN</div><ol class="run-review-list">' +
+      summary.plan.map(item => '<li class="run-review-row' + (item.completed ? ' done' : '') + '"><span class="run-review-row-copy">' +
+        (item.completed ? '✓ ' : '○ ') + escapeHtml(item.text) + '</span></li>').join('') + '</ol></section>'
+    : '';
+  const files = summary.files.length
+    ? '<section class="run-review-section"><div class="section-label">FILES</div><ul class="run-review-list">' +
+      summary.files.map(file => {
+      const label = String(file.kind || 'modified').toUpperCase();
+      const safePath = escapeHtml(file.path);
+      const actions = file.id
+        ? '<span class="run-review-actions"><button type="button" data-review-change="' + escapeHtml(file.id) + '" aria-label="View diff for ' + safePath + '">Diff</button>' +
+          '<button type="button" data-restore-change="' + escapeHtml(file.id) + '" aria-label="Restore ' + safePath + '"' + (file.restored ? ' disabled' : '') + '>' +
+          (file.restored ? 'Restored' : 'Restore') + '</button></span>'
+        : '';
+        return '<li class="run-review-row" data-change-item="' + escapeHtml(file.id || '') + '">' +
+          '<span class="run-review-row-copy"><strong>' + escapeHtml(label) + '</strong> · ' + safePath + '</span>' + actions + '</li>';
+      }).join('') + '</ul></section>'
+    : '';
+  const commands = summary.commands.length
+    ? '<section class="run-review-section"><div class="section-label">COMMANDS & CHECKS</div><ul class="run-review-list">' +
+      summary.commands.map(command => '<li class="run-review-row' + (command.exitCode === 0 ? '' : ' failed') + '">' +
+        '<span class="run-review-row-copy"><strong>' + (command.verification ? 'CHECK' : 'COMMAND') + '</strong> · ' +
+        escapeHtml(command.title) + '</span><span>exit ' + command.exitCode + '</span>' +
+        (command.output ? '<details class="run-review-output"><summary>Output</summary><pre>' + escapeHtml(command.output) + '</pre></details>' : '') +
+        '</li>').join('') + '</ul></section>'
+    : '';
+  const usage = summary.usage || summary.memoryUpdates
+    ? '<section class="run-review-section"><div class="section-label">USAGE & MEMORY</div><ul class="run-review-list">' +
+      (summary.usage ? '<li class="run-review-row"><span class="run-review-row-copy">Model tokens</span><span>' +
+        summary.usage.input + ' in · ' + summary.usage.output + ' out</span></li>' : '') +
+      (summary.memoryUpdates ? '<li class="run-review-row"><span class="run-review-row-copy">Durable memory updates</span><span>' +
+        summary.memoryUpdates + '</span></li>' : '') + '</ul></section>'
+    : '';
+  const receipt = summary.contextReceipt;
+  const contextEvidence = receipt
+    ? '<section class="run-review-section"><div class="section-label">CONTEXT USED</div><ul class="run-review-list">' +
+      '<li class="run-review-row"><span class="run-review-row-copy"><strong>EDITOR & WORKSPACE</strong> · ' +
+      escapeHtml(receipt.automaticContextEnabled ? (receipt.activeFile || 'No active file') : 'Automatic context disabled') +
+      '<small>' + receipt.diagnostics + ' diagnostics · ' + receipt.openFiles + ' open files · ' + receipt.projectFiles + ' sampled paths</small></span></li>' +
+      '<li class="run-review-row"><span class="run-review-row-copy"><strong>PROJECT GUIDANCE</strong> · ' +
+      receipt.guidanceFiles.length + ' included</span>' + contextSourceDetails(receipt.guidanceFiles) + '</li>' +
+      '<li class="run-review-row"><span class="run-review-row-copy"><strong>PINNED BY USER</strong> · ' +
+      receipt.pinnedSources.length + ' selected</span>' + contextSourceDetails(receipt.pinnedSources.map(source =>
+        source.filename + ' · ' + (source.kind === 'file' ? 'file' : source.range)
+      )) + '</li>' +
+      '<li class="run-review-row"><span class="run-review-row-copy"><strong>PROJECT MEMORY</strong> · ' +
+      escapeHtml(receipt.memory.mode === 'semantic'
+        ? receipt.memory.recalledChunks + ' semantic chunk' + (receipt.memory.recalledChunks === 1 ? '' : 's')
+        : 'recent durable memory') +
+      (receipt.memory.fallback ? '<small>Semantic retrieval fell back to recent local memory.</small>' : '') + '</span></li>' +
+      '<li class="run-review-row"><span class="run-review-row-copy"><strong>BOUNDED CONTEXT</strong> · ~' +
+      formatTokenEstimate(receipt.estimatedTokens) + ' tokens · ' + receipt.utilizationPercent + '%</span><span>' +
+      (receipt.truncated ? 'truncated' : 'complete') + '</span></li></ul></section>'
+    : '';
+  const canUndoRun = !summary.omittedChanges && summary.files.length &&
+    summary.files.every(file => file.id) && summary.files.some(file => !file.restored);
+  const undoRun = canUndoRun
+    ? '<button type="button" class="undo-run" data-restore-run="' + escapeHtml(summary.id) + '">Undo all file changes</button>'
+    : '';
+  runReviewTitle.textContent = title;
+  runReviewContent.innerHTML = '<div class="run-review-overview' + outcomeClass + '"><span class="run-review-signal" aria-hidden="true"></span>' +
+    '<span class="run-review-copy"><strong>' + escapeHtml(title) + '</strong><small>' +
+    escapeHtml(summary.error || (summary.failed ? 'Review the failed step and retry when ready.' : 'Execution evidence collected locally.')) +
+    '</small><span class="run-review-stats">' + escapeHtml([...runSummaryStats(summary), duration].filter(Boolean).join(' · ')) +
+    '</span></span></div>' + contextEvidence + plan + files + commands + usage +
+    ((summary.files.length || summary.commands.length) ? '<div class="run-review-footer">' + undoRun + '<button type="button" data-open-changes>Open Source Control</button></div>' : '');
+}
+
+function contextSourceDetails(sources) {
+  if (!sources.length) return '';
+  return '<details class="run-review-output"><summary>Files</summary><ul>' +
+    sources.map(source => '<li>' + escapeHtml(source) + '</li>').join('') + '</ul></details>';
+}
+
+function openRunReview(id, trigger) {
+  const summary = runReviews.get(id);
+  if (!summary) return;
+  activeRunReviewId = id;
+  renderRunReview(summary);
+  openTopPanel(runReviewPanel, trigger, runReviewTitle);
 }
 
 function setBusy(value) {
+  const wasBusy = busy;
   busy = value;
-  send.disabled = value;
+  if (!value || (value && !wasBusy)) setCancellationPending(false);
+  const locked = value || remoteRunActive;
+  send.disabled = locked;
   cancel.classList.toggle('hidden', !value);
-  signal.classList.toggle('busy', value);
-  agentRuntime.disabled = value;
-  if (!value && status.textContent !== 'Ready') status.textContent = 'Ready';
+  signal.classList.toggle('busy', locked);
+  agentRuntime.disabled = locked;
+  autonomyMode.disabled = locked;
+  runControls.classList.toggle('locked', locked);
+  runControls.querySelector('summary').setAttribute('aria-disabled', String(locked));
+  runControls.querySelector('summary').tabIndex = locked ? -1 : 0;
+  if (locked) runControls.open = false;
+  newThreadButton.disabled = locked;
+  threadsToggle.disabled = value;
+  briefToggle.disabled = locked;
+  contextAddFile.disabled = locked;
+  contextClear.disabled = locked || !(currentContextState.pinned || []).length;
+  if (locked && !briefPanel.classList.contains('hidden')) closeTopPanels(false);
+  document.getElementById('memory-add').disabled = locked;
+  connectionSaveButton.disabled = locked;
+  advancedSetupButton.disabled = locked;
+  document.getElementById('profile-import').disabled = locked;
+  memoryList.querySelectorAll('[data-edit-memory], [data-delete-memory]').forEach(button => { button.disabled = locked; });
+  timeline.querySelectorAll('[data-add-memory-message]').forEach(button => { button.disabled = locked; });
+  timeline.querySelectorAll('[data-retry-pending], [data-edit-pending]').forEach(button => {
+    button.disabled = value;
+  });
+  timeline.querySelectorAll('[data-discard-pending]').forEach(button => { button.disabled = value; });
+  timeline.querySelectorAll('[data-restore-change]').forEach(button => {
+    button.disabled = value || button.textContent === 'Restored';
+  });
+  document.querySelectorAll('[data-restore-run]').forEach(button => { button.disabled = value; });
+  renderThreadList();
+  if (!value && remoteRunActive) status.textContent = 'Agent active in another VS Code window';
+  else if (!value && status.textContent !== 'Ready') status.textContent = 'Ready';
   if (value) scrollConversationToBottom();
+}
+
+function setCancellationPending(value) {
+  cancellationPending = Boolean(value);
+  cancel.disabled = cancellationPending;
+  cancel.textContent = cancellationPending ? 'Stopping…' : 'Cancel run';
+  cancel.setAttribute('aria-label', cancellationPending ? 'Stopping current run' : 'Cancel current run');
+  cancel.setAttribute('aria-busy', String(cancellationPending));
+}
+
+function setRemoteRunActive(value) {
+  remoteRunActive = Boolean(value);
+  setBusy(busy);
+}
+
+function setAutonomyMode(value) {
+  const next = ['review', 'execute', 'plan'].includes(value) ? value : 'review';
+  autonomyMode.value = next;
+  autonomyMode.title = {
+    review: 'Ask before every workspace change and command',
+    execute: 'Apply file and project-memory edits automatically; commands and deletions still ask',
+    plan: 'Inspect and plan with read-only tools'
+  }[next];
+  updateRunControlsSummary();
+}
+
+function updateRunControlsSummary() {
+  const runtimeLabels = { standard: 'Standard', deep: 'Deep Agent' };
+  const runtimeDescriptions = {
+    standard: 'Predictable for most development work.',
+    deep: 'Best for long tasks that benefit from planning and context compaction.'
+  };
+  const modeLabels = { review: 'Ask first', execute: 'Auto edits', plan: 'Plan only' };
+  const modeDescriptions = {
+    review: 'Confirm every workspace change and command.',
+    execute: 'Apply scoped file and memory edits automatically; commands and deletions still ask.',
+    plan: 'Inspect the project and prepare a read-only implementation plan.'
+  };
+  const runtime = agentRuntime.value === 'deep' ? 'deep' : 'standard';
+  const mode = ['review', 'execute', 'plan'].includes(autonomyMode.value) ? autonomyMode.value : 'review';
+  runControlsLabel.textContent = modeLabels[mode] + ' · ' + runtimeLabels[runtime];
+  runtimeHelp.textContent = runtimeDescriptions[runtime];
+  modeHelp.textContent = modeDescriptions[mode];
+  runControls.querySelector('summary').title = modeDescriptions[mode] + ' ' + runtimeDescriptions[runtime];
 }
 
 function setActivityExpanded(expanded) {
@@ -720,9 +2879,180 @@ function setActivityExpanded(expanded) {
   const next = Boolean(expanded && canExpand);
   activityDock.classList.toggle('expanded', next);
   activityToggle.setAttribute('aria-expanded', String(next));
+  activityToggle.setAttribute('aria-disabled', String(!canExpand));
+  document.getElementById('plan-panel').setAttribute('aria-hidden', String(!next));
   activityToggle.title = canExpand
     ? (next ? 'Collapse current plan' : 'Expand current plan')
     : 'Agent activity';
+}
+
+function setThreadPanelOpen(open, restoreFocus = true) {
+  if (open) {
+    openTopPanel(
+      threadPanel,
+      threadsToggle,
+      threadSearch
+    );
+  } else if (!threadPanel.classList.contains('hidden')) {
+    closeTopPanels(restoreFocus);
+  }
+}
+
+function openMemoryCenter() {
+  memoryOverview.textContent = 'Loading local memory…';
+  memoryList.innerHTML = '';
+  openTopPanel(memoryPanel, memoryToggle, memoryPanelTitle);
+  vscode.postMessage({ type: 'openMemoryCenter' });
+}
+
+function captureBriefState() {
+  briefState = normalizeBriefState({
+    objective: briefObjective.value,
+    scope: briefScope.value,
+    done: briefDone.value,
+    constraints: briefConstraints.value
+  });
+  persistWebviewState();
+}
+
+function openTaskBrief() {
+  if (busy || remoteRunActive) return;
+  briefError.classList.add('hidden');
+  openTopPanel(briefPanel, briefToggle, briefObjective);
+}
+
+function taskBriefMessage() {
+  const objective = briefObjective.value.trim();
+  if (!objective) return '';
+  const sections = [['Objective', objective]];
+  if (briefScope.value.trim()) sections.push(['Scope', briefScope.value.trim()]);
+  if (briefDone.value.trim()) sections.push(['Done when', briefDone.value.trim()]);
+  if (briefConstraints.value.trim()) sections.push(['Constraints', briefConstraints.value.trim()]);
+  sections.push([
+    'Working agreement',
+    '- Inspect the relevant code and present a concise plan before changing files.\n' +
+    '- Ask only when a missing decision would materially change the result.\n' +
+    '- After changes, run the relevant local checks and summarize the evidence.'
+  ]);
+  return sections.map(([label, value]) => label + ':\n' + value).join('\n\n');
+}
+
+function useTaskBrief() {
+  captureBriefState();
+  const message = taskBriefMessage();
+  if (!message) {
+    briefError.textContent = 'Describe the objective before creating the message.';
+    briefError.classList.remove('hidden');
+    briefObjective.focus();
+    return;
+  }
+  briefError.classList.add('hidden');
+  const existing = prompt.value.trim();
+  if (!existing.includes(message)) {
+    prompt.value = (existing ? existing + '\n\n' : '') + message;
+  }
+  prompt.value = prompt.value.slice(0, 50000);
+  resizePrompt();
+  updatePromptTokenEstimate();
+  scheduleDraftPersist();
+  closeTopPanels(false);
+  prompt.focus();
+  status.textContent = existing ? 'Task brief added to the draft' : 'Task brief prepared';
+  announce(status.textContent + '. Nothing has been sent.');
+}
+
+function clearTaskBrief() {
+  briefObjective.value = '';
+  briefScope.value = '';
+  briefDone.value = '';
+  briefConstraints.value = '';
+  briefError.classList.add('hidden');
+  captureBriefState();
+  briefObjective.focus();
+  announce('Task brief fields cleared. The message draft was not changed.');
+}
+
+function renderMemoryState(memory, message = '') {
+  const state = memory || { entries: [], total: 0, omitted: 0, semantic: false };
+  const entries = state.entries || [];
+  const retrieval = state.semantic
+    ? 'Semantic retrieval with ' + (state.embeddingModel || 'the configured embedding model')
+    : 'Recent memory is injected without vector retrieval';
+  memoryOverview.setAttribute('role', 'status');
+  memoryOverview.textContent = Number(state.total || 0) + ' durable entr' + (Number(state.total || 0) === 1 ? 'y' : 'ies') +
+    ' · ' + retrieval + (state.omitted ? ' · ' + state.omitted + ' older entries hidden' : '') +
+    (message ? ' · ' + message : '');
+  memoryList.innerHTML = entries.length
+    ? entries.map(entry =>
+        '<div class="memory-item"><span class="memory-item-copy"><p>' + escapeHtml(entry.text) + '</p><small>' +
+        (entry.date ? 'Saved ' + escapeHtml(entry.date) : 'Undated entry') +
+        (entry.redacted ? ' · credential-like text hidden' : '') + '</small></span>' +
+        '<span class="memory-item-actions"><button type="button" data-edit-memory="' + escapeHtml(entry.id) + '" aria-label="Edit memory entry">Edit</button>' +
+        '<button type="button" data-delete-memory="' + escapeHtml(entry.id) + '" aria-label="Delete memory entry">Delete</button></span></div>'
+      ).join('')
+    : '<div class="memory-empty">No durable memories yet. Add a confirmed project decision or convention.</div>';
+  const locked = busy || remoteRunActive;
+  document.getElementById('memory-add').disabled = locked;
+  memoryList.querySelectorAll('[data-edit-memory], [data-delete-memory]').forEach(button => { button.disabled = locked; });
+}
+
+function renderThreads(data) {
+  activeThreadId = data.activeThreadId || '';
+  currentThreadSummaries = data.threads || [];
+  const validThreadIds = new Set(currentThreadSummaries.map(thread => thread.id));
+  Object.keys(localDrafts).forEach(threadId => {
+    if (!validThreadIds.has(threadId)) delete localDrafts[threadId];
+  });
+  persistWebviewState();
+  renderThreadList();
+}
+
+function renderThreadList() {
+  const query = threadSearch.value.trim().toLocaleLowerCase();
+  const recoveryLabels = {
+    running: 'active elsewhere',
+    interrupted: 'restart available',
+    failed: 'retry available',
+    cancelled: 'cancelled'
+  };
+  const threads = currentThreadSummaries.filter(thread => {
+    if (!query) return true;
+    const searchText = [
+      thread.title,
+      thread.pinned ? 'pinned favorite important' : '',
+      recoveryLabels[thread.recoveryStatus] || ''
+    ].join(' ').toLocaleLowerCase();
+    return searchText.includes(query);
+  });
+  const locked = busy || remoteRunActive;
+  threadList.innerHTML = threads.length ? threads.map(thread => {
+    const active = thread.id === activeThreadId;
+    const recoveryLabel = recoveryLabels[thread.recoveryStatus] || '';
+    const metadata = relativeThreadTime(thread.updatedAt) + ' · ' + thread.messageCount + ' message' +
+      (thread.messageCount === 1 ? '' : 's') + (thread.pinned ? ' · pinned' : '') +
+      (recoveryLabel ? ' · ' + recoveryLabel : '');
+    const disabled = locked ? ' disabled' : '';
+    return '<div class="thread-item' + (active ? ' active' : '') + '">' +
+      '<button class="thread-select" type="button" data-select-thread="' + escapeHtml(thread.id) + '"' + (active ? ' aria-current="true"' : '') + disabled + '>' +
+      '<strong>' + escapeHtml(thread.title) + '</strong><small>' + escapeHtml(metadata) + '</small></button>' +
+      '<span class="thread-actions">' +
+      '<button type="button" class="' + (thread.pinned ? 'pinned' : '') + '" data-pin-thread="' + escapeHtml(thread.id) + '" aria-pressed="' + String(Boolean(thread.pinned)) + '" aria-label="' + (thread.pinned ? 'Unpin ' : 'Pin ') + escapeHtml(thread.title) + '"' + disabled + '>' + (thread.pinned ? '★' : '☆') + '</button>' +
+      '<button type="button" data-rename-thread="' + escapeHtml(thread.id) + '" aria-label="Rename ' + escapeHtml(thread.title) + '"' + disabled + '>✎</button>' +
+      '<button type="button" data-delete-thread="' + escapeHtml(thread.id) + '" aria-label="Delete ' + escapeHtml(thread.title) + '"' + disabled + '>×</button>' +
+      '</span></div>';
+  }).join('') : '<div class="thread-empty" role="status">No conversations match this search.</div>';
+  const total = currentThreadSummaries.length;
+  const visible = threads.length;
+  document.getElementById('thread-note').textContent = (query ? visible + ' of ' : '') + total + ' local thread' +
+    (total === 1 ? '' : 's') + ' · stored only in this workspace.';
+}
+
+function relativeThreadTime(value) {
+  const elapsed = Math.max(0, Date.now() - Number(value || 0));
+  if (elapsed < 60_000) return 'now';
+  if (elapsed < 3_600_000) return Math.floor(elapsed / 60_000) + 'm ago';
+  if (elapsed < 86_400_000) return Math.floor(elapsed / 3_600_000) + 'h ago';
+  return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function clearCurrentPlan() {
@@ -732,15 +3062,161 @@ function clearCurrentPlan() {
   setActivityExpanded(false);
 }
 
+function setContextExpanded(expanded) {
+  contextInspector.classList.toggle('hidden', !expanded);
+  contextToggle.setAttribute('aria-expanded', String(expanded));
+  contextInspector.setAttribute('aria-hidden', String(!expanded));
+}
+
+function approximateTokens(characters) {
+  return Math.ceil(Math.max(0, Number(characters) || 0) / 4);
+}
+
+function formatTokenEstimate(tokens) {
+  const value = Math.max(0, Number(tokens) || 0);
+  if (value < 1000) return String(value);
+  return (value / 1000).toFixed(value < 10000 ? 1 : 0).replace(/\.0$/, '') + 'k';
+}
+
+function updatePromptTokenEstimate() {
+  promptTokenEstimate.textContent = 'Prompt · ~' + formatTokenEstimate(approximateTokens(prompt.value.length)) + ' tokens';
+}
+
+function renderContextState(context) {
+  currentContextState = context || { activeFile: '', autoContext: true, pinned: [], budget: {}, memory: {} };
+  const activeFile = currentContextState.activeFile || 'No active file';
+  const pinned = currentContextState.pinned || [];
+  const budget = currentContextState.budget || {};
+  const memory = currentContextState.memory || {};
+  const estimatedTokens = Number(budget.estimatedTokens || 0);
+  const utilization = Math.max(0, Math.min(100, Number(budget.utilizationPercent || 0)));
+  document.getElementById('active-file').textContent = activeFile;
+  contextBudgetChip.textContent = estimatedTokens ? '~' + formatTokenEstimate(estimatedTokens) + ' tok' : '';
+  contextToggle.setAttribute('aria-label', 'Message context: ' + activeFile + ', ' + pinned.length + ' pinned, approximately ' + estimatedTokens + ' tokens');
+  contextCount.textContent = String(pinned.length);
+  contextCount.classList.toggle('hidden', pinned.length === 0);
+  contextClear.disabled = busy || remoteRunActive || pinned.length === 0;
+  contextBudgetLabel.textContent = '~' + formatTokenEstimate(estimatedTokens) + ' tokens · ' + utilization + '% of workspace context';
+  contextBudgetDetail.textContent = budget.truncated
+    ? 'Some project guidance, automatic, or pinned context will be truncated at the configured limit.'
+    : Number(budget.maximumCharacters || 0).toLocaleString() + ' character limit';
+  contextBudgetFill.style.width = utilization + '%';
+  contextBudgetTrack.setAttribute('aria-valuenow', String(utilization));
+  contextActiveEntry.innerHTML =
+    '<span class="context-entry-copy"><strong>' + escapeHtml(activeFile) + '</strong><small>' +
+    (currentContextState.activeFileSensitive
+      ? 'Sensitive file · excluded from automatic and pinned context'
+      : currentContextState.autoContext
+      ? 'Automatic editor and workspace signals · ~' + formatTokenEstimate(approximateTokens(budget.automaticCharacters)) + ' tokens'
+      : 'Automatic editor context disabled · pinned items still included') +
+    '</small></span>';
+  const guidanceFiles = Number(budget.guidanceFiles || 0);
+  const guidancePaths = Array.isArray(budget.guidancePaths) ? budget.guidancePaths : [];
+  const guidanceTokens = approximateTokens(budget.guidanceCharacters);
+  contextGuidanceEntry.innerHTML = '<span class="context-entry-copy"><strong>Project guidance</strong><small>' +
+    (currentContextState.autoContext
+      ? guidanceFiles
+        ? guidanceFiles + ' local guidance file' + (guidanceFiles === 1 ? '' : 's') + ' · ~' + formatTokenEstimate(guidanceTokens) + ' tokens'
+        : 'No AGENTS.md or standard repository guidance detected'
+      : 'Disabled with automatic context') +
+    '</small>' + (guidancePaths.length
+      ? '<details class="context-source-list"><summary>Show included files</summary><ul>' +
+        guidancePaths.map(file => '<li>' + escapeHtml(file) + '</li>').join('') + '</ul></details>'
+      : '') + '</span>';
+  pinnedContext.innerHTML = pinned.length
+    ? pinned.map(item =>
+        '<div class="context-entry"><span class="context-entry-copy"><strong>' + escapeHtml(item.filename) +
+        '</strong><small>' + (item.kind === 'file' ? 'File · ' : 'Selection · ') + escapeHtml(item.range) +
+        ' · ~' + formatTokenEstimate(item.estimatedTokens) + ' tokens</small></span>' +
+        '<button type="button" data-remove-context="' + escapeHtml(item.id) + '" aria-label="Remove ' + escapeHtml(item.filename) + ' from message context">×</button></div>'
+      ).join('')
+    : '<div class="context-entry"><span class="context-entry-copy"><strong>No pinned context</strong><small>Add a file here or pin an editor selection.</small></span></div>';
+  const memoryDetail = memory.configured
+    ? (memory.mode === 'semantic'
+      ? 'Semantic retrieval after send · up to ' + Number(memory.maximumResults || 0) + ' relevant chunks from local memory'
+      : 'Recent durable project memory · ~' + formatTokenEstimate(memory.estimatedTokens) + ' tokens available')
+    : 'No durable project-memory entries yet';
+  contextMemoryEntry.innerHTML = '<span class="context-entry-copy"><strong>Project memory</strong><small>' + escapeHtml(memoryDetail) + '</small></span>';
+  updatePromptTokenEstimate();
+}
+
 function submit() {
   const text = prompt.value.trim();
   if (!text || busy) return;
+  const replacePending = replacePendingOnSubmit;
+  setBusy(true);
+  status.textContent = 'Checking local readiness';
+  currentRunSummary = createRunSummary();
+  closeTopPanels(false);
   clearCurrentPlan();
-  vscode.postMessage({ type: 'send', text, mode: document.getElementById('mode').value });
+  pendingRequestText = text;
+  replacePendingOnSubmit = false;
+  vscode.postMessage({
+    type: 'send',
+    text,
+    mode: autonomyMode.value,
+    replacePending
+  });
   prompt.value = '';
+  resizePrompt();
+  updatePromptTokenEstimate();
+  persistDraftNow();
+}
+
+function setupStepComplete(step) {
+  if (step === 1) {
+    return Boolean(liteLlmEndpoint.value.trim() && (liteLlmApiKey.value.trim() || hasStoredLiteLlmKey));
+  }
+  if (step === 2) return Boolean(liteLlmModel.value.trim());
+  return false;
+}
+
+function showConnectionSetupStep(step, focus = false) {
+  connectionSetupStep = Math.max(1, Math.min(3, Number(step) || 1));
+  setupSteps.forEach(section => { section.hidden = Number(section.dataset.setupStep) !== connectionSetupStep; });
+  setupStepButtons.forEach(button => {
+    const value = Number(button.dataset.setupStepTarget);
+    if (value === connectionSetupStep) button.setAttribute('aria-current', 'step');
+    else button.removeAttribute('aria-current');
+    button.classList.toggle('complete', value < connectionSetupStep && setupStepComplete(value));
+  });
+  setupBackButton.classList.toggle('hidden', connectionSetupStep === 1);
+  setupNextButton.classList.toggle('hidden', connectionSetupStep === 3);
+  advancedSetupButton.classList.toggle('hidden', connectionSetupStep !== 1);
+  connectionTestButton.classList.toggle('hidden', connectionSetupStep !== 3);
+  connectionSaveButton.classList.toggle('hidden', connectionSetupStep !== 3);
+  setupStepCount.textContent = 'Step ' + connectionSetupStep + ' of 3';
+  setupNextButton.textContent = connectionSetupStep === 1 ? 'Choose models' : 'Review & test';
+  if (focus) {
+    const heading = setupSteps.find(section => !section.hidden)?.querySelector('h3');
+    requestAnimationFrame(() => heading?.focus());
+  }
+}
+
+function moveToConnectionSetupStep(target) {
+  const next = Math.max(1, Math.min(3, Number(target) || 1));
+  liteLlmSettingsError.classList.add('hidden');
+  if (next > 1 && !setupStepComplete(1)) {
+    showConnectionSetupStep(1, true);
+    liteLlmSettingsError.textContent = liteLlmEndpoint.value.trim()
+      ? 'Add the gateway key before choosing models.'
+      : 'Add the approved HTTPS gateway URL before choosing models.';
+    liteLlmSettingsError.classList.remove('hidden');
+    (liteLlmEndpoint.value.trim() ? liteLlmApiKey : liteLlmEndpoint).focus();
+    return;
+  }
+  if (next > 2 && !setupStepComplete(2)) {
+    showConnectionSetupStep(2, true);
+    liteLlmSettingsError.textContent = 'Choose or enter the chat model alias before testing the connection.';
+    liteLlmSettingsError.classList.remove('hidden');
+    liteLlmModel.focus();
+    return;
+  }
+  showConnectionSetupStep(next, true);
 }
 
 function fillLiteLlmSettings(liteLlm) {
+  diagnosticFixApplied = false;
   liteLlmModelProfiles = liteLlm.modelProfiles || {};
   liteLlmEndpoint.value = liteLlm.endpoint || '';
   liteLlmModelsEndpoint.value = liteLlm.modelsEndpoint || '';
@@ -763,6 +3239,10 @@ function fillLiteLlmSettings(liteLlm) {
     liteLlm.embeddingModel || ''
   );
   agentRuntime.value = liteLlm.runtime === 'deep' ? 'deep' : 'standard';
+  updateRunControlsSummary();
+  hasStoredLiteLlmKey = Boolean(liteLlm.hasApiKey);
+  const savedConnectionReady = Boolean(liteLlm.endpoint && liteLlm.model && liteLlm.hasApiKey);
+  setupCallout.classList.toggle('hidden', savedConnectionReady);
   document.getElementById('litellm-key-state').textContent = liteLlm.hasApiKey ? '· stored securely' : '· required';
   const details = [];
   if (liteLlm.caCertificatePath) details.push('CA: ' + liteLlm.caCertificatePath);
@@ -770,6 +3250,94 @@ function fillLiteLlmSettings(liteLlm) {
   details.push('POST /chat/completions');
   document.getElementById('litellm-details').textContent = details.join(' · ');
   liteLlmSettingsError.classList.add('hidden');
+  connectionDiagnostics.classList.add('hidden');
+  updateConnectionReadiness();
+  showConnectionSetupStep(connectionSetupStep);
+}
+
+function setConnectionReadiness(state, title, detail) {
+  connectionReadiness.classList.remove('configured', 'verified', 'failed');
+  if (state) connectionReadiness.classList.add(state);
+  readinessTitle.textContent = title;
+  readinessDetail.textContent = detail;
+}
+
+function updateConnectionReadiness() {
+  const configured = Boolean(
+    liteLlmEndpoint.value.trim() &&
+    liteLlmModel.value.trim() &&
+    (liteLlmApiKey.value.trim() || hasStoredLiteLlmKey)
+  );
+  if (configured) {
+    setConnectionReadiness('configured', 'Ready to test', 'Validate chat, catalog and semantic memory before saving.');
+  } else {
+    setConnectionReadiness('', 'Setup required', 'Add the gateway, model alias and key.');
+  }
+}
+
+function markConnectionEdited() {
+  connectionDiagnostics.classList.add('hidden');
+  liteLlmSettingsError.classList.add('hidden');
+  updateConnectionReadiness();
+  showConnectionSetupStep(connectionSetupStep);
+}
+
+function renderConnectionDiagnostics(diagnostics) {
+  lastConnectionDiagnostics = diagnostics || [];
+  connectionDiagnostics.innerHTML = lastConnectionDiagnostics.map((item, diagnosticIndex) => {
+    const duration = item.durationMs === undefined ? '' : '<span class="diagnostic-time">' + item.durationMs + ' ms</span>';
+    const fixes = (item.fixes || []).length
+      ? '<span class="diagnostic-fixes">' + item.fixes.map((fix, fixIndex) =>
+          '<button type="button" data-diagnostic-fix="' + diagnosticIndex + ':' + fixIndex + '">' + escapeHtml(fix.label) + '</button>'
+        ).join('') + '</span>'
+      : '';
+    return '<div class="diagnostic ' + escapeHtml(item.status) + '">' +
+      '<span class="diagnostic-dot" aria-hidden="true"></span>' +
+      '<span class="diagnostic-copy"><strong>' + escapeHtml(item.label) + '</strong><small>' + escapeHtml(item.detail) + '</small>' + fixes + '</span>' +
+      duration + '</div>';
+  }).join('');
+  connectionDiagnostics.classList.remove('hidden');
+}
+
+function applyDiagnosticFix(fix) {
+  if (!fix) return;
+  const advancedSettings = document.getElementById('advanced-settings');
+  let retest = false;
+  if (fix.kind === 'set-reasoning') {
+    advancedSettings.open = true;
+    liteLlmReasoningEffort.value = fix.value;
+    applyModelCapabilities(false);
+    retest = true;
+  } else if (fix.kind === 'clear-sampling') {
+    advancedSettings.open = true;
+    if (fix.target === 'temperature' || fix.target === 'both') liteLlmTemperature.value = '';
+    if (fix.target === 'top-p' || fix.target === 'both') liteLlmTopP.value = '';
+    retest = true;
+  } else if (fix.kind === 'set-auth-header') {
+    liteLlmAuthHeader.value = fix.value;
+    retest = true;
+  } else if (fix.kind === 'open-ca-setup') {
+    status.textContent = 'Opening corporate CA setup';
+    vscode.postMessage({ type: 'configureGatewayCa' });
+    return;
+  } else if (fix.kind === 'focus-field') {
+    showConnectionSetupStep(fix.field === 'model' ? 2 : 1, true);
+    const field = {
+      endpoint: liteLlmEndpoint,
+      model: liteLlmModel,
+      'api-key': liteLlmApiKey,
+      'auth-header': liteLlmAuthHeader
+    }[fix.field];
+    field?.focus();
+    announce(fix.label);
+    return;
+  }
+  if (!retest) return;
+  diagnosticFixApplied = true;
+  markConnectionEdited();
+  status.textContent = 'Applied recommended connection settings';
+  announce('Recommended settings applied. Testing the connection again.');
+  requestAnimationFrame(testLiteLlmSettings);
 }
 
 function isEmbeddingModel(model) {
@@ -811,6 +3379,43 @@ function detectModelPreset(model) {
   return 'custom';
 }
 
+function previewModelCompatibility() {
+  const resolved = liteLlmModelPreset.value === 'auto'
+    ? detectModelPreset(liteLlmModel.value)
+    : liteLlmModelPreset.value;
+  renderModelCompatibility(resolved, modelCapabilityCatalog[resolved] || modelCapabilityCatalog.custom);
+}
+
+function renderModelCompatibility(resolved, capabilities) {
+  const alias = liteLlmModel.value.trim();
+  modelCompatibility.classList.toggle('hidden', !alias);
+  if (!alias) return;
+  const automatic = liteLlmModelPreset.value === 'auto';
+  const effort = liteLlmReasoningEffort.value;
+  let state = 'ready';
+  let title = 'Compatibility profile ready to test';
+  let detail = (automatic ? 'Auto-detected' : 'Selected manually') + ' · ' + capabilities.label + '.';
+  if (capabilities.toolCalling === 'unsupported') {
+    state = 'failed';
+    title = 'Not compatible with this agent';
+    detail = capabilities.label + ' requires an API other than Chat Completions for function tools. Choose another model or use Custom only if the gateway exposes different capabilities.';
+  } else if (resolved === 'custom') {
+    state = 'warning';
+    title = automatic ? 'Compatibility could not be inferred' : 'Gateway-defined compatibility';
+    detail = 'No assumptions are applied to this alias. Configure only documented parameters, then run Test connection.';
+  } else if (capabilities.toolCalling === 'reasoning-none-only' && effort !== 'none') {
+    state = 'warning';
+    title = 'Reasoning none is required for tools';
+    detail = capabilities.label + ' needs reasoning_effort none on Chat Completions. The recommended value can be selected in Advanced model settings.';
+  } else {
+    detail += ' Run Test connection to verify the actual gateway deployment.';
+  }
+  modelCompatibility.classList.remove('ready', 'warning', 'failed');
+  modelCompatibility.classList.add(state);
+  modelCompatibilityTitle.textContent = title;
+  modelCompatibilityDetail.textContent = detail;
+}
+
 function applyModelCapabilities(recommendDefaults) {
   const resolved = liteLlmModelPreset.value === 'auto'
     ? detectModelPreset(liteLlmModel.value)
@@ -836,17 +3441,20 @@ function applyModelCapabilities(recommendDefaults) {
     liteLlmTopP.value = '';
   }
   liteLlmCapabilities.textContent = capabilities.label + ' · ' + capabilities.guidance;
+  renderModelCompatibility(resolved, capabilities);
 }
 
 function openLiteLlmSettings() {
-  liteLlmSettings.classList.remove('hidden');
-  liteLlmModel.focus();
+  openTopPanel(
+    liteLlmSettings,
+    liteLlmToggle,
+    () => setupSteps.find(section => !section.hidden)?.querySelector('h3') || liteLlmEndpoint
+  );
 }
 
-function saveLiteLlmSettings() {
-  liteLlmSettingsError.classList.add('hidden');
-  vscode.postMessage({
-    type: 'saveLiteLlm',
+function liteLlmFormMessage(type) {
+  return {
+    type,
     endpoint: liteLlmEndpoint.value,
     modelsEndpoint: liteLlmModelsEndpoint.value,
     model: liteLlmModel.value,
@@ -858,45 +3466,276 @@ function saveLiteLlmSettings() {
     topP: liteLlmTopP.value,
     semanticMemoryEnabled: semanticMemoryEnabled.checked,
     embeddingModel: embeddingModel.value
-  });
+  };
+}
+
+function saveLiteLlmSettings() {
+  liteLlmSettingsError.classList.add('hidden');
+  vscode.postMessage(liteLlmFormMessage('saveLiteLlm'));
+}
+
+function testLiteLlmSettings() {
+  liteLlmSettingsError.classList.add('hidden');
+  vscode.postMessage(liteLlmFormMessage('testLiteLlm'));
 }
 
 function wireStarterButtons() {
   document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => {
     prompt.value = button.dataset.prompt;
+    resizePrompt();
+    scheduleDraftPersist();
     prompt.focus();
+    const placeholderStart = prompt.value.indexOf('[');
+    const placeholderEnd = placeholderStart < 0 ? -1 : prompt.value.indexOf(']', placeholderStart);
+    if (placeholderStart >= 0 && placeholderEnd > placeholderStart) {
+      prompt.setSelectionRange(placeholderStart, placeholderEnd + 1);
+    }
+    announce('Editable task draft prepared. Nothing runs until you press Send.');
   }));
 }
 
-function resetConversation() {
+function resetConversation(context, history, threads, draft = '') {
+  finishLiveRun();
+  hiddenHistoryMessages = [];
   timeline.innerHTML = welcomeMarkup;
   clearCurrentPlan();
-  prompt.value = '';
+  renderContextState(context || currentContextState);
+  if (threads) renderThreads(threads);
+  setContextExpanded(false);
+  closeTopPanels(false);
+  prompt.value = draft || localDrafts[activeThreadId] || '';
+  updatePromptTokenEstimate();
+  rememberDraftLocally();
+  replacePendingOnSubmit = false;
   newThreadButton.disabled = false;
+  const recovery = threads?.recovery;
+  setAutonomyMode(recovery?.mode || threads?.autonomyMode || 'review');
+  remoteRunActive = Boolean(threads?.remoteRunActive);
   setBusy(false);
-  status.textContent = 'Ready';
   wireStarterButtons();
+  renderConversationHistory(history);
+  const latest = (history || []).at(-1);
+  pendingRequestText = latest?.role === 'user' ? latest.text : '';
+  pendingRequestId = latest?.role === 'user' ? latest.id : '';
+  if (pendingRequestText && recovery?.status === 'running') {
+    appendRecovery(
+      'This request is still marked active in another VS Code window. Continue there, or refresh after that run finishes.',
+      false,
+      false,
+      'Try again',
+      true
+    );
+  } else if (pendingRequestText && recovery?.status === 'interrupted') {
+    appendRecovery(
+      'The previous extension session ended before an answer was saved. Restarting replays this request safely from the beginning.',
+      false,
+      true,
+      'Restart request'
+    );
+  } else if (pendingRequestText && recovery?.status === 'cancelled') {
+    appendRecovery('This run was cancelled. You can run the request again or edit it first.', false, true, 'Run again');
+  } else if (pendingRequestText && recovery?.status === 'failed') {
+    appendRecovery('This run ended with an error. You can retry it or edit the request first.');
+  } else if (pendingRequestText) {
+    appendRecovery('This request did not receive an answer. You can retry it or edit it before sending again.');
+  }
+  resizePrompt();
+  updateComposerHint();
 }
 
 send.addEventListener('click', submit);
-cancel.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
+cancel.addEventListener('click', () => {
+  if (!busy || cancellationPending) return;
+  setCancellationPending(true);
+  updateLiveRunStatus('Requesting stop');
+  announce('Stop requested. Waiting for the current operation to finish cancelling.');
+  vscode.postMessage({ type: 'cancel' });
+});
+timeline.addEventListener('click', event => {
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest('[data-show-earlier]')) {
+    revealEarlierHistory();
+    return;
+  }
+  const copyMessage = target?.closest('[data-copy-message]');
+  if (copyMessage && !copyMessage.disabled) {
+    const message = copyMessage.closest('.message.assistant');
+    const text = message ? messageSources.get(message) : '';
+    copyMessage.disabled = true;
+    copyMessage.textContent = 'Copying…';
+    vscode.postMessage({ type: 'copyMessage', id: message?.dataset.messageId || '', text: text || '' });
+    return;
+  }
+  if (target?.closest('[data-add-memory-message]') && !busy && !remoteRunActive) {
+    vscode.postMessage({ type: 'addMemoryEntry' });
+    return;
+  }
+  if (target?.closest('[data-toggle-live-run]') && liveRunState) {
+    setLiveRunExpanded(!liveRunState.expanded);
+    return;
+  }
+  const openReview = target?.closest('[data-open-run-review]');
+  if (openReview) {
+    openRunReview(openReview.dataset.openRunReview, openReview);
+    return;
+  }
+  const reviewChange = target?.closest('[data-review-change]');
+  if (reviewChange) {
+    vscode.postMessage({ type: 'openChangeDiff', id: reviewChange.dataset.reviewChange });
+    return;
+  }
+  const restoreChange = target?.closest('[data-restore-change]');
+  if (restoreChange && !restoreChange.disabled) {
+    restoreChange.disabled = true;
+    restoreChange.textContent = 'Restoring…';
+    vscode.postMessage({ type: 'restoreChange', id: restoreChange.dataset.restoreChange });
+    return;
+  }
+  if (target?.closest('[data-open-changes]')) {
+    vscode.postMessage({ type: 'openChanges' });
+    return;
+  }
+  if (target?.closest('[data-refresh-run]')) {
+    status.textContent = 'Refreshing run status';
+    vscode.postMessage({ type: 'refreshRunState' });
+    return;
+  }
+  if (target?.closest('[data-retry-pending]') && pendingRequestText && !busy) {
+    currentRunSummary = createRunSummary();
+    clearCurrentPlan();
+    timeline.querySelectorAll('.recovery-actions').forEach(element => element.remove());
+    setBusy(true);
+    vscode.postMessage({ type: 'retry', mode: autonomyMode.value });
+    return;
+  }
+  if (target?.closest('[data-edit-pending]') && pendingRequestText && !busy) {
+    replacePendingOnSubmit = true;
+    prompt.value = pendingRequestText;
+    resizePrompt();
+    scheduleDraftPersist();
+    prompt.focus();
+    return;
+  }
+  if (target?.closest('[data-discard-pending]') && pendingRequestText && !busy && !remoteRunActive) {
+    timeline.querySelectorAll('[data-retry-pending], [data-edit-pending], [data-discard-pending]').forEach(button => {
+      button.disabled = true;
+    });
+    status.textContent = 'Confirming request discard';
+    vscode.postMessage({ type: 'discardRecovery', threadId: activeThreadId, messageId: pendingRequestId });
+  }
+});
+runReviewPanel.addEventListener('click', event => {
+  const target = event.target instanceof Element ? event.target : null;
+  const reviewChange = target?.closest('[data-review-change]');
+  if (reviewChange) {
+    vscode.postMessage({ type: 'openChangeDiff', id: reviewChange.dataset.reviewChange });
+    return;
+  }
+  const restoreChange = target?.closest('[data-restore-change]');
+  if (restoreChange && !restoreChange.disabled) {
+    restoreChange.disabled = true;
+    restoreChange.textContent = 'Restoring…';
+    vscode.postMessage({ type: 'restoreChange', id: restoreChange.dataset.restoreChange });
+    return;
+  }
+  const restoreRun = target?.closest('[data-restore-run]');
+  if (restoreRun && !restoreRun.disabled) {
+    const review = runReviews.get(restoreRun.dataset.restoreRun);
+    if (!review) return;
+    const changeIds = review.files.map(file => file.id).filter(Boolean);
+    restoreRun.disabled = true;
+    restoreRun.textContent = 'Preparing undo…';
+    vscode.postMessage({ type: 'restoreRunChanges', runId: review.id, changeIds });
+    return;
+  }
+  if (target?.closest('[data-open-changes]')) vscode.postMessage({ type: 'openChanges' });
+});
 newThreadButton.addEventListener('click', () => {
   if (newThreadButton.disabled) return;
+  persistDraftNow();
   newThreadButton.disabled = true;
   status.textContent = 'Starting a new thread';
   vscode.postMessage({ type: 'newThread' });
 });
-document.getElementById('memory').addEventListener('click', () => vscode.postMessage({ type: 'openMemory' }));
-document.getElementById('litellm').addEventListener('click', () => liteLlmSettings.classList.contains('hidden') ? openLiteLlmSettings() : liteLlmSettings.classList.add('hidden'));
-document.getElementById('litellm-close').addEventListener('click', () => liteLlmSettings.classList.add('hidden'));
-document.getElementById('litellm-save').addEventListener('click', saveLiteLlmSettings);
+memoryToggle.addEventListener('click', () => memoryPanel.classList.contains('hidden') ? openMemoryCenter() : closeTopPanels());
+briefToggle.addEventListener('click', () => briefPanel.classList.contains('hidden') ? openTaskBrief() : closeTopPanels());
+liteLlmToggle.addEventListener('click', () => liteLlmSettings.classList.contains('hidden') ? openLiteLlmSettings() : closeTopPanels());
+document.getElementById('litellm-close').addEventListener('click', () => closeTopPanels());
+document.getElementById('brief-close').addEventListener('click', () => closeTopPanels());
+document.getElementById('brief-use').addEventListener('click', useTaskBrief);
+document.getElementById('brief-clear').addEventListener('click', clearTaskBrief);
+[briefObjective, briefScope, briefDone, briefConstraints].forEach(field => {
+  field.addEventListener('input', captureBriefState);
+});
+document.getElementById('profile-import').addEventListener('click', () => vscode.postMessage({ type: 'importConnectionProfile' }));
+document.getElementById('profile-export').addEventListener('click', () => vscode.postMessage({ type: 'exportConnectionProfile' }));
+document.getElementById('support-export').addEventListener('click', () => vscode.postMessage({
+  type: 'exportSupportBundle',
+  diagnostics: lastConnectionDiagnostics
+}));
+document.getElementById('memory-close').addEventListener('click', () => closeTopPanels());
+document.getElementById('memory-add').addEventListener('click', () => vscode.postMessage({ type: 'addMemoryEntry' }));
+document.getElementById('memory-open-file').addEventListener('click', () => vscode.postMessage({ type: 'openMemoryFile' }));
+memoryList.addEventListener('click', event => {
+  const target = event.target instanceof Element ? event.target : null;
+  const edit = target?.closest('[data-edit-memory]');
+  const remove = target?.closest('[data-delete-memory]');
+  if (edit) vscode.postMessage({ type: 'editMemoryEntry', id: edit.dataset.editMemory });
+  else if (remove) vscode.postMessage({ type: 'deleteMemoryEntry', id: remove.dataset.deleteMemory });
+});
+threadsToggle.addEventListener('click', () => setThreadPanelOpen(threadPanel.classList.contains('hidden')));
+document.getElementById('threads-close').addEventListener('click', () => setThreadPanelOpen(false));
+document.getElementById('run-review-close').addEventListener('click', () => closeTopPanels());
+threadSearch.addEventListener('input', renderThreadList);
+threadList.addEventListener('click', event => {
+  const target = event.target instanceof Element ? event.target : null;
+  const select = target?.closest('[data-select-thread]');
+  const pin = target?.closest('[data-pin-thread]');
+  const rename = target?.closest('[data-rename-thread]');
+  const remove = target?.closest('[data-delete-thread]');
+  if (select) {
+    if (select.dataset.selectThread === activeThreadId) setThreadPanelOpen(false);
+    else {
+      persistDraftNow();
+      vscode.postMessage({ type: 'selectThread', id: select.dataset.selectThread });
+    }
+  } else if (pin) {
+    vscode.postMessage({ type: 'toggleThreadPinned', id: pin.dataset.pinThread });
+  } else if (rename) {
+    vscode.postMessage({ type: 'renameThread', id: rename.dataset.renameThread });
+  } else if (remove) {
+    vscode.postMessage({ type: 'deleteThread', id: remove.dataset.deleteThread });
+  }
+});
+connectionSaveButton.addEventListener('click', saveLiteLlmSettings);
+connectionTestButton.addEventListener('click', testLiteLlmSettings);
+setupBackButton.addEventListener('click', () => moveToConnectionSetupStep(connectionSetupStep - 1));
+setupNextButton.addEventListener('click', () => moveToConnectionSetupStep(connectionSetupStep + 1));
+setupStepButtons.forEach(button => button.addEventListener('click', () => {
+  moveToConnectionSetupStep(Number(button.dataset.setupStepTarget));
+}));
+connectionDiagnostics.addEventListener('click', event => {
+  const button = event.target instanceof Element ? event.target.closest('[data-diagnostic-fix]') : null;
+  if (!button) return;
+  const [diagnosticIndex, fixIndex] = String(button.dataset.diagnosticFix || '').split(':').map(Number);
+  const fix = lastConnectionDiagnostics[diagnosticIndex]?.fixes?.[fixIndex];
+  applyDiagnosticFix(fix);
+});
+contextToggle.addEventListener('click', () => setContextExpanded(contextInspector.classList.contains('hidden')));
+contextClear.addEventListener('click', () => vscode.postMessage({ type: 'clearPinnedContext' }));
+contextAddFile.addEventListener('click', () => vscode.postMessage({ type: 'addFileContext' }));
+setupCalloutAction.addEventListener('click', openLiteLlmSettings);
+pinnedContext.addEventListener('click', event => {
+  const button = event.target instanceof Element ? event.target.closest('[data-remove-context]') : null;
+  if (button) vscode.postMessage({ type: 'removePinnedContext', id: button.dataset.removeContext });
+});
 activityToggle.addEventListener('click', () => {
   if (!activityDock.classList.contains('has-plan')) return;
   const expand = !activityDock.classList.contains('expanded');
   planManuallyCollapsed = !expand;
   setActivityExpanded(expand);
 });
-document.getElementById('litellm-advanced').addEventListener('click', () => vscode.postMessage({ type: 'configureLiteLlm' }));
+advancedSetupButton.addEventListener('click', () => vscode.postMessage({ type: 'configureGatewayCa' }));
 document.getElementById('litellm-load-models').addEventListener('click', () => {
   liteLlmSettingsError.classList.add('hidden');
   vscode.postMessage({
@@ -909,6 +3748,7 @@ liteLlmModel.addEventListener('change', () => {
   const hasSavedProfile = Boolean(liteLlmModelProfiles[String(liteLlmModel.value).trim()]);
   fillModelProfile(liteLlmModel.value, {}, !hasSavedProfile);
 });
+liteLlmModel.addEventListener('input', previewModelCompatibility);
 liteLlmModelPreset.addEventListener('change', () => applyModelCapabilities(true));
 liteLlmReasoningEffort.addEventListener('change', () => applyModelCapabilities(false));
 liteLlmTemperature.addEventListener('input', () => {
@@ -917,23 +3757,102 @@ liteLlmTemperature.addEventListener('input', () => {
 liteLlmTopP.addEventListener('input', () => {
   if (liteLlmTopP.value !== '') liteLlmTemperature.value = '';
 });
+[
+  liteLlmEndpoint,
+  liteLlmModelsEndpoint,
+  liteLlmModel,
+  liteLlmApiKey,
+  liteLlmAuthHeader,
+  liteLlmModelPreset,
+  liteLlmReasoningEffort,
+  liteLlmTemperature,
+  liteLlmTopP,
+  semanticMemoryEnabled,
+  embeddingModel
+].forEach(element => {
+  element.addEventListener('input', markConnectionEdited);
+  element.addEventListener('change', markConnectionEdited);
+});
 agentRuntime.addEventListener('change', () => {
+  updateRunControlsSummary();
   vscode.postMessage({ type: 'selectRuntime', runtime: agentRuntime.value });
 });
+autonomyMode.addEventListener('change', () => {
+  setAutonomyMode(autonomyMode.value);
+  vscode.postMessage({ type: 'selectAutonomy', mode: autonomyMode.value });
+});
 prompt.addEventListener('keydown', event => {
-  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); submit(); }
+});
+prompt.addEventListener('input', () => {
+  resizePrompt();
+  updatePromptTokenEstimate();
+  scheduleDraftPersist();
+});
+prompt.addEventListener('blur', persistDraftNow);
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+  if (topPanels.some(panel => !panel.classList.contains('hidden'))) {
+    event.preventDefault();
+    closeTopPanels();
+    return;
+  }
+  if (!contextInspector.classList.contains('hidden')) {
+    event.preventDefault();
+    setContextExpanded(false);
+    contextToggle.focus();
+    return;
+  }
+  if (runControls.open) {
+    event.preventDefault();
+    runControls.open = false;
+    runControls.querySelector('summary').focus();
+    return;
+  }
+  if (activityDock.classList.contains('expanded')) {
+    event.preventDefault();
+    planManuallyCollapsed = true;
+    setActivityExpanded(false);
+    activityToggle.focus();
+  }
 });
 wireStarterButtons();
+updateRunControlsSummary();
+
+document.addEventListener('click', event => {
+  if (runControls.open && event.target instanceof Node && !runControls.contains(event.target)) {
+    runControls.open = false;
+  }
+});
 
 window.addEventListener('message', ({ data }) => {
   switch (data.type) {
+    case 'protocolError':
+      if (!data.active) setBusy(false);
+      status.textContent = 'Local action rejected';
+      appendRecovery(data.message || 'The local action could not be processed safely.', true, false);
+      announce(status.textContent + '. ' + (data.message || ''));
+      break;
     case 'hydrate':
       document.getElementById('workspace').textContent = data.workspace;
-      document.getElementById('active-file').textContent = data.activeFile || 'No active file';
       fillLiteLlmSettings(data.liteLlm || {});
-      (data.history || []).forEach(appendMessage);
+      resetConversation(data.context, data.history, data, data.draft);
       break;
-    case 'liteLlmSettings': fillLiteLlmSettings(data.liteLlm); break;
+    case 'openConnectionSettings':
+      fillLiteLlmSettings(data.liteLlm || {});
+      showConnectionSetupStep(1, false);
+      openLiteLlmSettings();
+      vscode.postMessage({ type: 'connectionSettingsOpened' });
+      break;
+    case 'liteLlmSettings':
+      fillLiteLlmSettings(data.liteLlm);
+      if (data.message) status.textContent = data.message;
+      break;
+    case 'gatewayCaError':
+      liteLlmSettingsError.textContent = data.message;
+      liteLlmSettingsError.classList.remove('hidden');
+      openLiteLlmSettings();
+      break;
     case 'modelsLoaded':
       liteLlmModelsEndpoint.value = data.endpoint;
       loadedModelCatalog = data.models || [];
@@ -953,13 +3872,82 @@ window.addEventListener('message', ({ data }) => {
       liteLlmSettingsError.classList.remove('hidden');
       openLiteLlmSettings();
       break;
+    case 'connectionTestStarted':
+      connectionTestButton.disabled = true;
+      connectionSaveButton.disabled = true;
+      connectionTestButton.textContent = 'Testing…';
+      connectionDiagnostics.classList.add('hidden');
+      setConnectionReadiness('configured', 'Testing connection', 'Checking the configured local gateway paths.');
+      break;
+    case 'connectionTested':
+      connectionTestButton.disabled = false;
+      connectionSaveButton.disabled = false;
+      connectionTestButton.textContent = 'Test connection';
+      renderConnectionDiagnostics(data.diagnostics);
+      const failedDiagnostic = (data.diagnostics || []).find(item => item.status === 'failed');
+      if (failedDiagnostic) {
+        setConnectionReadiness('failed', 'Connection needs attention', failedDiagnostic.label + ': ' + failedDiagnostic.detail);
+      } else {
+        setConnectionReadiness(
+          'verified',
+          diagnosticFixApplied ? 'Correction verified' : 'Connection verified',
+          diagnosticFixApplied
+            ? 'The recommended settings work. Save the connection to keep them.'
+            : 'Chat and all configured services responded successfully.'
+        );
+      }
+      break;
     case 'liteLlmSaved':
       fillLiteLlmSettings(data.liteLlm);
-      liteLlmSettings.classList.add('hidden');
+      closeTopPanels();
       status.textContent = data.message;
+      break;
+    case 'profileImported':
+      fillLiteLlmSettings(data.liteLlm || {});
+      setAutonomyMode(data.autonomyMode || 'review');
+      showConnectionSetupStep(data.needsKey || data.needsCorporateCa ? 1 : 3, true);
+      liteLlmSettingsError.textContent = data.needsKey && data.needsCorporateCa
+        ? 'Profile imported. Enter the gateway key and import the required corporate CA PEM; neither is stored in profile files.'
+        : data.needsKey
+          ? 'Profile imported. Enter the gateway key; it is intentionally never stored in profile files.'
+        : data.needsCorporateCa
+          ? 'Profile imported. Import the required corporate CA PEM on this machine before testing.'
+          : '';
+      liteLlmSettingsError.classList.toggle('hidden', !liteLlmSettingsError.textContent);
+      setConnectionReadiness(
+        'configured',
+        data.needsKey || data.needsCorporateCa ? 'Local setup still required' : 'Profile imported',
+        data.needsKey || data.needsCorporateCa
+          ? 'Add the machine-local credential or certificate, then test the connection.'
+          : 'No secret material was imported. Test the connection before use.'
+      );
+      status.textContent = data.message;
+      break;
+    case 'profileExported':
+      status.textContent = data.message;
+      announce(data.message);
+      break;
+    case 'supportBundleExported':
+      status.textContent = data.message;
+      announce(data.message);
+      break;
+    case 'profileActionError':
+      liteLlmSettingsError.textContent = data.message;
+      liteLlmSettingsError.classList.remove('hidden');
+      openLiteLlmSettings();
+      break;
+    case 'memoryState':
+      renderMemoryState(data.memory, data.message || '');
+      if (!memoryPanel.classList.contains('hidden')) announce(data.message || 'Project memory loaded');
+      break;
+    case 'memoryActionError':
+      memoryOverview.textContent = data.message || 'Could not update project memory';
+      memoryOverview.setAttribute('role', 'alert');
+      announce(memoryOverview.textContent);
       break;
     case 'runtimeChanged':
       agentRuntime.value = data.runtime;
+      updateRunControlsSummary();
       status.textContent = data.message;
       break;
     case 'runtimeChangeError':
@@ -967,39 +3955,247 @@ window.addEventListener('message', ({ data }) => {
       status.textContent = 'Could not change agent runtime';
       const runtimeError = document.createElement('div');
       runtimeError.className = 'error';
+      runtimeError.setAttribute('role', 'alert');
       runtimeError.textContent = data.message;
       timeline.appendChild(runtimeError);
+      break;
+    case 'autonomyChanged':
+      setAutonomyMode(data.mode || 'review');
+      status.textContent = data.message;
       break;
     case 'liteLlmSaveError':
       liteLlmSettingsError.textContent = data.message;
       liteLlmSettingsError.classList.remove('hidden');
       openLiteLlmSettings();
       break;
-    case 'user': case 'assistant': appendMessage(data.message); break;
+    case 'user':
+      pendingRequestId = data.message?.id || '';
+      appendMessage(data.message);
+      moveLiveRunToEnd();
+      break;
+    case 'pendingUserReplaced':
+      pendingRequestText = data.text || pendingRequestText;
+      updatePendingMessage(pendingRequestText, data.html || '');
+      timeline.querySelectorAll('.recovery-actions').forEach(element => element.remove());
+      moveLiveRunToEnd();
+      break;
+    case 'assistant':
+      pendingRequestText = '';
+      pendingRequestId = '';
+      replacePendingOnSubmit = false;
+      timeline.querySelectorAll('.recovery-actions').forEach(element => element.remove());
+      appendMessage(data.message);
+      break;
+    case 'sendRejected':
+      prompt.value = data.text || pendingRequestText;
+      if (data.replacePending) {
+        replacePendingOnSubmit = true;
+      } else {
+        pendingRequestText = '';
+        pendingRequestId = '';
+        replacePendingOnSubmit = false;
+      }
+      resizePrompt();
+      persistDraftNow();
+      prompt.focus();
+      break;
+    case 'recoveryDiscarded':
+      pendingRequestText = '';
+      pendingRequestId = '';
+      replacePendingOnSubmit = false;
+      status.textContent = data.message || 'Unfinished request discarded';
+      announce(status.textContent);
+      break;
+    case 'recoveryDiscardCancelled':
+      timeline.querySelectorAll('[data-retry-pending], [data-edit-pending], [data-discard-pending]').forEach(button => {
+        button.disabled = false;
+      });
+      status.textContent = 'Request kept';
+      break;
+    case 'recoveryDiscardError':
+      timeline.querySelectorAll('[data-retry-pending], [data-edit-pending], [data-discard-pending]').forEach(button => {
+        button.disabled = false;
+      });
+      appendRecovery(data.message || 'The unfinished request could not be discarded.', true, false);
+      break;
+    case 'preflightFailed':
+      setBusy(false);
+      prompt.value = data.text || pendingRequestText;
+      if (data.replacePending) replacePendingOnSubmit = true;
+      else {
+        pendingRequestText = '';
+        pendingRequestId = '';
+      }
+      resizePrompt();
+      persistDraftNow();
+      status.textContent = 'Request not started';
+      announce('Request not started. ' + data.message);
+      if (data.openConnectionSettings) {
+        liteLlmSettingsError.textContent = data.message;
+        liteLlmSettingsError.classList.remove('hidden');
+        showConnectionSetupStep(data.kind === 'model' ? 2 : 1, false);
+        openLiteLlmSettings();
+        requestAnimationFrame(() => (data.kind === 'model' ? liteLlmModel : liteLlmEndpoint).focus());
+      } else {
+        appendRecovery(data.message, true, false);
+        prompt.focus();
+      }
+      break;
+    case 'messageCopied':
+      const copiedButton = timeline.querySelector('.message[data-message-id="' + CSS.escape(data.id || '') + '"] [data-copy-message]');
+      if (copiedButton) {
+        copiedButton.textContent = 'Copied';
+        announce('Agent response copied to the clipboard.');
+        setTimeout(() => {
+          if (!copiedButton.isConnected) return;
+          copiedButton.disabled = false;
+          copiedButton.textContent = 'Copy';
+        }, 1400);
+      }
+      break;
+    case 'messageCopyError':
+      const failedCopyButton = timeline.querySelector('.message[data-message-id="' + CSS.escape(data.id || '') + '"] [data-copy-message]');
+      if (failedCopyButton) {
+        failedCopyButton.disabled = false;
+        failedCopyButton.textContent = 'Copy';
+      }
+      status.textContent = data.message || 'Could not copy the response';
+      announce(status.textContent);
+      break;
     case 'busy': setBusy(data.value); break;
-    case 'status': status.textContent = data.label; break;
+    case 'cancelState':
+      if (data.state === 'requested' || data.state === 'already-requested') {
+        setCancellationPending(true);
+        updateLiveRunStatus('Stopping current operation');
+      } else {
+        setCancellationPending(false);
+        if (busy) updateLiveRunStatus('No cancellable operation is active');
+      }
+      break;
+    case 'status':
+      status.textContent = data.label;
+      updateLiveRunStatus(data.label);
+      break;
     case 'plan':
       const firstPlanUpdate = !activityDock.classList.contains('has-plan');
       activityDock.classList.add('has-plan');
+      currentRunSummary.plan = (data.items || []).map(item => ({ text: item.text, completed: Boolean(item.completed) }));
       planItems.innerHTML = data.items.map(item => '<li class="' + (item.completed ? 'done' : '') + '">' + escapeHtml(item.text) + '</li>').join('');
+      if (busy) {
+        ensureLiveRun();
+        renderLiveRun();
+      }
       if (firstPlanUpdate && !planManuallyCollapsed) setActivityExpanded(true);
       break;
+    case 'contextReceipt':
+      currentRunSummary.contextReceipt = data.receipt || undefined;
+      if (liveRunState) renderLiveRun();
+      break;
     case 'activity': appendActivity(data.kind, data.title, data.detail); break;
-    case 'usage': status.textContent = 'Ready · ' + data.input + ' in / ' + data.output + ' out'; break;
+    case 'changes':
+      currentRunSummary.files = new Map((data.items || []).map(item => [item.path, item]));
+      currentRunSummary.omittedChanges = Number(data.omitted || 0);
+      if (liveRunState) renderLiveRun();
+      break;
+    case 'usage':
+      currentRunSummary.usage = { input: data.input, output: data.output };
+      status.textContent = 'Ready · ' + data.input + ' in / ' + data.output + ' out';
+      if (liveRunState) renderLiveRun();
+      break;
     case 'error':
-      const error = document.createElement('div'); error.className = 'error'; error.textContent = data.message; timeline.appendChild(error); scrollConversationToBottom(); break;
-    case 'reset': resetConversation(); break;
+      currentRunSummary.failed = true;
+      currentRunSummary.error = data.message || '';
+      if (liveRunState) {
+        liveRunState.failed = true;
+        liveRunState.status = 'Run needs attention';
+        renderLiveRun();
+      }
+      appendRecovery(data.message, true, data.recoverable !== false);
+      break;
+    case 'done':
+      setCancellationPending(false);
+      currentRunSummary.cancelled = data.outcome === 'cancelled';
+      currentRunSummary.failed = data.outcome === 'failed';
+      renderRunSummary();
+      break;
+    case 'reset': resetConversation(data.context, data.history, data, data.draft); break;
+    case 'threadsUpdated':
+      renderThreads(data);
+      setRemoteRunActive(data.remoteRunActive);
+      break;
+    case 'changeRestored':
+      currentRunSummary.files.set(data.change.path, data.change);
+      runReviews.forEach(review => {
+        const index = review.files.findIndex(file => file.id === data.change.id);
+        if (index >= 0) review.files[index] = { ...data.change };
+      });
+      document.querySelectorAll('[data-restore-change="' + CSS.escape(data.change.id) + '"]').forEach(button => {
+        button.disabled = true;
+        button.textContent = 'Restored';
+      });
+      if (activeRunReviewId && !runReviewPanel.classList.contains('hidden')) {
+        const review = runReviews.get(activeRunReviewId);
+        if (review) renderRunReview(review);
+      }
+      status.textContent = data.warning ? 'File restored · manual save required' : 'Restored ' + data.change.path + ' to its pre-run state';
+      if (data.warning) appendRecovery(data.warning, true, false);
+      break;
+    case 'runChangesRestored':
+      (data.changes || []).forEach(change => {
+        currentRunSummary.files.set(change.path, change);
+        runReviews.forEach(review => {
+          const index = review.files.findIndex(file => file.id === change.id);
+          if (index >= 0) review.files[index] = { ...change };
+        });
+      });
+      if (activeRunReviewId && !runReviewPanel.classList.contains('hidden')) {
+        const restoredReview = runReviews.get(activeRunReviewId);
+        if (restoredReview) renderRunReview(restoredReview);
+      }
+      status.textContent = data.warning ? 'Run changes restored · manual save required' : 'All tracked file changes from the run were undone';
+      if (data.warning) appendRecovery(data.warning, true, false);
+      announce(status.textContent);
+      break;
+    case 'runRestoreCancelled':
+      if (activeRunReviewId === data.runId && !runReviewPanel.classList.contains('hidden')) {
+        const cancelledReview = runReviews.get(activeRunReviewId);
+        if (cancelledReview) renderRunReview(cancelledReview);
+      }
+      status.textContent = 'Run undo cancelled';
+      break;
+    case 'runChangeActionError':
+      if (activeRunReviewId === data.runId && !runReviewPanel.classList.contains('hidden')) {
+        const failedReview = runReviews.get(activeRunReviewId);
+        if (failedReview) renderRunReview(failedReview);
+      }
+      appendRecovery(data.message, true, false);
+      break;
+    case 'changeActionError':
+      document.querySelectorAll('[data-restore-change="' + CSS.escape(data.id || '') + '"]').forEach(button => {
+        button.disabled = false;
+        button.textContent = 'Restore';
+      });
+      appendRecovery(data.message, true, false);
+      break;
+    case 'threadError':
+      const threadActionError = document.createElement('div');
+      threadActionError.className = 'error';
+      threadActionError.setAttribute('role', 'alert');
+      threadActionError.textContent = data.message;
+      timeline.appendChild(threadActionError);
+      scrollConversationToBottom();
+      break;
     case 'newThreadError':
       newThreadButton.disabled = false;
       status.textContent = 'New thread failed';
       const threadError = document.createElement('div');
       threadError.className = 'error';
+      threadError.setAttribute('role', 'alert');
       threadError.textContent = data.message;
       timeline.appendChild(threadError);
       scrollConversationToBottom();
       break;
-    case 'contextPinned':
-      document.getElementById('active-file').textContent = 'Pinned: ' + data.filename; break;
+    case 'contextState': renderContextState(data.context); break;
     case 'toast': status.textContent = data.message; break;
   }
 });

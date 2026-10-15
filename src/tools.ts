@@ -4,7 +4,14 @@ import * as path from "node:path";
 import { tool } from "langchain";
 import * as vscode from "vscode";
 import { z } from "zod";
+import { requiresLocalApproval, type LocalMutationKind } from "./autonomy";
+import type { ChangeTracker } from "./change-tracker";
+import { evaluateCommandPolicy } from "./command-policy";
+import { isWorkspaceGlob, validateWorkspaceGlob } from "./glob-policy";
+import { requestLocalApproval } from "./local-approval";
 import { ProjectMemory } from "./memory";
+import { redactSensitiveText, safeErrorMessage } from "./redaction";
+import { isSensitiveWorkspacePath } from "./sensitive-files";
 import type { AgentUiEvent, RunMode } from "./types";
 
 const FILE_EXCLUSIONS = "**/{node_modules,.git,dist,build,out,coverage,.next,.turbo,vendor}/**";
@@ -16,7 +23,9 @@ export class LocalToolHost {
   public constructor(
     private readonly workspaceRoot: string,
     private readonly memory: ProjectMemory,
-    private readonly onEvent: (event: AgentUiEvent) => void
+    private readonly onEvent: (event: AgentUiEvent) => void,
+    private readonly changeTracker: ChangeTracker,
+    private readonly sensitiveValues: readonly string[] = []
   ) {}
 
   public tools(mode: RunMode, signal: AbortSignal) {
@@ -27,7 +36,8 @@ export class LocalToolHost {
           name: "list_files",
           description: "List workspace files matching a glob. Use this before guessing paths.",
           schema: z.object({
-            glob: z.string().optional().describe("Workspace glob such as src/**/*.ts. Defaults to **/*."),
+            glob: z.string().max(512).refine(isWorkspaceGlob, "Use a simple bounded glob without brace expansion.").optional()
+              .describe("Workspace glob such as src/**/*.ts. Defaults to **/*. Brace expansion is unsupported."),
             limit: z.number().int().min(1).max(500).optional()
           })
         }
@@ -51,7 +61,8 @@ export class LocalToolHost {
           description: "Search workspace text with ripgrep and return file, line, column, and matching text.",
           schema: z.object({
             query: z.string(),
-            glob: z.string().optional().describe("Optional include glob such as *.ts or src/**.")
+            glob: z.string().max(512).refine(isWorkspaceGlob, "Use a simple bounded glob without brace expansion.").optional()
+              .describe("Optional include glob such as *.ts or src/**. Brace expansion is unsupported.")
           })
         }
       ),
@@ -71,23 +82,27 @@ export class LocalToolHost {
     return [
       ...readTools,
       tool(
-        (input) => this.safe(() => this.editFile(input)),
+        (input) => this.safe(() => this.editFile(input, mode)),
         {
           name: "edit_file",
-          description: "Replace one exact, unique text block in an existing workspace file.",
+          description: mode === "review"
+            ? "Replace one exact, unique text block in an existing workspace file after explicit user approval."
+            : "Replace one exact, unique text block in an existing workspace file.",
           schema: z.object({ path: z.string(), old_text: z.string(), new_text: z.string() })
         }
       ),
       tool(
-        (input) => this.safe(() => this.createFile(input)),
+        (input) => this.safe(() => this.createFile(input, mode)),
         {
           name: "create_file",
-          description: "Create a new UTF-8 text file inside the workspace. Fails if it already exists.",
+          description: mode === "review"
+            ? "Create a new UTF-8 text file inside the workspace after explicit user approval. Fails if it already exists."
+            : "Create a new UTF-8 text file inside the workspace. Fails if it already exists.",
           schema: z.object({ path: z.string(), content: z.string() })
         }
       ),
       tool(
-        (input) => this.safe(() => this.runCommand(input, signal)),
+        (input) => this.safe(() => this.runCommand(input, signal, mode)),
         {
           name: "run_command",
           description: "Run one executable directly, without a shell, in the workspace after user approval.",
@@ -100,11 +115,11 @@ export class LocalToolHost {
         }
       ),
       tool(
-        (input) => this.safe(() => this.remember(input)),
+        (input) => this.safe(() => this.remember(input, mode)),
         {
           name: "remember_project_fact",
           description: "Append a durable, confirmed project decision or convention to project memory. Never store secrets or chat logs.",
-          schema: z.object({ note: z.string() })
+          schema: z.object({ note: z.string().min(1).max(4_000) })
         }
       )
     ];
@@ -125,7 +140,7 @@ export class LocalToolHost {
     return [
       planningTool,
       tool(
-        (input) => this.safe(() => this.runCommand(input, signal)),
+        (input) => this.safe(() => this.runCommand(input, signal, mode)),
         {
           name: "run_command",
           description: "Run one executable directly, without a shell, in the workspace after user approval.",
@@ -138,11 +153,11 @@ export class LocalToolHost {
         }
       ),
       tool(
-        (input) => this.safe(() => this.remember(input)),
+        (input) => this.safe(() => this.remember(input, mode)),
         {
           name: "remember_project_fact",
           description: "Append a durable, confirmed project decision or convention to project memory. Never store secrets or chat logs.",
-          schema: z.object({ note: z.string() })
+          schema: z.object({ note: z.string().min(1).max(4_000) })
         }
       )
     ];
@@ -152,13 +167,12 @@ export class LocalToolHost {
     try {
       return await action();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return JSON.stringify({ error: message });
+      return JSON.stringify({ error: safeErrorMessage(error, this.sensitiveValues) });
     }
   }
 
   private async listFiles(input: Record<string, unknown>): Promise<string> {
-    const glob = optionalString(input.glob) || "**/*";
+    const glob = validateWorkspaceGlob(optionalString(input.glob) || "**/*");
     const limit = clampInteger(input.limit, 1, 500, 200);
     const root = vscode.Uri.file(this.workspaceRoot);
     const files = await vscode.workspace.findFiles(
@@ -166,7 +180,9 @@ export class LocalToolHost {
       FILE_EXCLUSIONS,
       limit
     );
-    const relativeFiles = files.map((uri) => path.relative(this.workspaceRoot, uri.fsPath));
+    const relativeFiles = files
+      .map((uri) => path.relative(this.workspaceRoot, uri.fsPath))
+      .filter((file) => !isSensitiveWorkspacePath(file));
     this.onEvent({ type: "activity", kind: "files", title: `Listed ${relativeFiles.length} files · ${glob}` });
     return truncate(JSON.stringify({ files: relativeFiles, truncated: relativeFiles.length === limit }), MAX_TOOL_OUTPUT);
   }
@@ -174,6 +190,14 @@ export class LocalToolHost {
   private async readFile(input: Record<string, unknown>): Promise<string> {
     const requestedPath = requiredString(input.path, "path");
     const file = await this.resolveExistingPath(requestedPath, vscode.FileType.File);
+    const relative = path.relative(this.workspaceRoot, file);
+    if (isSensitiveWorkspacePath(relative) && !await this.approveSensitiveRead(relative)) {
+      return JSON.stringify({
+        denied: true,
+        path: relative,
+        message: "The user declined sharing this potentially sensitive file."
+      });
+    }
     const stat = await vscode.workspace.fs.stat(vscode.Uri.file(file));
     if (stat.size > MAX_FILE_BYTES) {
       throw new Error(`File is too large to read safely (${stat.size} bytes).`);
@@ -186,15 +210,20 @@ export class LocalToolHost {
       .slice(start - 1, end)
       .map((line, index) => `${start + index}: ${line}`)
       .join("\n");
-    const relative = path.relative(this.workspaceRoot, file);
     this.onEvent({ type: "activity", kind: "read", title: `${relative}:${start}-${end}` });
-    return truncate(JSON.stringify({ path: relative, startLine: start, endLine: end, content: numbered }), MAX_TOOL_OUTPUT);
+    return truncate(JSON.stringify({
+      path: relative,
+      startLine: start,
+      endLine: end,
+      content: redactSensitiveText(numbered, this.sensitiveValues)
+    }), MAX_TOOL_OUTPUT);
   }
 
   private async searchText(input: Record<string, unknown>, signal: AbortSignal): Promise<string> {
     const query = requiredString(input.query, "query");
     if (query.length > 500) throw new Error("Search query is too long.");
     const glob = optionalString(input.glob);
+    if (glob) validateWorkspaceGlob(glob);
     const args = ["--line-number", "--column", "--no-heading", "--color", "never", "--max-count", "200"];
     if (glob) args.push("--glob", glob);
     args.push("--", query, ".");
@@ -208,8 +237,12 @@ export class LocalToolHost {
     if (result.exitCode !== 0 && result.exitCode !== 1) {
       throw new Error(result.stderr || `ripgrep exited with code ${result.exitCode}.`);
     }
+    const matches = filterSensitiveSearchMatches(result.stdout);
     this.onEvent({ type: "activity", kind: "search", title: glob ? `${query} · ${glob}` : query });
-    return truncate(JSON.stringify({ matches: result.stdout, found: result.exitCode === 0 }), MAX_TOOL_OUTPUT);
+    return truncate(JSON.stringify({
+      matches: redactSensitiveText(matches, this.sensitiveValues),
+      found: Boolean(matches.trim())
+    }), MAX_TOOL_OUTPUT);
   }
 
   private async fallbackSearch(
@@ -226,6 +259,8 @@ export class LocalToolHost {
     const matches: string[] = [];
     for (const uri of files) {
       if (signal.aborted) throw new Error("Search was cancelled.");
+      const relative = path.relative(this.workspaceRoot, uri.fsPath);
+      if (isSensitiveWorkspacePath(relative)) continue;
       const stat = await vscode.workspace.fs.stat(uri);
       if ((stat.type & vscode.FileType.File) === 0 || stat.size > MAX_FILE_BYTES) continue;
       let text: string;
@@ -237,7 +272,7 @@ export class LocalToolHost {
       for (const [index, line] of text.split(/\r?\n/).entries()) {
         const column = line.indexOf(query);
         if (column >= 0) {
-          matches.push(`${path.relative(this.workspaceRoot, uri.fsPath)}:${index + 1}:${column + 1}:${line}`);
+          matches.push(`${relative}:${index + 1}:${column + 1}:${line}`);
           if (matches.length >= 200) break;
         }
       }
@@ -262,7 +297,7 @@ export class LocalToolHost {
     return JSON.stringify({ updated: true });
   }
 
-  private async editFile(input: Record<string, unknown>): Promise<string> {
+  private async editFile(input: Record<string, unknown>, mode: RunMode): Promise<string> {
     const requestedPath = requiredString(input.path, "path");
     const oldText = requiredString(input.old_text, "old_text", true);
     const newText = requiredString(input.new_text, "new_text", true);
@@ -275,13 +310,18 @@ export class LocalToolHost {
       throw new Error("old_text is not unique; include more surrounding text.");
     }
     const updated = `${current.slice(0, first)}${newText}${current.slice(first + oldText.length)}`;
-    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(updated));
     const relative = path.relative(this.workspaceRoot, file);
+    if (!await this.approveWorkspaceMutation(mode, "file-write", relative, "Replace one exact text block")) {
+      return JSON.stringify({ denied: true, path: relative, message: "The user declined this file edit." });
+    }
+    await this.changeTracker.captureBefore(relativePath(this.workspaceRoot, file));
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(updated));
+    await this.changeTracker.captureAfter(relative);
     this.onEvent({ type: "activity", kind: "files", title: `modified: ${relative}` });
     return JSON.stringify({ path: relative, changed: true });
   }
 
-  private async createFile(input: Record<string, unknown>): Promise<string> {
+  private async createFile(input: Record<string, unknown>, mode: RunMode): Promise<string> {
     const requestedPath = requiredString(input.path, "path");
     const content = requiredString(input.content, "content", true);
     if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error("New file content is too large.");
@@ -293,14 +333,19 @@ export class LocalToolHost {
     } catch (error) {
       if (!(error instanceof vscode.FileSystemError) || error.code !== "FileNotFound") throw error;
     }
-    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(file)));
-    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
     const relative = path.relative(this.workspaceRoot, file);
+    if (!await this.approveWorkspaceMutation(mode, "file-write", relative, `Create ${Buffer.byteLength(content)} bytes`)) {
+      return JSON.stringify({ denied: true, path: relative, message: "The user declined file creation." });
+    }
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(file)));
+    await this.changeTracker.captureBefore(relative);
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+    await this.changeTracker.captureAfter(relative);
     this.onEvent({ type: "activity", kind: "files", title: `created: ${relative}` });
     return JSON.stringify({ path: relative, created: true });
   }
 
-  private async runCommand(input: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+  private async runCommand(input: Record<string, unknown>, signal: AbortSignal, mode: RunMode): Promise<string> {
     const command = requiredString(input.command, "command");
     if (!/^[a-zA-Z0-9._+-]+$/.test(command)) {
       throw new Error("Command must be an executable name without paths, shell syntax, or substitutions.");
@@ -309,34 +354,91 @@ export class LocalToolHost {
     if (args.length > 40 || args.some((argument) => argument.length > 2_000 || argument.includes("\0"))) {
       throw new Error("Command arguments exceed the local safety limits.");
     }
-    rejectNetworkCommand(command, args);
+    const policy = evaluateCommandPolicy(command, args);
     const cwdInput = optionalString(input.cwd) || ".";
     const cwd = await this.resolveExistingPath(cwdInput, vscode.FileType.Directory);
     const timeout = clampInteger(input.timeout_ms, 1_000, 120_000, 60_000);
-    const printable = [command, ...args].map(shellDisplay).join(" ");
-    const approval = await vscode.window.showWarningMessage(
-      `Allow the local agent to run this command in ${path.relative(this.workspaceRoot, cwd) || "."}?\n\n${printable}`,
-      { modal: true },
-      "Run command"
+    const printable = redactSensitiveText(
+      [command, ...args].map(shellDisplay).join(" "),
+      this.sensitiveValues
     );
-    if (approval !== "Run command") {
-      return JSON.stringify({ denied: true, message: "The user declined command execution." });
+    if (requiresLocalApproval(mode, "command", policy.level)) {
+      const approvalLabel = policy.level === "destructive" ? "Run destructive command" : "Run command";
+      const approved = await requestLocalApproval(this.onEvent, {
+        prompt: policy.level === "destructive"
+          ? "Allow this potentially destructive local command?"
+          : "Allow the local agent to run this command?",
+        action: approvalLabel,
+        target: `Working directory: ${path.relative(this.workspaceRoot, cwd) || "."}`,
+        explanation: `${printable}${policy.warning ? `\n\n${policy.warning}` : ""}`,
+        risk: policy.level,
+        sensitiveValues: this.sensitiveValues
+      });
+      if (!approved) {
+        return JSON.stringify({ denied: true, risk: policy.level, message: "The user declined command execution." });
+      }
     }
     this.onEvent({ type: "activity", kind: "command", title: printable });
-    const result = await spawnAndCollect(commandForPlatform(command), args, cwd, signal, timeout);
+    const rawResult = await spawnAndCollect(commandForPlatform(command), args, cwd, signal, timeout);
+    const result = {
+      ...rawResult,
+      stdout: redactSensitiveText(rawResult.stdout, this.sensitiveValues),
+      stderr: redactSensitiveText(rawResult.stderr, this.sensitiveValues)
+    };
     const detail = truncate([result.stdout, result.stderr].filter(Boolean).join("\n"), 1_800);
     this.onEvent({ type: "activity", kind: "command", title: `${printable} · exit ${result.exitCode}`, detail });
     return truncate(JSON.stringify(result), MAX_TOOL_OUTPUT);
   }
 
-  private async remember(input: Record<string, unknown>): Promise<string> {
+  private async remember(input: Record<string, unknown>, mode: RunMode): Promise<string> {
     const note = requiredString(input.note, "note");
-    if (/api[-_ ]?key|token|secret|password|bearer\s/i.test(note)) {
+    if (
+      /api[-_ ]?key|token|secret|password|bearer\s/i.test(note)
+      || redactSensitiveText(note, this.sensitiveValues) !== note
+    ) {
       throw new Error("Memory note looks like it may contain a secret and was not saved.");
     }
+    const memoryPath = ".codex-agent/memory.md";
+    if (!await this.approveWorkspaceMutation(mode, "memory", memoryPath, "Append one durable project-memory entry")) {
+      return JSON.stringify({ denied: true, path: memoryPath, message: "The user declined the memory update." });
+    }
+    await this.changeTracker.captureBefore(memoryPath);
     const uri = await this.memory.append(note);
+    await this.changeTracker.captureAfter(memoryPath);
     this.onEvent({ type: "activity", kind: "memory", title: `Updated ${vscode.workspace.asRelativePath(uri)}` });
     return JSON.stringify({ saved: true });
+  }
+
+  private async approveWorkspaceMutation(
+    mode: RunMode,
+    kind: LocalMutationKind,
+    relativePath: string,
+    detail: string
+  ): Promise<boolean> {
+    if (!requiresLocalApproval(mode, kind)) return true;
+    if (mode === "plan") return false;
+    const labels = kind === "memory"
+      ? { title: "Allow this project-memory update?", action: "Update memory" }
+      : { title: "Allow this workspace file change?", action: "Apply change" };
+    return requestLocalApproval(this.onEvent, {
+      prompt: labels.title,
+      action: labels.action,
+      target: relativePath,
+      explanation: detail,
+      risk: "standard",
+      sensitiveValues: this.sensitiveValues
+    });
+  }
+
+  private async approveSensitiveRead(relativePath: string): Promise<boolean> {
+    return requestLocalApproval(this.onEvent, {
+      prompt: "Share a potentially sensitive file with the configured model?",
+      action: "Share redacted file once",
+      target: relativePath,
+      explanation: "Recognized credentials will be removed locally, but automatic detection cannot guarantee that every secret is found.",
+      risk: "sensitive",
+      sensitiveValues: this.sensitiveValues
+    });
   }
 
   private async resolveExistingPath(relativePath: string, expectedType: vscode.FileType): Promise<string> {
@@ -366,6 +468,10 @@ export class LocalToolHost {
     }
     throw new Error("Could not resolve a safe parent directory inside the workspace.");
   }
+}
+
+function relativePath(root: string, absolute: string): string {
+  return path.relative(root, absolute);
 }
 
 function lexicalWorkspacePath(root: string, requestedPath: string): string {
@@ -404,6 +510,16 @@ function truncate(value: string, maximum: number): string {
   return value.length <= maximum ? value : `${value.slice(0, maximum)}\n…[truncated]`;
 }
 
+function filterSensitiveSearchMatches(output: string): string {
+  return output
+    .split(/\r?\n/)
+    .filter((line) => {
+      const match = /^(.+):\d+:\d+:/.exec(line);
+      return !match?.[1] || !isSensitiveWorkspacePath(match[1]);
+    })
+    .join("\n");
+}
+
 function shellDisplay(value: string): string {
   return /^[a-zA-Z0-9_./:=+-]+$/.test(value) ? value : JSON.stringify(value);
 }
@@ -413,20 +529,6 @@ function commandForPlatform(command: string): string {
     return `${command}.cmd`;
   }
   return command;
-}
-
-function rejectNetworkCommand(command: string, args: string[]): void {
-  const executable = command.toLowerCase().replace(/\.exe$|\.cmd$/g, "");
-  if (["curl", "wget", "ssh", "scp", "sftp", "ftp", "telnet", "nc", "ncat"].includes(executable)) {
-    throw new Error("Network client commands are disabled; only the configured LiteLLM inference endpoint may be contacted.");
-  }
-  const subcommand = args[0]?.toLowerCase();
-  if (executable === "git" && ["clone", "fetch", "pull", "push", "ls-remote"].includes(subcommand ?? "")) {
-    throw new Error("Networked Git commands are disabled for the agent runtime.");
-  }
-  if (["npm", "npx", "pnpm", "yarn"].includes(executable) && ["install", "add", "publish", "exec", "dlx"].includes(subcommand ?? "")) {
-    throw new Error("Package download and publish commands are disabled for the agent runtime.");
-  }
 }
 
 async function spawnAndCollect(

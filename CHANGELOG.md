@@ -1,5 +1,107 @@
 # Changelog
 
+## 0.11.0
+
+- Added a real VS Code Extension Host integration gate that activates the extension and verifies command registration, sidebar opening, new-thread responsiveness, and connection-settings navigation without credentials or provider traffic.
+- Added a sanitized corporate-pilot checklist covering target-host compatibility, gateway and PEM setup, model profiles, Chroma, multi-window coordination, recovery, and privacy before stable promotion.
+- Updated the official VS Code packaging tool to its corrected major release, leaving only the separately mitigated Deep Agent glob advisory in the production audit policy.
+- Made local packaging platform-explicit: supported hosts now produce a versioned target-specific VSIX and unsupported hosts fail instead of emitting a misleading universal package containing a native Chroma binary.
+- Mitigated `GHSA-vfj7-8cjw-p6xm` at every model-controlled glob boundary by rejecting brace expansion and bounding pattern length, operators, and path segments before filesystem matchers run.
+- Added a CI production-dependency audit with explicit, expiring, verification-backed exceptions; unknown, mismatched, unverifiable, or expired high/critical findings fail the build.
+- Added bounded, local repository-guidance discovery for applicable `AGENTS.md`, `.github/copilot-instructions.md`, `CONTRIBUTING.md`, and `README.md`, prioritizing nearer active-file instructions and refusing symlinks outside the workspace.
+- Split the visible message-context budget into user-pinned context, project guidance, and automatic editor signals so repository instructions remain predictable without hiding all live editor evidence.
+- Show the exact included repository-guidance paths before send and add a content-free context receipt to each local run review, including pinned sources, workspace signal counts, memory mode, truncation, and semantic fallback.
+- Lock context-selection controls while a run is active so late UI changes cannot be mistaken for inputs to the in-flight request.
+- Made restore state truthful when VS Code applies an edit but cannot save it: every document is attempted, applied changes remain marked restored, and the sidebar lists a bounded manual-save warning instead of offering an invalid retry.
+- Added an optional local task brief for objective, scope, acceptance criteria, and constraints; it persists as bounded webview draft state, appends an editable structured request, and never sends or invokes the model automatically.
+- Replaced permanently exposed runtime and autonomy selectors with one compact, accessible run-setup control that explains each choice, opens above the composer, closes predictably, and locks across local or remote runs.
+- Added a confirmed **Discard request** recovery action that removes only the unanswered user turn, preserves completed conversation history, clears its LangGraph checkpoint, and explicitly leaves prior file, command, and memory effects for separate review.
+- Added a guarded **Undo all file changes** action for complete run snapshots: every target is prevalidated before one workspace edit, newer user work blocks the whole operation, and commands or memory updates are explicitly excluded.
+- Added a strict, size-bounded Zod protocol for every webview-to-extension message and a sanitized top-level error boundary; malformed messages perform no action.
+- Regression-test the closed webview CSP (`default-src 'none'`, nonce-only scripts/styles), rejected extra fields, oversized payloads, and unserializable diagnostics.
+- Close the duplicate-send race during local preflight with immediate composer locking plus a provider-side admission guard, while preserving rejected drafts.
+- Respect IME composition in the Enter-to-send shortcut so composing text cannot submit prematurely.
+- Replaced the lossy webview Markdown formatter with a tested local renderer for headings, lists, quotes, emphasis, inline code, and fenced code; unlabeled fences no longer lose their first line.
+- Escape model HTML and control characters before the webview, keep link/image syntax inert, and accept only a constrained language class on code blocks.
+- Keep long threads calm and responsive by initially rendering only the latest complete turns, with accessible incremental reveal for older local messages and preserved scroll position.
+- Added compact **Copy** and **Add memory…** actions to agent responses; clipboard writes stay local to VS Code and report success accessibly.
+- Keep durable memory deliberate: response text is never prefilled or persisted, the action opens the existing validated blank-entry flow, and the unused arbitrary webview-memory write path was removed.
+- Added a network-free run preflight that verifies workspace trust, cross-window exclusivity, stored connection credentials, model compatibility, and the corporate CA before accepting a request.
+- Preserve the complete draft and open the relevant setup step when preflight fails; critical checks run again after the workspace lease and before the local thread is mutated.
+- Declare untrusted VS Code workspaces unsupported because the extension reads project files and can run explicitly approved local tools.
+- Made cancellation state authoritative: **Stopping…** is now distinct from a confirmed cancelled outcome, repeated stop requests are disabled, and the request remains recoverable after acknowledgement.
+- Propagate one run abort signal through model transport, semantic-memory embeddings, LangChain invocation, and local tools; aborts during semantic recall no longer fall through into a new model call.
+- Centralized all runtime approvals in one privacy-safe modal presenter and mirrored waiting, target/risk, approved, and declined states into the live execution timeline.
+- Added an always-visible model compatibility summary that distinguishes inferred profiles, required reasoning settings, Chat Completions incompatibility, and opaque gateway aliases before testing.
+- Unified Command Palette and sidebar LiteLLM setup into one three-step form with a load-safe open/acknowledge handshake, removing the stale eight-dialog configuration path.
+- Added local conversation search by title/status and persistent pinning, with pinned-first bounded retention and cross-window mutation guards while a run is active.
+- Added privacy-safe run completion notifications with a view badge, one-click result opening, and explicit `whenHidden`, `always`, or `never` preferences; cancelled runs stay quiet.
+- Replaced the generic empty chat state with four explained, task-oriented starters that prepare editable drafts, select the required placeholder, and never run until the user explicitly sends them.
+- Added a user-initiated sanitized support bundle with bounded environment, configuration, memory, thread, and diagnostic metadata while omitting chats, prompts, paths, commands, filenames, endpoints, model aliases, keys, and certificates.
+- Added versioned connection-profile import/export for moving gateway, model compatibility, semantic-memory, runtime, and autonomy settings between machines without serializing the gateway key or corporate CA.
+- Validate imported profiles strictly: require HTTPS, known schema fields and model parameters, a separate Secret Storage key, explicit user confirmation, and a 256 KB file limit; provider mutations are blocked during active runs.
+- Added a local durable-memory center to inspect recent entries, add or edit verified facts, confirm individual deletion, open the Markdown source, and understand whether retrieval is recent or semantic.
+- Keep `memory.md` as the only durable source: the center is a bounded projection, vector reindexing remains automatic on the next retrieval, and memory mutations are blocked while an agent run is active in any VS Code window.
+- Prevent partial memory rewrites by reading the complete bounded source before mutation, refusing files above 2 MB, limiting individual managed entries to 4,000 characters, and rejecting stale entry identifiers.
+- Added a pre-send context budget that explains approximate tokens, configured-limit utilization, automatic workspace context, each pinned item, prompt size, and durable-memory retrieval mode without exposing their contents.
+- Keep explicitly pinned context available when automatic editor context is disabled, and reserve bounded context capacity for user-selected files and selections before lower-priority workspace samples.
+- Exclude sensitive active-file names, selections, diagnostics, and open-file entries from automatic context while explaining the local exclusion in the sidebar.
+- Added tag-driven GitHub Releases with permanent, versioned VSIX packages for all five supported native targets and a generated SHA-256 checksum manifest.
+- Verify release tag, package version, changelog entry, and the complete native asset set before publication; published releases are never overwritten by reruns.
+- Reworked installation guidance around prebuilt VSIX downloads so end users no longer need Git, Node.js, npm, or a local build.
+- Added a professional connection-readiness surface to the sidebar with clear setup, testing, verified, and failure states.
+- Added an explicit diagnostic that validates local form values and then checks the configured model catalog, streaming Chat Completions with function-tool metadata, and optional embeddings route.
+- Kept diagnostics safe and user initiated: the chat probe does not execute tools, the embedding probe sends only a fixed diagnostic phrase, and no credentials are displayed or persisted outside Secret Storage.
+- Moved model compatibility and sampling controls into a collapsed advanced section so the primary setup path stays focused.
+- Added a live message-context inspector above the composer with active-editor visibility, pinned-selection ranges, individual removal, and clear-all controls.
+- Added a compact **＋ File** action that opens the native VS Code file picker and pins a bounded text file directly from the composer.
+- Reject binary, oversized, or out-of-workspace files before adding them to message context, and label file versus selection entries explicitly.
+- Refresh the context indicator when the active editor or automatic-context setting changes, and clear pinned selections visibly when starting a new thread.
+- Added an end-of-run evidence summary with changed files, completed commands, memory updates, token usage, failure/cancellation state, and a shortcut to the VS Code Source Control view.
+- Added a unified **Review run** drawer with outcome, final plan, direct file changes, native diff/restore actions, command outputs, recognized verification results, model usage, and memory updates.
+- Keep up to ten run reviews associated with their original timeline summaries during the sidebar session, including synchronized restore state.
+- Consolidated live tool activity into one expandable execution strip with the current stage, latest action, elapsed time, plan progress, file/command counts, and bounded detailed history.
+- Preserve expanded command output while execution updates arrive, keep the compact state readable at 340 px, and replace the live strip with the existing reviewable run summary on completion.
+- Added workspace-persisted **Ask first**, **Auto edits**, and **Plan only** autonomy modes with a safe Ask-first default.
+- Apply the same approval policy to standard LangChain tools and the Deep Agent filesystem backend: Ask-first guards every mutation, Auto-edits permits scoped file/memory writes, and commands plus deletions remain confirmed in every executable mode.
+- Added cross-platform GitHub Actions verification and native VSIX packaging for macOS arm64/x64, Linux arm64/x64, and Windows x64.
+- Added monthly Dependabot maintenance for npm and GitHub Actions dependencies.
+- Added contribution and private vulnerability-reporting guidance, richer extension-manifest metadata, and a dedicated package icon.
+- Generate a deterministic third-party manifest and combined license text from the actual production bundle, include both in every VSIX, and fail packaging for missing or unreviewed license metadata.
+- Prevent starting a new thread while a run is still active to avoid cancellation/reset races.
+- Replaced the single disposable conversation with up to 30 bounded local threads per workspace, including switching, automatic titles, renaming, deletion, and restart restoration.
+- Kept `MemorySaver` as the LangGraph checkpoint implementation while storing only bounded UI/restoration projections in VS Code `workspaceState`.
+- Added automatic migration and cleanup for both the previous single-conversation projection and legacy flat sidebar history.
+- Added bounded, per-thread draft persistence so unfinished prompts survive thread switches and sidebar reloads.
+- Added retry and edit-and-resend recovery for failed, cancelled, or interrupted requests without duplicating the pending user message in LangChain context.
+- Persist minimal per-thread run-recovery metadata and detect when the owning Extension Host process disappears before saving an answer.
+- Added an honest **Restart request** flow that replays an interrupted request from the beginning while preserving its original autonomy mode.
+- Prevent concurrent agent runs across VS Code windows when a live process still owns a run in the same workspace, with a manual status refresh action.
+- Back cross-window coordination with an atomic, process-owned lease in private extension storage and safely reclaim leases left by terminated Extension Hosts.
+- Delay optimistic user-message insertion until the run lease and local thread state are accepted, restoring the composer draft when startup is rejected.
+- Made the composer grow with longer prompts while retaining a compact maximum height.
+- Added bounded in-memory before/after snapshots for direct file writes in both the LangChain Agent tools and the Deep Agent filesystem backend.
+- Added native VS Code per-file diffs and guarded restore actions that refuse to overwrite files changed after the run.
+- Added real-path and symlink containment checks to the review snapshot and restoration paths.
+- Require explicit modal approval for every Deep Agent filesystem deletion, with a recursive-directory warning and safe denial returned through the backend result.
+- Hardened command approval with a testable local policy that blocks shell interpreters, inline code, command wrappers, network clients, remote URLs, package downloads/publication, and networked Git operations.
+- Added a distinct destructive-command warning for operations that can remove, replace, or discard workspace data.
+- Kept command-driven changes visible through Source Control while clearly distinguishing them from directly snapshotted file-tool writes.
+- Added automated webview syntax and duplicate-element-ID regression checks.
+- Improved sidebar accessibility with deterministic panel focus/return, Escape-to-close behavior, labeled repeated actions, collapsed-region semantics, concise live announcements, visible keyboard focus, and forced-colors support.
+- Added a calm first-run connection prompt that exposes LiteLLM setup immediately and disappears only after a gateway, chat model alias, and Secret Storage key are saved.
+- Hardened the bundled ChromaDB lifecycle with process-owned startup locks, race-safe timeout ordering, strict heartbeat validation, atomic metadata, stale-owner recovery, and cleanup when the owning extension host is disposed.
+- Added per-client Chroma leases so closing one VS Code window cannot stop semantic memory while another live Extension Host is still using the shared local service.
+- Surface the exact local semantic-memory failure in the run timeline while continuing safely with the auditable `memory.md` source of truth.
+- Made local VSIX packaging a release gate that runs type-checking, the complete test suite, both local-only runtime smokes, and the native build before invoking `vsce`.
+- Added centralized credential redaction for provider errors, connection diagnostics, tool failures, file/search results, command previews, stdout/stderr, and run-review output without rewriting ordinary chat messages.
+- Prevent detected credentials, private-key material, known gateway keys, and common token signatures from being appended to durable project memory.
+- Hide common credential-bearing files from automatic context, file pickers, listings, and broad searches; direct reads require a one-time local confirmation and still return only locally redacted text.
+- Turn recognized connection failures into structured local actions: apply compatible reasoning/sampling settings and retest, choose the expected subscription-key header, focus the field that needs review, or open corporate-CA setup.
+- Keep remediation explicit and reversible: no provider setting is guessed silently, successful corrections must still be saved by the user, and unknown errors remain unchanged with their technical detail.
+- Reorganized the dense connection form into three keyboard-accessible stages — gateway, models, and verification — with progress, required-field guidance, back/next navigation, and advanced controls kept out of the primary path.
+- Separated corporate-CA management from the legacy eight-step command wizard so the sidebar can import, replace, or remove its private PEM copy without asking for unrelated connection values again.
+
 ## 0.10.2
 
 - Replaced the permanently compressed plan/status area with an expandable activity dock above the composer.

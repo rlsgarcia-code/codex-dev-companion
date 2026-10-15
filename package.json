@@ -2,12 +2,28 @@
   "name": "codex-dev-companion",
   "displayName": "Local Dev Companion",
   "description": "A local LangChain development agent connected only to user-configured LiteLLM endpoints.",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "publisher": "local",
   "license": "MIT",
+  "homepage": "https://github.com/rlsgarcia-code/codex-dev-companion#readme",
+  "bugs": {
+    "url": "https://github.com/rlsgarcia-code/codex-dev-companion/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/rlsgarcia-code/codex-dev-companion.git"
+  },
+  "icon": "media/extension-icon.png",
+  "keywords": [
+    "langchain",
+    "litellm",
+    "coding-agent",
+    "local-first",
+    "developer-tools"
+  ],
+  "galleryBanner": {
+    "color": "#181818",
+    "theme": "dark"
   },
   "engines": {
     "vscode": "^1.106.0",
@@ -23,6 +39,12 @@
     "onCommand:codexDevCompanion.newThread",
     "onCommand:codexDevCompanion.configureLiteLlm"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Local Companion reads project files and can execute explicitly approved local tools, so the workspace must be trusted."
+    }
+  },
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -55,6 +77,10 @@
       {
         "command": "codexDevCompanion.addSelection",
         "title": "Local Companion: Add Selection to Context"
+      },
+      {
+        "command": "codexDevCompanion.addFileContext",
+        "title": "Local Companion: Add File to Context"
       },
       {
         "command": "codexDevCompanion.remember",
@@ -101,6 +127,22 @@
           "default": "standard",
           "scope": "resource",
           "description": "Agent runtime used for this workspace. Both options use the same local LiteLLM Chat Completions connection."
+        },
+        "codexDevCompanion.autonomyMode": {
+          "type": "string",
+          "enum": [
+            "review",
+            "execute",
+            "plan"
+          ],
+          "enumDescriptions": [
+            "Ask before every workspace mutation and command.",
+            "Apply scoped file and project-memory edits automatically; commands and deletions still require approval.",
+            "Inspect and plan with read-only tools; do not mutate the workspace or run commands."
+          ],
+          "default": "review",
+          "scope": "resource",
+          "description": "Default autonomy level for new Local Companion requests in this workspace."
         },
         "codexDevCompanion.liteLlmEndpoint": {
           "type": "string",
@@ -203,6 +245,22 @@
           "maximum": 200000,
           "description": "Maximum number of recent conversation characters retained as model context."
         },
+        "codexDevCompanion.completionNotifications": {
+          "type": "string",
+          "enum": [
+            "whenHidden",
+            "always",
+            "never"
+          ],
+          "enumDescriptions": [
+            "Notify only when the Local Companion sidebar is not visible.",
+            "Notify after every completed or failed run.",
+            "Never show run-completion notifications."
+          ],
+          "default": "whenHidden",
+          "scope": "window",
+          "description": "Controls local VS Code notifications after completed or failed agent runs. Notifications never include request, response, project, path, or model content."
+        },
         "codexDevCompanion.semanticMemoryEnabled": {
           "type": "boolean",
           "default": true,
@@ -234,10 +292,15 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "check": "tsc --noEmit",
-    "test": "npm run compile:tests && node --test dist-tests/test/**/*.test.js",
+    "test": "npm run compile:tests && node --test dist-tests/test/**/*.test.js && npm run test:repository",
+    "test:repository": "node --test test/license-inventory.test.mjs test/native-package.test.mjs test/release-metadata.test.mjs test/security-audit.test.mjs",
     "compile:tests": "node scripts/clean-test-output.mjs && tsc -p tsconfig.test.json",
+    "compile:extension-host-tests": "node scripts/clean-extension-host-test-output.mjs && tsc -p tsconfig.extension-test.json",
+    "test:extension-host": "npm run build && npm run compile:extension-host-tests && node scripts/run-extension-host-tests.mjs",
     "smoke:litellm": "npm run compile:tests && node scripts/smoke-litellm-routing.mjs",
-    "package": "npm run check && npm run build && vsce package --no-dependencies"
+    "smoke:chroma": "node scripts/smoke-chroma-lifecycle.mjs",
+    "audit:prod": "node scripts/audit-production.mjs",
+    "package": "npm run check && npm test && npm run build && npm run smoke:litellm && npm run smoke:chroma && node scripts/package-native.mjs"
   },
   "dependencies": {
     "@langchain/community": "^1.1.29",
@@ -253,7 +316,8 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.106.0",
-    "@vscode/vsce": "^3.2.1",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
   }
