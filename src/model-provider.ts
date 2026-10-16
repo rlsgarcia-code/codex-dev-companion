@@ -136,6 +136,14 @@ export function normalizeOllamaEndpoint(value: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
+export function ollamaTagsUrl(value: string): string {
+  const base = new URL(normalizeOllamaEndpoint(value));
+  base.pathname = "/api/tags";
+  base.search = "";
+  base.hash = "";
+  return base.toString();
+}
+
 export function validateModelConnection(
   input: LiteLlmConnection & { provider?: unknown },
   variant: ProviderVariant = PROVIDER_VARIANT

@@ -1507,6 +1507,12 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async listModels(endpointInput: string, transientApiKey: string): Promise<void> {
     try {
+      const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
+      if (provider === "ollama") {
+        const models = await this.agent.listModels(endpointInput, "");
+        this.post({ type: "modelsLoaded", models, endpoint: endpointInput, message: `${models.length} local Ollama models loaded` });
+        return;
+      }
       const endpoint = normalizeLiteLlmModelsEndpoint(endpointInput);
       const models = await this.agent.listModels(endpoint, transientApiKey);
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
@@ -2491,6 +2497,13 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             <button class="secondary-action" id="litellm-load-models">Load</button>
           </div>
         </div>
+        <div class="field hidden" id="ollama-model-discovery">
+          <span>Local Ollama Models</span>
+          <div class="input-action">
+            <button class="secondary-action" id="ollama-load-models">List local models</button>
+            <small>Equivalent to <code>ollama list</code>; only this machine is queried.</small>
+          </div>
+        </div>
         <label class="field">
           <span>Chat Model Alias</span>
           <input id="litellm-model" type="text" list="litellm-model-aliases" autocomplete="off" spellcheck="false" placeholder="company-coding-model" />
@@ -3106,6 +3119,8 @@ const providerKeyField = document.getElementById('provider-key-field');
 const providerKeyLabel = document.getElementById('provider-key-label');
 const authHeaderField = document.getElementById('auth-header-field');
 const modelCatalogField = document.getElementById('model-catalog-field');
+const ollamaModelDiscovery = document.getElementById('ollama-model-discovery');
+const ollamaLoadModels = document.getElementById('ollama-load-models');
 const profileActions = document.getElementById('profile-actions');
 const embeddingProviderNote = document.getElementById('embedding-provider-note');
 const liteLlmEndpoint = document.getElementById('litellm-endpoint');
@@ -4441,6 +4456,7 @@ function renderProviderFields() {
   providerKeyField.classList.toggle('hidden', isOllama);
   authHeaderField.classList.toggle('hidden', !isLiteLlm);
   modelCatalogField.classList.toggle('hidden', !isLiteLlm);
+  ollamaModelDiscovery.classList.toggle('hidden', !isOllama);
   profileActions.classList.toggle('hidden', !isLiteLlm);
   advancedSetupButton.classList.toggle('hidden', connectionSetupStep !== 1 || !isLiteLlm);
   liteLlmEndpoint.readOnly = provider === 'openai';
@@ -4996,6 +5012,16 @@ document.getElementById('litellm-load-models').addEventListener('click', () => {
     apiKey: liteLlmApiKey.value
   });
 });
+ollamaLoadModels.addEventListener('click', () => {
+  liteLlmSettingsError.classList.add('hidden');
+  ollamaLoadModels.disabled = true;
+  ollamaLoadModels.textContent = 'Loading…';
+  vscode.postMessage({
+    type: 'listModels',
+    endpoint: liteLlmEndpoint.value,
+    apiKey: ''
+  });
+});
 liteLlmModel.addEventListener('change', () => {
   const hasSavedProfile = Boolean(liteLlmModelProfiles[String(liteLlmModel.value).trim()]);
   fillModelProfile(liteLlmModel.value, {}, !hasSavedProfile);
@@ -5125,6 +5151,8 @@ window.addEventListener('message', ({ data }) => {
       openLiteLlmSettings();
       break;
     case 'modelsLoaded':
+      ollamaLoadModels.disabled = false;
+      ollamaLoadModels.textContent = 'List local models';
       liteLlmModelsEndpoint.value = data.endpoint;
       loadedModelCatalog = data.models || [];
       const catalogModels = [...new Set([...loadedModelCatalog, ...Object.keys(liteLlmModelProfiles)])]
@@ -5139,6 +5167,8 @@ window.addEventListener('message', ({ data }) => {
       liteLlmModel.focus();
       break;
     case 'modelsLoadError':
+      ollamaLoadModels.disabled = false;
+      ollamaLoadModels.textContent = 'List local models';
       liteLlmSettingsError.textContent = data.message;
       liteLlmSettingsError.classList.remove('hidden');
       openLiteLlmSettings();

@@ -59,6 +59,8 @@ import {
   modelProviderSettingIsExplicit,
   modelProviderSupportsCatalog,
   modelProviderSupportsCorporateCa,
+  normalizeOllamaEndpoint,
+  ollamaTagsUrl,
   validateModelConnection,
   type ModelConnection
 } from "./model-provider";
@@ -302,6 +304,9 @@ export class DevelopmentAgent implements vscode.Disposable {
     const workspace = vscode.workspace.workspaceFolders?.[0];
     if (!workspace) throw new Error("Open a workspace before loading the model catalog.");
     const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
+    if (provider === "ollama") {
+      return this.listOllamaModels(endpointInput);
+    }
     if (!modelProviderSupportsCatalog(provider)) {
       throw new Error("This provider uses an explicit model name and does not use the LiteLLM catalog.");
     }
@@ -319,6 +324,31 @@ export class DevelopmentAgent implements vscode.Disposable {
     } finally {
       await dispatcher?.close();
     }
+  }
+
+  private async listOllamaModels(endpointInput: string): Promise<string[]> {
+    const endpoint = normalizeOllamaEndpoint(endpointInput);
+    const tagsUrl = ollamaTagsUrl(endpoint);
+    const response = await gatewayFetch(
+      tagsUrl,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      ["GET"]
+    )(tagsUrl, { method: "GET" });
+    if (!response.ok) {
+      throw new Error(`Ollama model listing failed with HTTP ${response.status}. Start Ollama and try again.`);
+    }
+    const payload = await response.json() as { models?: Array<{ name?: unknown }> };
+    const models = (payload.models ?? [])
+      .map((model) => typeof model.name === "string" ? model.name.trim() : "")
+      .filter((model): model is string => Boolean(model))
+      .slice(0, 500);
+    if (!models.length) {
+      throw new Error("Ollama is running, but no local models were found. Install a model and try again.");
+    }
+    return [...new Set(models)].sort();
   }
 
   public async diagnoseConnection(options: ConnectionDiagnosticOptions): Promise<ConnectionDiagnostic[]> {

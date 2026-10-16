@@ -5,6 +5,7 @@ import {
   configuredModelProvider,
   modelProvidersForVariant,
   normalizeOllamaEndpoint,
+  ollamaTagsUrl,
   OPENAI_BASE_URL,
   validateModelConnection
 } from "../src/model-provider";
@@ -52,6 +53,7 @@ test("restricts Ollama endpoints to credential-free loopback URLs", () => {
     apiKey: ""
   }, "ollama");
   assert.equal(connection.apiKey, "ollama");
+  assert.equal(ollamaTagsUrl("http://127.0.0.1:11434/v1"), "http://127.0.0.1:11434/api/tags");
 });
 
 test("pins direct OpenAI access to the official base and requires its own key", () => {

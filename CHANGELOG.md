@@ -3,6 +3,7 @@
 ## 0.11.0
 
 - Optional provider packages now open on their named provider until the user explicitly selects another available provider.
+- Added local Ollama model discovery in the setup form through the loopback `/api/tags` endpoint, equivalent to `ollama list` without shell execution.
 - Added explicit Ollama and OpenAI VSIX variants while keeping the default package LiteLLM-only; provider allowlists are build-bound, Ollama is restricted to loopback without a key, OpenAI is fixed to `api.openai.com`, and all model traffic retains exact-route Chat Completions guards.
 - Stream agent text through the native LangChain event lifecycle into one stable sidebar message, discard transient tool-call prose, consolidate the final answer without duplication, and preserve bounded partial output across cancellation, failure, or Extension Host restart.
 - Added corporate local `stdio` MCP imports with exact no-shell commands, pinned `npx` packages, per-process HTTPS registries, secure environment secrets, wildcard tool discovery followed by explicit selection, and subprocess cleanup with the MCP session.

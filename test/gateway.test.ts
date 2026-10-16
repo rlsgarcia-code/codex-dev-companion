@@ -94,6 +94,15 @@ test("allows an exact Ollama loopback route but rejects non-loopback HTTP", () =
   );
 });
 
+test("allows only an exact Ollama GET catalog route when explicitly requested", async () => {
+  const url = "http://127.0.0.1:11434/api/tags";
+  const transport = async () => new Response(JSON.stringify({ models: [] }), { status: 200 });
+  const fetch = gatewayFetch(url, true, undefined, undefined, transport, ["GET"]);
+  const response = await fetch(url, { method: "GET" });
+  assert.equal(response.status, 200);
+  await assert.rejects(() => fetch(url, { method: "POST" }), /Blocked a POST request/);
+});
+
 test("routes a real LangChain Chat Completions invocation through the guarded transport", async () => {
   let requestCount = 0;
   const transport: GatewayTransport = async (input, init) => {

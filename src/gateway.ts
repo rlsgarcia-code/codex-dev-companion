@@ -21,10 +21,15 @@ export function gatewayFetch(
   stripAuthorization: boolean,
   dispatcher: UndiciAgent | undefined,
   runSignal?: AbortSignal,
-  transport: GatewayTransport = undiciFetch as unknown as GatewayTransport
+  transport: GatewayTransport = undiciFetch as unknown as GatewayTransport,
+  allowedMethods: readonly string[] = ["POST"]
 ): typeof globalThis.fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    validateGatewayRequest(input, init, allowedUrl);
+    if (allowedMethods.length === 1 && allowedMethods[0] === "POST") {
+      validateGatewayRequest(input, init, allowedUrl);
+    } else {
+      validateGatewayRequest(input, init, allowedUrl, allowedMethods);
+    }
     const headers = new Headers(
       init?.headers ?? (input instanceof Request ? input.headers : undefined)
     );
@@ -48,7 +53,8 @@ export function gatewayFetch(
 export function validateGatewayRequest(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
-  allowedUrl: string
+  allowedUrl: string,
+  allowedMethods: readonly string[] = ["POST"]
 ): void {
   const target = new URL(input instanceof Request ? input.url : input.toString());
   const allowed = new URL(allowedUrl);
@@ -67,7 +73,10 @@ export function validateGatewayRequest(
     throw new Error("Blocked a provider request outside the exact configured model route.");
   }
   const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-  if (method !== "POST") {
-    throw new Error("Blocked a non-POST request to the configured model route.");
+  if (!allowedMethods.includes(method)) {
+    if (allowedMethods.length === 1 && allowedMethods[0] === "POST") {
+      throw new Error("Blocked a non-POST request to the configured model route.");
+    }
+    throw new Error(`Blocked a ${method} request to the configured model route.`);
   }
 }
