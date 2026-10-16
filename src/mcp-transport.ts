@@ -7,10 +7,15 @@ export function mcpFetch(
   allowedUrl: string,
   dispatcher: UndiciAgent | undefined,
   runSignal?: AbortSignal,
-  transport: GatewayTransport = undiciFetch as unknown as GatewayTransport
+  transport: GatewayTransport = undiciFetch as unknown as GatewayTransport,
+  options: { allowOAuthEndpoints?: boolean } = {}
 ): typeof globalThis.fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    validateMcpRequest(input, init, allowedUrl);
+    if (options.allowOAuthEndpoints) {
+      validateMcpRequest(input, init, allowedUrl, true);
+    } else {
+      validateMcpRequest(input, init, allowedUrl);
+    }
     const requestSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const signal = combinedAbortSignal(requestSignal, runSignal);
     const response = await transport(input, {
@@ -29,18 +34,19 @@ export function mcpFetch(
 export function validateMcpRequest(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
-  allowedUrl: string
+  allowedUrl: string,
+  allowOAuthEndpoints = false
 ): void {
   const target = new URL(input instanceof Request ? input.url : input.toString());
   const allowed = new URL(allowedUrl);
-  if (
-    target.protocol !== "https:" ||
-    target.username ||
-    target.password ||
-    target.search ||
-    target.hash ||
-    target.href !== allowed.href
-  ) {
+  const isExactMcpRoute = target.href === allowed.href;
+  const exactRouteViolation = target.href !== allowed.href;
+  const isApprovedOAuthEndpoint = allowOAuthEndpoints
+    && target.protocol === "https:"
+    && !target.username
+    && !target.password
+    && !target.hash;
+  if ((exactRouteViolation && !isApprovedOAuthEndpoint) || (!isExactMcpRoute && !isApprovedOAuthEndpoint)) {
     throw new Error("Blocked an MCP request outside its configured corporate route.");
   }
   const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();

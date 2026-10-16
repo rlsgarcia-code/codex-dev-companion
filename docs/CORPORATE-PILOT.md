@@ -41,8 +41,9 @@ Instale o VSIX correspondente ao sistema em que o **Extension Host** executa. Em
 21. Em uma mudança visual, capture um estado anterior e compare com o resultado final. Confirme que **Review run** mostra a observação textual e que nenhuma imagem foi gravada no repositório.
 22. Copie um template MCP corporativo com placeholders e headers sensíveis. Importe-o pelo ícone de plugue, confirme que os segredos não aparecem em settings, memória, logs ou arquivos, e execute **Test connection**; nenhuma ferramenta ou SQL deve rodar nesse teste.
 23. Em **Ask first**, peça uma consulta usando uma ferramenta MCP permitida. Confirme o modal antes da chamada, recuse uma vez para verificar que não há contorno e depois aprove uma chamada de leitura. Em **Plan only**, confirme que nenhuma ferramenta MCP fica disponível.
-24. Se estiver validando a variante Ollama, confirme que somente uma URL de loopback é aceita, nenhuma chave é solicitada e desligar o Ollama produz um erro local acionável. Uma URL LAN ou pública deve ser recusada antes da rede.
-25. Se estiver validando a variante OpenAI, confirme que a base fica fixa em `https://api.openai.com/v1`, a chave não aparece em settings ou bundle de suporte e uma base alternativa é recusada. No VSIX padrão, `ollama` e `openai` em `settings.json` devem ser recusados como não instalados.
+24. Para um MCP que responda `401` com `WWW-Authenticate: Bearer`, confirme que o navegador corporativo abre somente após o handshake aprovado, que o callback loopback conclui o login OAuth com PKCE, que o retorno ao VS Code valida `state`/`issuer`, que tokens não aparecem em logs/settings/memória e que uma segunda conexão reutiliza o refresh token sem novo login.
+25. Se estiver validando a variante Ollama, confirme que somente uma URL de loopback é aceita, nenhuma chave é solicitada e desligar o Ollama produz um erro local acionável. Uma URL LAN ou pública deve ser recusada antes da rede.
+26. Se estiver validando a variante OpenAI, confirme que a base fica fixa em `https://api.openai.com/v1`, a chave não aparece em settings ou bundle de suporte e uma base alternativa é recusada. No VSIX padrão, `ollama` e `openai` em `settings.json` devem ser recusados como não instalados.
 
 ## Critério de aprovação
 

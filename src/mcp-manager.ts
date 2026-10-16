@@ -1,6 +1,6 @@
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { loadMcpTools } from "@langchain/mcp-adapters";
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { Client, StreamableHTTPClientTransport, UnauthorizedError } from "@modelcontextprotocol/client";
 import { Agent as UndiciAgent } from "undici";
 import * as vscode from "vscode";
 import { requestLocalApproval } from "./local-approval";
@@ -25,6 +25,7 @@ import {
   validateMcpToolName
 } from "./mcp-config";
 import { mcpFetch } from "./mcp-transport";
+import { McpOAuthProvider } from "./mcp-oauth";
 import { connectStdioMcpClient } from "./mcp-stdio";
 import { redactSensitiveText, safeErrorMessage } from "./redaction";
 import type { AgentUiEvent, RunMode } from "./types";
@@ -66,6 +67,15 @@ type ResolvedMcpConnection = {
   values: Record<string, string>;
   sensitiveValues: string[];
 };
+
+const oauthProviders = new WeakMap<Client, McpOAuthProvider>();
+
+async function closeMcpClient(client: Client): Promise<void> {
+  await client.close().catch(() => undefined);
+  const provider = oauthProviders.get(client);
+  oauthProviders.delete(client);
+  await provider?.close().catch(() => undefined);
+}
 
 export class CorporateMcpManager {
   public constructor(private readonly context: vscode.ExtensionContext) {}
@@ -115,7 +125,7 @@ export class CorporateMcpManager {
     } catch (error) {
       throw new Error(safeErrorMessage(error, resolved.sensitiveValues));
     } finally {
-      await client.close().catch(() => undefined);
+      await closeMcpClient(client);
     }
   }
 
@@ -241,7 +251,7 @@ export class CorporateMcpManager {
           detail: `${allowed.length} approved tool${allowed.length === 1 ? "" : "s"} available`
         });
       } catch (error) {
-        await client?.close().catch(() => undefined);
+        if (client) await closeMcpClient(client);
         options.onEvent({
           type: "activity",
           kind: "mcp",
@@ -254,7 +264,7 @@ export class CorporateMcpManager {
       tools,
       sensitiveValues,
       async close() {
-        await Promise.all(clients.map((client) => client.close().catch(() => undefined)));
+        await Promise.all(clients.map((client) => closeMcpClient(client)));
       }
     };
   }
@@ -297,8 +307,10 @@ export class CorporateMcpManager {
         sensitiveValues: resolved.sensitiveValues
       });
     }
-    const client = new Client({ name: "local-agent-companion", version: "0.11.0" });
-    const transport = new StreamableHTTPClientTransport(new URL(profile.url), {
+    const oauth = new McpOAuthProvider(this.context, profile.id, new URL(profile.url));
+    await oauth.start();
+    const createTransport = () => new StreamableHTTPClientTransport(new URL(profile.url), {
+      authProvider: oauth,
       requestInit: { headers: resolved.values, redirect: "manual" },
       redirectPolicy: "same-origin",
       reconnectionOptions: {
@@ -307,13 +319,38 @@ export class CorporateMcpManager {
         maxReconnectionDelay: 30_000,
         reconnectionDelayGrowFactor: 1.5
       },
-      fetch: mcpFetch(profile.url, dispatcher, signal)
+      fetch: mcpFetch(profile.url, dispatcher, signal, undefined, { allowOAuthEndpoints: true })
     });
+    const client = new Client({ name: "local-agent-companion", version: "0.11.0" });
+    let transport = createTransport();
     try {
       await client.connect(transport, { signal, timeout: 30_000 });
+      oauthProviders.set(client, oauth);
       return client;
     } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        try {
+          await oauth.finishAuthorization(transport);
+        } catch (authorizationError) {
+          await client.close().catch(() => undefined);
+          await oauth.close();
+          throw new Error(safeErrorMessage(authorizationError, resolved.sensitiveValues));
+        }
+        await client.close().catch(() => undefined);
+        const retryClient = new Client({ name: "local-agent-companion", version: "0.11.0" });
+        transport = createTransport();
+        try {
+          await retryClient.connect(transport, { signal, timeout: 30_000 });
+          oauthProviders.set(retryClient, oauth);
+          return retryClient;
+        } catch (retryError) {
+          await retryClient.close().catch(() => undefined);
+          await oauth.close();
+          throw retryError;
+        }
+      }
       await client.close().catch(() => undefined);
+      await oauth.close();
       throw new Error(safeErrorMessage(error, resolved.sensitiveValues));
     }
   }
