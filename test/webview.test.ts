@@ -231,19 +231,19 @@ test("keeps native diff review and guarded restore actions wired", () => {
   assert.match(source, /USAGE & MEMORY/);
 });
 
-test("keeps live execution activity consolidated and expandable", () => {
-  assert.match(source, /function ensureLiveRun/);
-  assert.match(source, /function renderLiveRun/);
-  assert.match(source, /data-toggle-live-run/);
-  assert.match(source, /live-run-events/);
+test("keeps live execution activity in one fixed expandable dock", () => {
+  assert.match(source, /class="activity-dock"/);
+  assert.match(source, /function ensureRunActivity/);
   assert.match(source, /state\.events\.push/);
   assert.match(source, /function renderActivityOverview/);
   assert.match(source, /RUN PROGRESS/);
   assert.match(source, /LATEST ACTIVITY/);
-  assert.match(source, /liveRunState\?\.events\.slice\(-3\)/);
+  assert.match(source, /runActivityState\?\.events\.slice\(-3\)/);
   assert.match(source, /completed \+ '\/' \+ total \+ ' complete'/);
   assert.match(source, /function clearCurrentPlan\(\) \{\s+currentRunSummary\.plan = \[\]/);
-  assert.match(source, /finishLiveRun\(\);\s+currentRunSummary\.finishedAt/);
+  assert.match(source, /finishRunActivity\(\);\s+currentRunSummary\.finishedAt/);
+  assert.doesNotMatch(source, /data-toggle-live-run/);
+  assert.doesNotMatch(source, /className = 'live-run'/);
   assert.doesNotMatch(source, /element\.className = 'activity'/);
   assert.match(readFileSync("src/local-approval.ts", "utf8"), /kind: "approval"/);
 });

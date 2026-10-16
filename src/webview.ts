@@ -2668,30 +2668,6 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .history-fold { padding: 9px 0; border-bottom: 1px solid var(--line); text-align: center; }
 .history-fold button { border: 0; border-radius: 5px; padding: 5px 8px; color: var(--muted); background: transparent; cursor: pointer; font-size: 9px; }
 .history-fold button:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
-.live-run { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); animation: reveal .16s ease-out; }
-.live-run-heading { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto 12px; align-items: center; gap: 9px; width: 100%; padding: 11px 2px; border: 0; color: var(--vscode-foreground); background: transparent; cursor: pointer; text-align: left; }
-.live-run-heading:hover { background: color-mix(in srgb, var(--vscode-toolbar-hoverBackground) 48%, transparent); }
-.live-run-heading:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-.live-run-signal { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); animation: pulse 1.2s infinite; }
-.live-run.failed .live-run-signal { background: var(--vscode-errorForeground); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); animation: none; }
-.live-run-copy { display: grid; min-width: 0; gap: 1px; }
-.live-run-copy strong, .live-run-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.live-run-copy strong { font-size: 11px; font-weight: 650; }
-.live-run-copy small { color: var(--muted); font: 9px/1.4 var(--vscode-editor-font-family); }
-.live-run-time { color: var(--muted); font: 9px var(--vscode-editor-font-family); }
-.live-run-chevron { color: var(--muted); opacity: .7; transition: transform .16s; }
-.live-run.expanded .live-run-chevron { transform: rotate(180deg); }
-.live-run-details { display: none; padding: 0 2px 10px 19px; }
-.live-run.expanded .live-run-details { display: block; }
-.live-run-stats { padding: 0 0 7px; color: var(--muted); font-size: 9px; }
-.live-run-events { list-style: none; margin: 0; padding: 0; border-top: 1px solid color-mix(in srgb, var(--line) 62%, transparent); }
-.live-run-events li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px; padding: 6px 0; color: var(--muted); font: 9px/1.4 var(--vscode-editor-font-family); border-bottom: 1px solid color-mix(in srgb, var(--line) 62%, transparent); }
-.live-run-kind { color: var(--vscode-foreground); font: 650 8px/1.55 var(--vscode-font-family); letter-spacing: .07em; }
-.live-run-event-copy { min-width: 0; overflow-wrap: anywhere; }
-.live-run-events details { grid-column: 1 / -1; }
-.live-run-events summary { cursor: pointer; }
-.live-run-events pre { max-height: 160px; overflow: auto; margin: 5px 0 0; padding: 7px; background: var(--vscode-textCodeBlock-background); white-space: pre-wrap; }
-.live-run-empty { margin: 0; color: var(--muted); font-size: 9px; }
 .run-summary { padding: 13px 0; border-bottom: 1px solid var(--line); animation: reveal .2s ease-out; }
 .run-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .run-summary-heading strong { font-size: 11px; font-weight: 650; }
@@ -2785,7 +2761,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 @keyframes pulse { 0%,100% { opacity: .55; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); } 50% { opacity: 1; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 5%, transparent); } }
 @keyframes reveal { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
-@media (forced-colors: active) { .signal, .readiness-signal, .model-compatibility-signal, .live-run-signal, .run-review-signal { border: 1px solid currentColor; } }
+@media (forced-colors: active) { .signal, .readiness-signal, .model-compatibility-signal, .run-review-signal { border: 1px solid currentColor; } }
 `;
 
 const script = String.raw`
@@ -2905,8 +2881,8 @@ let mcpConnectionCount = 0;
 let mcpConnectionsPending = false;
 let currentContextState = { activeFile: '', autoContext: true, pinned: [] };
 let currentRunSummary = createRunSummary();
-let liveRunState = null;
-let liveRunTimer;
+let runActivityState = null;
+let runActivityTimer;
 const messageSources = new WeakMap();
 const RECENT_HISTORY_MESSAGES = 14;
 const HISTORY_REVEAL_BATCH = 20;
@@ -3129,7 +3105,7 @@ function elapsedRunTime(startedAt) {
 function renderActivityOverview() {
   const total = currentRunSummary.plan.length;
   const completed = currentRunSummary.plan.filter(item => item.completed).length;
-  const events = liveRunState?.events.slice(-3) || [];
+  const events = runActivityState?.events.slice(-3) || [];
   const progress = total ? completed + '/' + total : '';
   activityMeta.textContent = [busy ? elapsedRunTime(currentRunSummary.startedAt) : '', progress]
     .filter(Boolean)
@@ -3149,93 +3125,25 @@ function renderActivityOverview() {
   if (!canExpand && activityDock.classList.contains('expanded')) setActivityExpanded(false);
 }
 
-function ensureLiveRun() {
-  if (liveRunState) return liveRunState;
-  const element = document.createElement('section');
-  element.dataset.liveRun = currentRunSummary.id;
-  liveRunState = {
-    element,
-    status: 'Starting agent',
-    events: [],
-    expanded: false,
-    failed: false,
-    startedAt: currentRunSummary.startedAt
-  };
-  timeline.appendChild(element);
-  clearInterval(liveRunTimer);
-  liveRunTimer = setInterval(() => {
-    const elapsed = liveRunState?.element.querySelector('.live-run-time');
-    if (elapsed && liveRunState) elapsed.textContent = elapsedRunTime(liveRunState.startedAt);
-    renderActivityOverview();
-  }, 1000);
-  return liveRunState;
+function ensureRunActivity() {
+  if (runActivityState) return runActivityState;
+  runActivityState = { events: [], startedAt: currentRunSummary.startedAt };
+  clearInterval(runActivityTimer);
+  runActivityTimer = setInterval(renderActivityOverview, 1000);
+  return runActivityState;
 }
 
-function renderLiveRun() {
-  if (!liveRunState) return;
-  const state = liveRunState;
-  const openOutputs = [...state.element.querySelectorAll('.live-run-events details')]
-    .flatMap((entry, index) => entry.open ? [index] : []);
-  const latest = state.events.at(-1);
-  const completedPlanItems = currentRunSummary.plan.filter(item => item.completed).length;
-  const stats = [
-    currentRunSummary.plan.length ? completedPlanItems + '/' + currentRunSummary.plan.length + ' plan' : '',
-    currentRunSummary.files.size ? currentRunSummary.files.size + ' file' + (currentRunSummary.files.size === 1 ? '' : 's') : '',
-    currentRunSummary.commands.length ? currentRunSummary.commands.length + ' command' + (currentRunSummary.commands.length === 1 ? '' : 's') : '',
-    currentRunSummary.contextReceipt ? '~' + formatTokenEstimate(currentRunSummary.contextReceipt.estimatedTokens) + ' context tokens' : ''
-  ].filter(Boolean);
-  const detailsId = 'live-run-details-' + currentRunSummary.id;
-  const eventHistory = state.events.length
-    ? '<ol class="live-run-events">' + state.events.slice(-20).map(event =>
-        '<li><span class="live-run-kind">' + escapeHtml(event.kind) + '</span><span class="live-run-event-copy">' +
-        escapeHtml(event.title) + '</span>' +
-        (event.detail ? '<details><summary>Output</summary><pre>' + escapeHtml(event.detail) + '</pre></details>' : '') + '</li>'
-      ).join('') + '</ol>'
-    : '<p class="live-run-empty">Waiting for the first agent action…</p>';
-  state.element.className = 'live-run' + (state.expanded ? ' expanded' : '') + (state.failed ? ' failed' : '');
-  state.element.innerHTML = '<button class="live-run-heading" type="button" data-toggle-live-run aria-expanded="' +
-    String(state.expanded) + '" aria-controls="' + detailsId + '">' +
-    '<span class="live-run-signal" aria-hidden="true"></span>' +
-    '<span class="live-run-copy"><strong>' + escapeHtml(state.status) + '</strong><small>' +
-    escapeHtml(latest ? latest.title : 'Preparing the local workspace') + '</small></span>' +
-    '<span class="live-run-time" aria-hidden="true">' + elapsedRunTime(state.startedAt) + '</span>' +
-    '<span class="live-run-chevron" aria-hidden="true">⌃</span></button>' +
-    '<div class="live-run-details" id="' + detailsId + '">' +
-    '<div class="live-run-stats">' + (stats.length ? stats.map(escapeHtml).join(' · ') : 'No tools used yet') + '</div>' +
-    eventHistory + '</div>';
-  [...state.element.querySelectorAll('.live-run-events details')].forEach((entry, index) => {
-    entry.open = openOutputs.includes(index);
-  });
-  renderActivityOverview();
-  scrollConversationToBottom();
-}
-
-function setLiveRunExpanded(expanded) {
-  if (!liveRunState) return;
-  liveRunState.expanded = Boolean(expanded);
-  liveRunState.element.classList.toggle('expanded', liveRunState.expanded);
-  liveRunState.element.querySelector('[data-toggle-live-run]')
-    ?.setAttribute('aria-expanded', String(liveRunState.expanded));
-}
-
-function updateLiveRunStatus(label) {
+function updateRunActivityStatus(label) {
   if (!busy || !label || label === 'Ready') return;
-  const state = ensureLiveRun();
-  state.status = label;
-  renderLiveRun();
+  status.textContent = label;
+  ensureRunActivity();
+  renderActivityOverview();
 }
 
-function moveLiveRunToEnd() {
-  if (!liveRunState) return;
-  timeline.appendChild(liveRunState.element);
-  scrollConversationToBottom();
-}
-
-function finishLiveRun() {
-  clearInterval(liveRunTimer);
-  liveRunTimer = undefined;
-  liveRunState?.element.remove();
-  liveRunState = null;
+function finishRunActivity() {
+  clearInterval(runActivityTimer);
+  runActivityTimer = undefined;
+  runActivityState = null;
   renderActivityOverview();
 }
 
@@ -3323,10 +3231,10 @@ function appendActivity(kind, title, detail) {
   } else if (kind === 'memory') {
     currentRunSummary.memoryUpdates += 1;
   }
-  const state = ensureLiveRun();
+  const state = ensureRunActivity();
   state.events.push({ kind: String(kind).toUpperCase(), title, detail: detail || '' });
   if (state.events.length > 100) state.events.splice(0, state.events.length - 100);
-  renderLiveRun();
+  renderActivityOverview();
 }
 
 function runSummaryStats(summary) {
@@ -3377,7 +3285,7 @@ function preserveRunReview(summary) {
 }
 
 function renderRunSummary() {
-  finishLiveRun();
+  finishRunActivity();
   currentRunSummary.finishedAt = Date.now();
   renderActivityOverview();
   const summary = preserveRunReview(currentRunSummary);
@@ -4261,7 +4169,7 @@ function wireStarterButtons() {
 }
 
 function resetConversation(context, history, threads, draft = '') {
-  finishLiveRun();
+  finishRunActivity();
   hiddenHistoryMessages = [];
   timeline.innerHTML = welcomeMarkup;
   resetConversationScroll();
@@ -4314,7 +4222,7 @@ send.addEventListener('click', submit);
 cancel.addEventListener('click', () => {
   if (!busy || cancellationPending) return;
   setCancellationPending(true);
-  updateLiveRunStatus('Requesting stop');
+  updateRunActivityStatus('Requesting stop');
   announce('Stop requested. Waiting for the current operation to finish cancelling.');
   vscode.postMessage({ type: 'cancel' });
 });
@@ -4335,10 +4243,6 @@ timeline.addEventListener('click', event => {
   }
   if (target?.closest('[data-add-memory-message]') && !busy && !remoteRunActive) {
     vscode.postMessage({ type: 'addMemoryEntry' });
-    return;
-  }
-  if (target?.closest('[data-toggle-live-run]') && liveRunState) {
-    setLiveRunExpanded(!liveRunState.expanded);
     return;
   }
   const openReview = target?.closest('[data-open-run-review]');
@@ -4803,13 +4707,11 @@ window.addEventListener('message', ({ data }) => {
     case 'user':
       pendingRequestId = data.message?.id || '';
       appendMessage(data.message);
-      moveLiveRunToEnd();
       break;
     case 'pendingUserReplaced':
       pendingRequestText = data.text || pendingRequestText;
       updatePendingMessage(pendingRequestText, data.html || '');
       timeline.querySelectorAll('.recovery-actions').forEach(element => element.remove());
-      moveLiveRunToEnd();
       break;
     case 'assistant':
       pendingRequestText = '';
@@ -4898,62 +4800,51 @@ window.addEventListener('message', ({ data }) => {
     case 'cancelState':
       if (data.state === 'requested' || data.state === 'already-requested') {
         setCancellationPending(true);
-        updateLiveRunStatus('Stopping current operation');
+        updateRunActivityStatus('Stopping current operation');
       } else {
         setCancellationPending(false);
-        if (busy) updateLiveRunStatus('No cancellable operation is active');
+        if (busy) updateRunActivityStatus('No cancellable operation is active');
       }
       break;
     case 'status':
       status.textContent = data.label;
-      updateLiveRunStatus(data.label);
+      updateRunActivityStatus(data.label);
       renderActivityOverview();
       break;
     case 'plan':
       const firstPlanUpdate = currentRunSummary.plan.length === 0;
       currentRunSummary.plan = (data.items || []).map(item => ({ text: item.text, completed: Boolean(item.completed) }));
       planItems.innerHTML = data.items.map(item => '<li class="' + (item.completed ? 'done' : '') + '">' + escapeHtml(item.text) + '</li>').join('');
-      if (busy) {
-        ensureLiveRun();
-        renderLiveRun();
-      }
+      if (busy) ensureRunActivity();
       renderActivityOverview();
       if (firstPlanUpdate && !planManuallyCollapsed) setActivityExpanded(true);
       break;
     case 'contextReceipt':
       currentRunSummary.contextReceipt = data.receipt || undefined;
-      if (liveRunState) renderLiveRun();
       break;
     case 'evidence':
       currentRunSummary.evidence = data.evidence || undefined;
-      if (liveRunState) renderLiveRun();
       break;
     case 'verification':
       currentRunSummary.verification = data.review || undefined;
-      if (liveRunState) renderLiveRun();
       renderActivityOverview();
       break;
     case 'activity': appendActivity(data.kind, data.title, data.detail); break;
     case 'changes':
       currentRunSummary.files = new Map((data.items || []).map(item => [item.path, item]));
       currentRunSummary.omittedChanges = Number(data.omitted || 0);
-      if (liveRunState) renderLiveRun();
       renderActivityOverview();
       break;
     case 'usage':
       currentRunSummary.usage = { input: data.input, output: data.output };
       status.textContent = 'Ready · ' + data.input + ' in / ' + data.output + ' out';
-      if (liveRunState) renderLiveRun();
       renderActivityOverview();
       break;
     case 'error':
       currentRunSummary.failed = true;
       currentRunSummary.error = data.message || '';
-      if (liveRunState) {
-        liveRunState.failed = true;
-        liveRunState.status = 'Run needs attention';
-        renderLiveRun();
-      }
+      status.textContent = 'Run needs attention';
+      renderActivityOverview();
       appendRecovery(data.message, true, data.recoverable !== false);
       break;
     case 'done':
