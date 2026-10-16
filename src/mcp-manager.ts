@@ -5,30 +5,50 @@ import { Agent as UndiciAgent } from "undici";
 import * as vscode from "vscode";
 import { requestLocalApproval } from "./local-approval";
 import {
+  mcpConnectionDescription,
   mcpSecretStorageKey,
   type McpConnectionProfile,
   type McpConnectionSnapshot,
+  type McpHttpConnectionProfile,
+  type McpStdioConnectionProfile,
+  normalizeMcpCommand,
   normalizeMcpEndpoint,
+  normalizeMcpEnvironment,
+  normalizeMcpServerName,
   parseStoredMcpProfiles,
   safeMcpToolPrefix,
+  validateMcpArgument,
+  validateMcpEnvironmentName,
   validateMcpHeaderName,
-  validateMcpHeaderValue
+  validateMcpHeaderValue,
+  validateMcpStdioLaunch,
+  validateMcpToolName
 } from "./mcp-config";
 import { mcpFetch } from "./mcp-transport";
+import { connectStdioMcpClient } from "./mcp-stdio";
 import { redactSensitiveText, safeErrorMessage } from "./redaction";
 import type { AgentUiEvent, RunMode } from "./types";
 
 const MCP_PROFILES_KEY = "codexDevCompanion.mcpConnections.v1";
 
-export type SaveMcpConnectionInput = {
+type McpConnectionInputBase = {
   id?: string;
   name: string;
-  url: string;
   enabled: boolean;
-  headers: Record<string, string>;
   secrets: Record<string, string>;
   tools: string[];
 };
+
+export type SaveMcpConnectionInput = McpConnectionInputBase & ({
+  transport: "http";
+  url: string;
+  headers: Record<string, string>;
+} | {
+  transport: "stdio";
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+});
 
 export type McpConnectionTest = {
   profile: McpConnectionSnapshot;
@@ -42,6 +62,11 @@ export type McpRunSession = {
   close(): Promise<void>;
 };
 
+type ResolvedMcpConnection = {
+  values: Record<string, string>;
+  sensitiveValues: string[];
+};
+
 export class CorporateMcpManager {
   public constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -49,45 +74,49 @@ export class CorporateMcpManager {
     const profiles = this.profiles();
     return Promise.all(profiles.map(async (profile) => ({
       ...profile,
-      missingSecretHeaders: (await Promise.all(profile.secretHeaders.map(async (header) => ({
-        header,
-        present: Boolean(await this.context.secrets.get(mcpSecretStorageKey(profile.id, header)))
-      })))).filter(({ present }) => !present).map(({ header }) => header)
+      missingSecrets: (await Promise.all(profileSecretDescriptors(profile).map(async ({ label, storageName }) => ({
+        label,
+        present: Boolean(await this.context.secrets.get(mcpSecretStorageKey(profile.id, storageName)))
+      })))).filter(({ present }) => !present).map(({ label }) => label)
     })));
   }
 
   public async save(input: SaveMcpConnectionInput): Promise<McpConnectionSnapshot> {
     const id = input.id ?? crypto.randomUUID();
-    const profile: McpConnectionProfile = {
-      id,
-      name: input.name.trim().slice(0, 100),
-      url: normalizeMcpEndpoint(input.url),
-      enabled: input.enabled,
-      headers: Object.fromEntries(Object.entries(input.headers).map(([name, value]) => [
-        validateMcpHeaderName(name),
-        validateMcpHeaderValue(value)
-      ]).filter(([, value]) => Boolean(value))),
-      secretHeaders: [...new Set(Object.keys(input.secrets).map(validateMcpHeaderName))],
-      tools: [...new Set(input.tools.map((tool) => tool.trim()).filter(Boolean))].slice(0, 200),
-      updatedAt: Date.now()
-    };
-    if (!profile.name) throw new Error("MCP server name cannot be empty.");
-    if (!profile.tools.length) throw new Error("Choose at least one MCP tool to expose to the agent.");
-
+    const profile = normalizeConnectionInput(input, id, true);
     const current = this.profiles();
     const previous = current.find((candidate) => candidate.id === id);
     const next = [profile, ...current.filter((candidate) => candidate.id !== id)].slice(0, 20);
     await this.context.workspaceState.update(MCP_PROFILES_KEY, next);
-    await Promise.all(Object.entries(input.secrets).map(async ([header, secret]) => {
-      const normalized = secret.trim();
-      const key = mcpSecretStorageKey(id, header);
-      if (normalized) await this.context.secrets.store(key, normalized);
+    const incomingSecrets = inputSecretEntries(input);
+    await Promise.all(incomingSecrets.map(async ({ storageName, value }) => {
+      const normalized = value.trim();
+      if (normalized) await this.context.secrets.store(mcpSecretStorageKey(id, storageName), normalized);
     }));
     if (previous) {
-      const removed = previous.secretHeaders.filter((header) => !profile.secretHeaders.some((nextHeader) => nextHeader.toLowerCase() === header.toLowerCase()));
-      await Promise.all(removed.map((header) => this.context.secrets.delete(mcpSecretStorageKey(id, header))));
+      const retained = new Set(profileSecretDescriptors(profile).map(({ storageName }) => storageName.toLowerCase()));
+      const removed = profileSecretDescriptors(previous).filter(({ storageName }) => !retained.has(storageName.toLowerCase()));
+      await Promise.all(removed.map(({ storageName }) => this.context.secrets.delete(mcpSecretStorageKey(id, storageName))));
     }
     return (await this.snapshots()).find((candidate) => candidate.id === id)!;
+  }
+
+  public async discover(
+    input: SaveMcpConnectionInput,
+    dispatcher?: UndiciAgent,
+    signal?: AbortSignal,
+    stdioCaPath?: string
+  ): Promise<string[]> {
+    const profile = normalizeConnectionInput(input, input.id ?? crypto.randomUUID(), false);
+    const resolved = resolveInputValues(profile, input.secrets);
+    const client = await this.connect(profile, resolved, dispatcher, signal, stdioCaPath);
+    try {
+      return (await client.listTools(undefined, { signal })).tools.map(({ name }) => name).sort();
+    } catch (error) {
+      throw new Error(safeErrorMessage(error, resolved.sensitiveValues));
+    } finally {
+      await client.close().catch(() => undefined);
+    }
   }
 
   public async setEnabled(id: string, enabled: boolean): Promise<void> {
@@ -104,22 +133,24 @@ export class CorporateMcpManager {
     const profile = profiles.find((candidate) => candidate.id === id);
     if (!profile) return;
     await this.context.workspaceState.update(MCP_PROFILES_KEY, profiles.filter((candidate) => candidate.id !== id));
-    await Promise.all(profile.secretHeaders.map((header) => this.context.secrets.delete(mcpSecretStorageKey(id, header))));
+    await Promise.all(profileSecretDescriptors(profile).map(({ storageName }) => (
+      this.context.secrets.delete(mcpSecretStorageKey(id, storageName))
+    )));
   }
 
-  public async test(id: string, dispatcher?: UndiciAgent, signal?: AbortSignal): Promise<McpConnectionTest> {
+  public async test(
+    id: string,
+    dispatcher?: UndiciAgent,
+    signal?: AbortSignal,
+    stdioCaPath?: string
+  ): Promise<McpConnectionTest> {
     const profile = (await this.snapshots()).find((candidate) => candidate.id === id);
     if (!profile) throw new Error("The MCP connection no longer exists.");
-    if (profile.missingSecretHeaders.length) {
-      throw new Error(`Add the missing MCP credentials: ${profile.missingSecretHeaders.join(", ")}.`);
+    if (profile.missingSecrets.length) {
+      throw new Error(`Add the missing MCP credentials: ${profile.missingSecrets.join(", ")}.`);
     }
-    const resolved = await this.resolvedHeaders(profile);
-    let client: Client;
-    try {
-      client = await this.connect(profile, resolved.headers, dispatcher, signal);
-    } catch (error) {
-      throw new Error(safeErrorMessage(error, resolved.sensitiveValues));
-    }
+    const resolved = await this.resolvedStoredValues(profile);
+    const client = await this.connect(profile, resolved, dispatcher, signal, stdioCaPath);
     try {
       const discovered = (await client.listTools(undefined, { signal })).tools.map(({ name }) => name).sort();
       return {
@@ -140,26 +171,27 @@ export class CorporateMcpManager {
     signal: AbortSignal;
     onEvent: (event: AgentUiEvent) => void;
     sensitiveValues: readonly string[];
+    stdioCaPath?: string;
   }): Promise<McpRunSession> {
     if (options.mode === "plan") return emptySession();
     const clients: Client[] = [];
     const tools: StructuredToolInterface[] = [];
     const sensitiveValues: string[] = [];
     for (const profile of (await this.snapshots()).filter((candidate) => candidate.enabled)) {
-      if (profile.missingSecretHeaders.length) {
+      if (profile.missingSecrets.length) {
         options.onEvent({
           type: "activity",
           kind: "mcp",
           title: `MCP unavailable · ${profile.name}`,
-          detail: `Missing credentials: ${profile.missingSecretHeaders.join(", ")}`
+          detail: `Missing credentials: ${profile.missingSecrets.join(", ")}`
         });
         continue;
       }
+      let client: Client | undefined;
       try {
-        const resolved = await this.resolvedHeaders(profile);
+        const resolved = await this.resolvedStoredValues(profile);
         sensitiveValues.push(...resolved.sensitiveValues);
-        const client = await this.connect(profile, resolved.headers, options.dispatcher, options.signal);
-        clients.push(client);
+        client = await this.connect(profile, resolved, options.dispatcher, options.signal, options.stdioCaPath);
         const prefix = safeMcpToolPrefix(profile.name);
         const loaded = await loadMcpTools(prefix, client, {
           prefixToolNameWithServerName: true,
@@ -177,8 +209,8 @@ export class CorporateMcpManager {
             const approved = await requestLocalApproval(options.onEvent, {
               prompt: `Allow the agent to call the corporate MCP tool “${name}”?`,
               action: "Run MCP tool",
-              target: `${profile.name} · ${new URL(profile.url).host}`,
-              explanation: `The request is sent only to this configured HTTPS MCP route. Its result may be included in the next request to your configured LiteLLM model.\n\nArguments:\n${boundedMcpArguments(args, redactionValues)}`,
+              target: mcpApprovalTarget(profile),
+              explanation: `${mcpApprovalExplanation(profile)}\n\nArguments:\n${boundedMcpArguments(args, redactionValues)}`,
               risk: "sensitive",
               sensitiveValues: redactionValues
             });
@@ -200,6 +232,8 @@ export class CorporateMcpManager {
         const allowlist = new Set(profile.tools.map((name) => `${prefix}_${name}`));
         const allowed = loaded.filter((tool) => allowlist.has(tool.name));
         tools.push(...allowed);
+        clients.push(client);
+        client = undefined;
         options.onEvent({
           type: "activity",
           kind: "mcp",
@@ -207,6 +241,7 @@ export class CorporateMcpManager {
           detail: `${allowed.length} approved tool${allowed.length === 1 ? "" : "s"} available`
         });
       } catch (error) {
+        await client?.close().catch(() => undefined);
         options.onEvent({
           type: "activity",
           kind: "mcp",
@@ -228,27 +263,43 @@ export class CorporateMcpManager {
     return parseStoredMcpProfiles(this.context.workspaceState.get<unknown>(MCP_PROFILES_KEY));
   }
 
-  private async resolvedHeaders(profile: McpConnectionProfile): Promise<{ headers: Record<string, string>; sensitiveValues: string[] }> {
-    const headers = { ...profile.headers };
+  private async resolvedStoredValues(profile: McpConnectionProfile): Promise<ResolvedMcpConnection> {
+    const values = profile.transport === "http" ? { ...profile.headers } : { ...profile.env };
     const sensitiveValues: string[] = [];
-    for (const header of profile.secretHeaders) {
-      const secret = await this.context.secrets.get(mcpSecretStorageKey(profile.id, header));
-      if (!secret) throw new Error(`Missing credential for MCP header ${header}.`);
-      headers[header] = secret;
+    for (const { label, storageName } of profileSecretDescriptors(profile)) {
+      const secret = await this.context.secrets.get(mcpSecretStorageKey(profile.id, storageName));
+      if (!secret) throw new Error(`Missing credential for MCP ${profile.transport === "http" ? "header" : "environment variable"} ${label}.`);
+      values[label] = secret;
       sensitiveValues.push(secret, secret.replace(/^Bearer\s+/i, ""));
     }
-    return { headers, sensitiveValues: sensitiveValues.filter(Boolean) };
+    return { values, sensitiveValues: sensitiveValues.filter(Boolean) };
   }
 
   private async connect(
     profile: McpConnectionProfile,
-    headers: Record<string, string>,
+    resolved: ResolvedMcpConnection,
     dispatcher?: UndiciAgent,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    stdioCaPath?: string
   ): Promise<Client> {
+    if (profile.transport === "stdio") {
+      const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspace) throw new Error("Open a workspace before starting a local MCP server.");
+      return connectStdioMcpClient({
+        command: profile.command,
+        args: profile.args,
+        env: {
+          ...resolved.values
+        },
+        workspace,
+        signal,
+        caCertificatePath: stdioCaPath,
+        sensitiveValues: resolved.sensitiveValues
+      });
+    }
     const client = new Client({ name: "local-dev-companion", version: "0.11.0" });
     const transport = new StreamableHTTPClientTransport(new URL(profile.url), {
-      requestInit: { headers, redirect: "manual" },
+      requestInit: { headers: resolved.values, redirect: "manual" },
       redirectPolicy: "same-origin",
       reconnectionOptions: {
         maxRetries: 0,
@@ -263,9 +314,85 @@ export class CorporateMcpManager {
       return client;
     } catch (error) {
       await client.close().catch(() => undefined);
-      throw error;
+      throw new Error(safeErrorMessage(error, resolved.sensitiveValues));
     }
   }
+}
+
+function normalizeConnectionInput(
+  input: SaveMcpConnectionInput,
+  id: string,
+  requireTools: boolean
+): McpConnectionProfile {
+  const common = {
+    id,
+    name: normalizeMcpServerName(input.name),
+    enabled: input.enabled,
+    tools: [...new Set(input.tools.map(validateMcpToolName))].slice(0, 200),
+    updatedAt: Date.now()
+  };
+  if (requireTools && !common.tools.length) throw new Error("Choose at least one MCP tool to expose to the agent.");
+  if (input.transport === "stdio") {
+    const command = normalizeMcpCommand(input.command);
+    const args = input.args.map(validateMcpArgument);
+    validateMcpStdioLaunch(command, args);
+    return {
+      ...common,
+      transport: "stdio",
+      command,
+      args,
+      env: normalizeMcpEnvironment(input.env),
+      secretEnvironment: [...new Set(Object.keys(input.secrets).map(validateMcpEnvironmentName))]
+    } satisfies McpStdioConnectionProfile;
+  }
+  return {
+    ...common,
+    transport: "http",
+    url: normalizeMcpEndpoint(input.url),
+    headers: Object.fromEntries(Object.entries(input.headers).map(([name, value]) => [
+      validateMcpHeaderName(name),
+      validateMcpHeaderValue(value)
+    ]).filter(([, value]) => Boolean(value))),
+    secretHeaders: [...new Set(Object.keys(input.secrets).map(validateMcpHeaderName))]
+  } satisfies McpHttpConnectionProfile;
+}
+
+function inputSecretEntries(input: SaveMcpConnectionInput): Array<{ storageName: string; value: string }> {
+  return Object.entries(input.secrets).map(([name, value]) => ({
+    storageName: input.transport === "stdio" ? `env:${name}` : name,
+    value
+  }));
+}
+
+function profileSecretDescriptors(profile: McpConnectionProfile): Array<{ label: string; storageName: string }> {
+  return profile.transport === "stdio"
+    ? profile.secretEnvironment.map((name) => ({ label: name, storageName: `env:${name}` }))
+    : profile.secretHeaders.map((name) => ({ label: name, storageName: name }));
+}
+
+function resolveInputValues(profile: McpConnectionProfile, secrets: Record<string, string>): ResolvedMcpConnection {
+  const values = profile.transport === "http" ? { ...profile.headers } : { ...profile.env };
+  const sensitiveValues: string[] = [];
+  for (const [name, rawSecret] of Object.entries(secrets)) {
+    const secret = rawSecret.trim();
+    if (!secret) throw new Error(`Enter the MCP credential ${name} before testing the connection.`);
+    values[name] = secret;
+    sensitiveValues.push(secret, secret.replace(/^Bearer\s+/i, ""));
+  }
+  return { values, sensitiveValues: sensitiveValues.filter(Boolean) };
+}
+
+function mcpApprovalTarget(profile: McpConnectionProfile): string {
+  return profile.transport === "http"
+    ? `${profile.name} · ${new URL(profile.url).host}`
+    : `${profile.name} · local ${profile.command}`;
+}
+
+function mcpApprovalExplanation(profile: McpConnectionProfile): string {
+  if (profile.transport === "http") {
+    return "The request is sent only to this configured HTTPS MCP route. Its result may be included in the next request to your configured LiteLLM model.";
+  }
+  return `The tool runs through the approved local MCP process “${mcpConnectionDescription(profile)}”. The process may access files, applications, or networks according to that tool. Its result may be included in the next request to your configured LiteLLM model.`;
 }
 
 function emptySession(): McpRunSession {

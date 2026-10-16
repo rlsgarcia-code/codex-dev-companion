@@ -53,7 +53,7 @@ O piloto passa quando:
 - o Chroma inicia e encerra localmente em duas janelas sem disputa;
 - a validação de navegador funciona com Edge/Chrome já instalado, sem download, elevação ou tráfego não local;
 - inteligência VS Code, mapa estrutural, processos gerenciados, playbooks e revisão final operam sob a conta comum do usuário, sem instalação de serviço ou solicitação administrativa;
-- MCP corporativo usa somente a URL HTTPS importada, reaproveita a CA local, expõe apenas a allowlist e nunca persiste credenciais fora do Secret Storage;
+- MCP corporativo usa somente a URL HTTPS ou o comando `stdio` importado e aprovado, expõe apenas a allowlist selecionada e nunca persiste credenciais fora do Secret Storage;
 - três sessões consecutivas terminam sem falha não recuperável.
 
 ## Retorno de falha

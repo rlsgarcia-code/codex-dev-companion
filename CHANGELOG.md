@@ -2,6 +2,7 @@
 
 ## 0.11.0
 
+- Added corporate local `stdio` MCP imports with exact no-shell commands, pinned `npx` packages, per-process HTTPS registries, secure environment secrets, wildcard tool discovery followed by explicit selection, and subprocess cleanup with the MCP session.
 - Added VS Code-native corporate MCP onboarding from clipboard or JSON files, with placeholder resolution, per-header Secret Storage, explicit tool allowlists, enable/disable/remove controls, and a read-only handshake/catalog test.
 - Added official LangChain MCP tool adaptation for both agent runtimes, exact-route HTTPS transport with redirects blocked and corporate CA reuse, plus approval before every MCP tool call and no MCP access in Plan-only mode.
 - Added VS Code-native Problems, symbol, definition/reference, call-hierarchy, code-action, and bounded multi-file rename tools, with diagnostic baseline/compare evidence.

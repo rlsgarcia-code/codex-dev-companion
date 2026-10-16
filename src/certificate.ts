@@ -8,6 +8,10 @@ function importedGatewayCaUri(context: vscode.ExtensionContext): vscode.Uri {
   return vscode.Uri.joinPath(context.globalStorageUri, IMPORTED_GATEWAY_CA_FILENAME);
 }
 
+export function importedGatewayCaPath(context: vscode.ExtensionContext): string {
+  return importedGatewayCaUri(context).fsPath;
+}
+
 function isFileNotFound(error: unknown): boolean {
   return error instanceof vscode.FileSystemError && error.code === "FileNotFound";
 }

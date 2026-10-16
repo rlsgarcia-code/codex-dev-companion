@@ -1,12 +1,23 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { z } from "zod";
 
 const MAX_MCP_TEMPLATE_CHARACTERS = 64_000;
 const PLACEHOLDER_SOURCE = String.raw`<[^<>\r\n]{1,240}>|\$\{[^{}\r\n]{1,240}\}`;
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/;
+const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,200}$/;
+const BLOCKED_STDIO_COMMANDS = new Set([
+  "bash", "cscript", "cmd", "cmd.exe", "fish", "mshta", "osascript", "powershell",
+  "powershell.exe", "pwsh", "sh", "wscript", "zsh"
+]);
+const RESERVED_STDIO_ENVIRONMENT = new Set([
+  "comspec", "dyld_insert_libraries", "dyld_library_path", "ld_library_path", "ld_preload",
+  "node_extra_ca_certs", "node_options", "node_path", "npm_config_cafile", "npm_config_node_options",
+  "npm_config_script_shell", "path", "pathext", "shell"
+]);
 
-const importedServerSchema = z.object({
+const importedHttpServerSchema = z.object({
   type: z.enum(["http", "streamable-http"]).optional(),
   transport: z.enum(["http", "streamable-http"]).optional(),
   url: z.string().min(1).max(4_096),
@@ -14,12 +25,30 @@ const importedServerSchema = z.object({
   tools: z.array(z.string().min(1).max(200)).max(200).optional().default([])
 }).strict();
 
-export type ImportedMcpServer = {
+const importedStdioServerSchema = z.object({
+  type: z.enum(["local", "stdio"]).optional(),
+  transport: z.literal("stdio").optional(),
+  command: z.string().min(1).max(512),
+  args: z.array(z.string().max(4_096)).max(64).optional().default([]),
+  env: z.record(z.string(), z.string()).optional().default({}),
+  tools: z.array(z.string().min(1).max(200)).max(200).optional().default([])
+}).strict();
+
+type ImportedMcpServerBase = {
   name: string;
-  url: string;
-  headers: Record<string, string>;
   tools: string[];
 };
+
+export type ImportedMcpServer = ImportedMcpServerBase & ({
+  transport: "http";
+  url: string;
+  headers: Record<string, string>;
+} | {
+  transport: "stdio";
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+});
 
 export type McpTemplatePlaceholder = {
   raw: string;
@@ -27,19 +56,33 @@ export type McpTemplatePlaceholder = {
   kind?: "input" | "secret";
 };
 
-export type McpConnectionProfile = {
+type McpConnectionProfileBase = {
   id: string;
   name: string;
-  url: string;
   enabled: boolean;
-  headers: Record<string, string>;
-  secretHeaders: string[];
   tools: string[];
   updatedAt: number;
 };
 
+export type McpHttpConnectionProfile = McpConnectionProfileBase & {
+  transport: "http";
+  url: string;
+  headers: Record<string, string>;
+  secretHeaders: string[];
+};
+
+export type McpStdioConnectionProfile = McpConnectionProfileBase & {
+  transport: "stdio";
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  secretEnvironment: string[];
+};
+
+export type McpConnectionProfile = McpHttpConnectionProfile | McpStdioConnectionProfile;
+
 export type McpConnectionSnapshot = McpConnectionProfile & {
-  missingSecretHeaders: string[];
+  missingSecrets: string[];
 };
 
 export function parseMcpTemplate(source: string): ImportedMcpServer[] {
@@ -64,22 +107,30 @@ export function parseMcpTemplate(source: string): ImportedMcpServer[] {
 
   return entries.map(([rawName, rawServer]) => {
     const name = normalizeMcpServerName(rawName);
-    if (isRecord(rawServer) && (rawServer.type === "stdio" || rawServer.transport === "stdio" || "command" in rawServer)) {
-      throw new Error(`MCP server “${name}” uses stdio. This release accepts corporate HTTPS MCP servers only.`);
+    const isStdio = isRecord(rawServer)
+      && (rawServer.type === "local" || rawServer.type === "stdio" || rawServer.transport === "stdio" || "command" in rawServer);
+    if (isStdio) {
+      const parsed = importedStdioServerSchema.safeParse(rawServer);
+      if (!parsed.success) throw new Error(`MCP server “${name}” is not a supported local stdio configuration.`);
+      const command = normalizeMcpCommand(parsed.data.command);
+      const args = parsed.data.args.map(validateMcpArgument);
+      validateMcpStdioLaunch(command, args);
+      const env = normalizeMcpEnvironment(parsed.data.env);
+      return { name, transport: "stdio", command, args, env, tools: normalizeImportedTools(name, parsed.data.tools) };
     }
-    const parsed = importedServerSchema.safeParse(rawServer);
-    if (!parsed.success) {
-      throw new Error(`MCP server “${name}” is not a supported HTTPS configuration.`);
-    }
-    for (const [header, headerValue] of Object.entries(parsed.data.headers)) {
-      validateMcpHeaderName(header);
-      validateMcpHeaderValue(headerValue);
-    }
-    const tools = [...new Set(parsed.data.tools.map((tool) => tool.trim()))];
-    if (tools.some((tool) => !TOOL_NAME.test(tool))) {
-      throw new Error(`MCP server “${name}” contains an invalid tool name.`);
-    }
-    return { name, url: parsed.data.url.trim(), headers: parsed.data.headers, tools };
+    const parsed = importedHttpServerSchema.safeParse(rawServer);
+    if (!parsed.success) throw new Error(`MCP server “${name}” is not a supported HTTPS configuration.`);
+    const headers = Object.fromEntries(Object.entries(parsed.data.headers).map(([header, headerValue]) => [
+      validateMcpHeaderName(header),
+      validateMcpHeaderValue(headerValue)
+    ]));
+    return {
+      name,
+      transport: "http",
+      url: parsed.data.url.trim(),
+      headers,
+      tools: normalizeImportedTools(name, parsed.data.tools)
+    };
   });
 }
 
@@ -103,6 +154,85 @@ export function normalizeMcpEndpoint(value: string): string {
   if (url.hash) throw new Error("MCP URLs cannot contain a fragment.");
   if (url.search) throw new Error("MCP URLs cannot contain query parameters; use headers for credentials.");
   return url.href;
+}
+
+export function normalizeMcpCommand(value: string): string {
+  const command = value.trim();
+  if (!command || command.length > 512 || /[\0\r\n]/.test(command)) {
+    throw new Error("Local MCP command must be a bounded single-line executable name or path.");
+  }
+  if (hasMcpPlaceholder(command)) throw new Error("Placeholders are not allowed in a local MCP executable name.");
+  const executable = path.win32.basename(path.basename(command)).toLowerCase();
+  if (BLOCKED_STDIO_COMMANDS.has(executable)) {
+    throw new Error(`Local MCP command “${executable}” is a shell or script host and is not allowed.`);
+  }
+  return command;
+}
+
+export function validateMcpArgument(value: string): string {
+  if (value.length > 4_096 || /[\0\r\n]/.test(value)) {
+    throw new Error("Local MCP arguments must be bounded single-line values.");
+  }
+  return value;
+}
+
+export function validateMcpStdioLaunch(command: string, args: readonly string[]): void {
+  const executable = path.win32.basename(path.basename(command)).toLowerCase();
+  if (args.some((argument) => /^--?(?:api[-_]?key|auth|authorization|cookie|credential|password|secret|token)(?:=|$)/i.test(argument))) {
+    throw new Error("MCP credentials are not allowed in process arguments. Put them in an env entry so Secret Storage can protect them.");
+  }
+  if (!["npx", "npx.cmd", "npx.exe"].includes(executable)) return;
+  if (args.some((argument) => ["-c", "--call", "--shell"].includes(argument.toLowerCase()))) {
+    throw new Error("Local MCP npx commands cannot invoke a shell or command string.");
+  }
+  const pinnedPackage = args.some((argument) => (
+    /^@[a-z0-9._-]+\/[a-z0-9._-]+@\d+\.\d+\.\d+(?:-[a-z0-9._-]+)?$/i.test(argument)
+    || /^[a-z0-9._-]+@\d+\.\d+\.\d+(?:-[a-z0-9._-]+)?$/i.test(argument)
+  ));
+  if (!pinnedPackage) {
+    throw new Error("Corporate MCP packages started with npx must use an exact version such as package@1.2.3.");
+  }
+}
+
+export function validateMcpEnvironmentName(value: string): string {
+  const name = value.trim();
+  if (!ENVIRONMENT_NAME.test(name)) throw new Error(`Invalid MCP environment variable name: ${name || "(empty)"}.`);
+  if (RESERVED_STDIO_ENVIRONMENT.has(name.toLowerCase())) {
+    throw new Error(`MCP environment variable ${name} controls process execution or trust and cannot come from a template.`);
+  }
+  return name;
+}
+
+export function validateMcpEnvironmentValue(value: string): string {
+  if (value.length > 8_192 || /[\0\r\n]/.test(value)) {
+    throw new Error("MCP environment values must be bounded single-line values.");
+  }
+  return value;
+}
+
+export function normalizeMcpEnvironment(value: Record<string, string>): Record<string, string> {
+  const entries = Object.entries(value);
+  if (entries.length > 64) throw new Error("A local MCP server may define at most 64 environment variables.");
+  return Object.fromEntries(entries.map(([name, environmentValue]) => {
+    const normalizedName = validateMcpEnvironmentName(name);
+    const normalizedValue = validateMcpEnvironmentValue(environmentValue);
+    if (/^npm_config_registry$/i.test(normalizedName) && !hasMcpPlaceholder(normalizedValue)) {
+      let registry: URL;
+      try {
+        registry = new URL(normalizedValue);
+      } catch {
+        throw new Error("The corporate npm registry must be a complete HTTPS URL.");
+      }
+      if (registry.protocol !== "https:" || registry.username || registry.password) {
+        throw new Error("The corporate npm registry must use HTTPS and cannot contain credentials.");
+      }
+    }
+    return [normalizedName, normalizedValue];
+  }));
+}
+
+export function isSecretMcpEnvironment(name: string): boolean {
+  return /(?:^|_)(?:api_?key|auth|authorization|cookie|credential|password|secret|token)(?:_|$)/i.test(name.trim());
 }
 
 export function hasMcpPlaceholder(value: string): boolean {
@@ -147,8 +277,8 @@ export function stripSecretHeaderPrefix(name: string, value: string): { prefix: 
   return { prefix: "", secret: value.trim() };
 }
 
-export function mcpSecretStorageKey(profileId: string, headerName: string): string {
-  const digest = createHash("sha256").update(`${profileId}\0${headerName.toLowerCase()}`).digest("hex").slice(0, 24);
+export function mcpSecretStorageKey(profileId: string, secretName: string): string {
+  const digest = createHash("sha256").update(`${profileId}\0${secretName.toLowerCase()}`).digest("hex").slice(0, 24);
   return `codexDevCompanion.mcp.${digest}`;
 }
 
@@ -157,36 +287,95 @@ export function safeMcpToolPrefix(name: string): string {
   return prefix || "mcp";
 }
 
+export function validateMcpToolName(value: string): string {
+  const name = value.trim();
+  if (!TOOL_NAME.test(name)) throw new Error(`Invalid MCP tool name: ${name || "(empty)"}.`);
+  return name;
+}
+
+export function mcpConnectionDescription(profile: McpConnectionProfile): string {
+  return profile.transport === "http" ? profile.url : [profile.command, ...profile.args].join(" ");
+}
+
 export function parseStoredMcpProfiles(value: unknown): McpConnectionProfile[] {
-  const profileSchema = z.object({
+  const common = {
     id: z.string().uuid(),
     name: z.string().min(1).max(100),
-    url: z.string().min(1).max(4_096),
     enabled: z.boolean(),
-    headers: z.record(z.string(), z.string()),
-    secretHeaders: z.array(z.string().min(1).max(128)).max(20),
     tools: z.array(z.string().min(1).max(200)).max(200),
     updatedAt: z.number().int().nonnegative()
+  };
+  const httpProfileSchema = z.object({
+    ...common,
+    transport: z.literal("http").optional(),
+    url: z.string().min(1).max(4_096),
+    headers: z.record(z.string(), z.string()),
+    secretHeaders: z.array(z.string().min(1).max(128)).max(20)
   }).strict();
-  const parsed = z.array(profileSchema).max(20).safeParse(value);
+  const stdioProfileSchema = z.object({
+    ...common,
+    transport: z.literal("stdio"),
+    command: z.string().min(1).max(512),
+    args: z.array(z.string().max(4_096)).max(64),
+    env: z.record(z.string(), z.string()),
+    secretEnvironment: z.array(z.string().min(1).max(128)).max(64)
+  }).strict();
+  const parsed = z.array(z.unknown()).max(20).safeParse(value);
   if (!parsed.success) return [];
-  return parsed.data.flatMap((profile) => {
+  const profiles: McpConnectionProfile[] = [];
+  for (const candidate of parsed.data) {
+    const stdio = stdioProfileSchema.safeParse(candidate);
+    const http = stdio.success ? undefined : httpProfileSchema.safeParse(candidate);
     try {
-      return [{
-        ...profile,
-        name: normalizeMcpServerName(profile.name),
-        url: normalizeMcpEndpoint(profile.url),
-        headers: Object.fromEntries(Object.entries(profile.headers).map(([name, headerValue]) => [
-          validateMcpHeaderName(name),
-          validateMcpHeaderValue(headerValue)
-        ])),
-        secretHeaders: [...new Set(profile.secretHeaders.map(validateMcpHeaderName))],
-        tools: [...new Set(profile.tools.filter((tool) => TOOL_NAME.test(tool)))]
-      }];
+      if (stdio.success) {
+        const command = normalizeMcpCommand(stdio.data.command);
+        const args = stdio.data.args.map(validateMcpArgument);
+        validateMcpStdioLaunch(command, args);
+        profiles.push({
+          ...stdio.data,
+          name: normalizeMcpServerName(stdio.data.name),
+          command,
+          args,
+          env: normalizeMcpEnvironment(stdio.data.env),
+          secretEnvironment: [...new Set(stdio.data.secretEnvironment.map(validateMcpEnvironmentName))],
+          tools: normalizeStoredTools(stdio.data.tools)
+        } satisfies McpStdioConnectionProfile);
+        continue;
+      }
+      if (http?.success) {
+        profiles.push({
+          ...http.data,
+          transport: "http" as const,
+          name: normalizeMcpServerName(http.data.name),
+          url: normalizeMcpEndpoint(http.data.url),
+          headers: Object.fromEntries(Object.entries(http.data.headers).map(([name, headerValue]) => [
+            validateMcpHeaderName(name),
+            validateMcpHeaderValue(headerValue)
+          ])),
+          secretHeaders: [...new Set(http.data.secretHeaders.map(validateMcpHeaderName))],
+          tools: normalizeStoredTools(http.data.tools)
+        } satisfies McpHttpConnectionProfile);
+      }
     } catch {
-      return [];
+      // Ignore malformed stored profiles instead of blocking every valid connection.
     }
-  });
+  }
+  return profiles;
+}
+
+function normalizeImportedTools(serverName: string, tools: string[]): string[] {
+  const normalized = [...new Set(tools.map((tool) => tool.trim()))];
+  if (normalized.includes("*") && normalized.length !== 1) {
+    throw new Error(`MCP server “${serverName}” must use either tools ["*"] or an explicit tool list.`);
+  }
+  if (normalized.some((tool) => tool !== "*" && !TOOL_NAME.test(tool))) {
+    throw new Error(`MCP server “${serverName}” contains an invalid tool name.`);
+  }
+  return normalized;
+}
+
+function normalizeStoredTools(tools: string[]): string[] {
+  return [...new Set(tools.filter((tool) => TOOL_NAME.test(tool)))];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

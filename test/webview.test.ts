@@ -92,6 +92,7 @@ test("keeps local browser control visible, opt-in, and revocable", () => {
 test("keeps corporate MCP onboarding native, secret-separated, and approval-gated", () => {
   const agentSource = readFileSync("src/agent.ts", "utf8");
   const managerSource = readFileSync("src/mcp-manager.ts", "utf8");
+  const stdioSource = readFileSync("src/mcp-stdio.ts", "utf8");
   const transportSource = readFileSync("src/mcp-transport.ts", "utf8");
   assertMessageType("openMcpConnections");
   assert.match(source, /id="mcp-connections"[^>]*aria-pressed="false"/);
@@ -104,7 +105,17 @@ test("keeps corporate MCP onboarding native, secret-separated, and approval-gate
   assert.match(source, /password: true/);
   assert.match(source, /Credentials remain in VS Code Secret Storage/);
   assert.match(source, /Handshake and list tools without executing one/);
+  assert.match(source, /Start .* once to discover its tools/);
+  assert.match(source, /npx may obtain the pinned package from the configured corporate registry/);
+  assert.match(source, /this\.agent\.discoverMcpTools\(draft\)/);
+  assert.match(source, /No MCP tool is executed during discovery/);
   assert.match(managerSource, /this\.context\.secrets\.store/);
+  assert.match(managerSource, /connectStdioMcpClient/);
+  assert.match(stdioSource, /new StdioClientTransport/);
+  assert.match(stdioSource, /cwd: options\.workspace/);
+  assert.match(stdioSource, /stderr: "pipe"/);
+  assert.match(stdioSource, /NODE_EXTRA_CA_CERTS: options\.caCertificatePath/);
+  assert.match(stdioSource, /npm_config_cafile: options\.caCertificatePath/);
   assert.match(managerSource, /prefixToolNameWithServerName: true/);
   assert.match(managerSource, /resource: "artifact"/);
   assert.match(managerSource, /sanitizeMcpResult/);

@@ -51,6 +51,8 @@ test("teaches both agent runtimes to author secret-free workspace MCP templates"
   assert.match(agent, /\.codex-agent\/mcp\/<server-slug>\.json/);
   assert.match(agent, /<secret:Human-readable title>/);
   assert.match(agent, /<input:Human-readable title>/);
+  assert.match(agent, /Preserve exact pinned package versions and argument order/);
+  assert.match(agent, /never substitute @latest/);
   assert.match(agent, /never attempt to access VS Code Secret Storage/);
   assert.match(agent, /never connect or test the MCP automatically/);
   assert.match(agent, /Add MCP from workspace templates/);

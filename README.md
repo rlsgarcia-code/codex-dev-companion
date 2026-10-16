@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rlsgarcia-code/codex-dev-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/rlsgarcia-code/codex-dev-companion/actions/workflows/ci.yml)
 
-Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente e conectados ao gateway LiteLLM e aos MCPs corporativos HTTPS que o usuário configurar explicitamente.
+Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente e conectados ao gateway LiteLLM e aos MCPs corporativos HTTPS ou `stdio` que o usuário importar e aprovar explicitamente.
 
 O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e previsível, e **Deep Agent** (`createDeepAgent`), preparado para tarefas longas com planejamento, compactação de contexto e subagentes locais. Modelo (`ChatOpenAICompletions`), ferramentas (`tool` + Zod), estado (`MemorySaver`), callbacks, vector store e middleware continuam sendo do ecossistema LangChain. Contexto, histórico, ChromaDB, memória e ferramentas rodam na máquina do usuário. As únicas chamadas externas feitas pela extensão são:
 
@@ -11,6 +11,8 @@ POST <LITELLM_BASE_URL>/chat/completions
 POST <LITELLM_BASE_URL>/embeddings       # opcional, se a memória semântica for configurada
 GET  <MODELS_URL>  # opcional, somente quando o usuário clica em Load ou Test connection
 POST/GET/DELETE <MCP_URL_EXATA>          # opcional, somente em conexões MCP corporativas habilitadas
+<COMANDO_STDIO_APROVADO>                 # opcional, processo MCP local sem shell
+GET <REGISTRY_NPM_CORPORATIVO>           # opcional, realizado pelo npx aprovado para obter pacote fixado
 ```
 
 Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, ferramentas hospedadas, web search, descoberta pública de MCP, LangSmith, telemetria ou verificação de atualização.
@@ -62,8 +64,8 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Chave virtual LiteLLM armazenada exclusivamente no Secret Storage do VS Code.
 - Transporte externo restrito às rotas HTTPS exatas de Chat Completions e embeddings derivadas do gateway configurado; métodos inesperados, parâmetros na URL e redirects são recusados antes que credenciais possam sair para outro destino.
 - Bundle PEM corporativo opcional, importado uma vez para o armazenamento global local da extensão.
-- Conexões MCP corporativas via ícone de plugue: importe o template JSON do catálogo pela área de transferência, por arquivo ou pelo catálogo editável do workspace em `.codex-agent/mcp.json` e `.codex-agent/mcp/*.json`; placeholders são preenchidos em diálogos nativos e somente as ferramentas selecionadas são expostas.
-- Adaptador MCP oficial do LangChain com URL HTTPS exata, redirects bloqueados, CA corporativa reutilizada, credenciais por header no Secret Storage e aprovação antes de cada chamada de ferramenta.
+- Conexões MCP corporativas via ícone de plugue: importe templates HTTPS ou `stdio` do catálogo pela área de transferência, por arquivo ou pelo catálogo editável do workspace em `.codex-agent/mcp.json` e `.codex-agent/mcp/*.json`; placeholders são preenchidos em diálogos nativos e somente as ferramentas selecionadas são expostas.
+- Adaptador MCP oficial do LangChain com URL HTTPS exata ou processo local sem shell, CA corporativa reutilizada no transporte HTTP, credenciais de header/ambiente no Secret Storage e aprovação antes de cada chamada de ferramenta.
 - Catálogo de modelos opcional carregado da URL informada pelo usuário com `Cache-Control: no-cache` e `api-key` usando a chave do Secret Storage.
 - Aviso de primeiro uso na própria sidebar enquanto gateway, alias de chat e chave segura ainda não estiverem configurados.
 - Diagnósticos acionáveis que oferecem correções locais para reasoning, sampling, header de autenticação, rota, modelo e CA corporativa; parâmetros corrigidos são testados novamente antes de o usuário salvá-los.
@@ -160,7 +162,7 @@ O comando abre a Secondary Sidebar diretamente no único formulário de configur
 2. Clique no ícone de plugue no cabeçalho do chat.
 3. Escolha a origem: clipboard, arquivo avulso ou **workspace templates**. A ação **Create an editable workspace template** cria `.codex-agent/mcp/example.json` como ponto de partida.
 4. Preencha os valores comuns e as credenciais solicitadas pelos títulos dos placeholders.
-5. Revise a URL final, selecione a allowlist exata de ferramentas e confirme a conexão.
+5. Revise a URL final ou o comando local exato, selecione a allowlist de ferramentas e confirme a conexão.
 6. Execute **Test connection**. O teste faz somente o handshake e a descoberta do catálogo de ferramentas; não executa ferramentas do servidor.
 
 Um arquivo pode conter um ou vários servidores. Para deixar claro o que é configuração comum e o que é credencial, use placeholders titulados:
@@ -182,14 +184,36 @@ Um arquivo pode conter um ou vários servidores. Para deixar claro o que é conf
 }
 ```
 
+O mesmo importador aceita o formato local oferecido pelo catálogo corporativo:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "local",
+      "command": "npx",
+      "args": ["--yes", "@playwright/mcp@0.0.83"],
+      "env": {
+        "npm_config_registry": "https://registry.corporate.example/npm/"
+      },
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+Para `stdio`, a extensão recusa shells, executa o comando diretamente com `shell: false`, exige versão exata em pacotes iniciados por `npx` e não altera o registry global do npm. O valor `npm_config_registry` vale somente para aquele processo. O PEM corporativo importado uma vez também é fornecido localmente ao Node/npm desse processo, sem copiar o certificado para o projeto. Antes da primeira inicialização, um diálogo mostra o comando, os argumentos e o ambiente não secreto. A inicialização pode obter o pacote fixado do registry corporativo e guardá-lo no cache do usuário, sem privilégio administrativo. `tools: ["*"]` solicita somente a descoberta do catálogo e abre uma seleção; o curinga nunca é persistido como permissão irrestrita.
+
+No Playwright MCP, Chrome ou Edge precisa estar instalado no mesmo ambiente em que o Extension Host executa. Em WSL ou outro ambiente sem interface gráfica, siga o catálogo corporativo e inclua `PLAYWRIGHT_MCP_HEADLESS: "true"` no `env` quando aplicável. A extensão não baixa navegadores do Playwright nem modifica a instalação do sistema.
+
 - `<input:Título>` ou `${input:Título}` abre um campo comum.
-- `<secret:Título>` ou `${secret:Título}` abre um campo protegido e guarda o header resolvido somente no Secret Storage do VS Code.
-- Templates legados como `<WORKSPACE>` e `<SUBSCRIPTION KEY>` continuam aceitos: placeholders na URL são comuns; em headers, são tratados como segredo, exceto headers públicos conhecidos como `X-Route`, `Accept` e `Content-Type`.
+- `<secret:Título>` ou `${secret:Título}` abre um campo protegido e guarda o header ou variável de ambiente resolvida somente no Secret Storage do VS Code.
+- Templates legados como `<WORKSPACE>` e `<SUBSCRIPTION KEY>` continuam aceitos: placeholders na URL e em argumentos são comuns; em headers e variáveis cujo nome indica credencial, são tratados como segredo.
 - O mesmo placeholder titulado repetido em headers durante uma importação é solicitado uma vez. Nunca coloque o valor real do token no JSON.
 
 O próprio agente pode criar o arquivo a partir de uma estrutura enviada no chat. Basta pedir para criar um template MCP; sem um caminho indicado, ele usa `.codex-agent/mcp/<nome-do-servidor>.json`, converte credenciais aparentes em `<secret:Título>` e valores variáveis em `<input:Título>`. Essa ação cria somente o template: o agente não solicita segredos, não acessa o Secret Storage e não conecta nem testa o servidor. A importação e a aprovação continuam no menu do plugue. Não envie tokens reais na conversa, pois as mensagens necessárias à inferência são processadas pelo LiteLLM configurado.
 
-A URL resolvida, headers não sensíveis, estado habilitado e allowlist ficam no estado local do workspace. `apikey`, `Authorization` e outros headers reconhecidos como segredo ficam individualmente no Secret Storage. O valor `Bearer` é montado localmente. Templates podem ser versionados porque contêm somente marcadores; o conteúdo importado não vira uma conexão até a aprovação final. Depois da importação, a conexão é uma cópia aprovada: editar o template não muda silenciosamente endpoint, headers ou ferramentas; reimporte-o para aplicar uma revisão. Arquivos da pasta de templates são limitados, links simbólicos são ignorados e nenhuma conexão é descoberta ou ativada automaticamente. O certificado corporativo importado para o LiteLLM é reutilizado pelo MCP. Antes de cada ferramenta, o VS Code exibe uma aprovação modal e informa que o resultado corporativo pode ser incluído na próxima chamada ao modelo LiteLLM configurado. **Plan only** não conecta nem disponibiliza ferramentas MCP.
+A URL resolvida ou o comando/argumentos exatos, valores não sensíveis, estado habilitado e allowlist ficam no estado local do workspace. Headers e variáveis de ambiente reconhecidos como segredo ficam individualmente no Secret Storage. O valor `Bearer` é montado localmente. Templates podem ser versionados porque contêm somente marcadores; o conteúdo importado não vira uma conexão até a aprovação final. Depois da importação, a conexão é uma cópia aprovada: editar o template não muda silenciosamente endpoint, comando, ambiente ou ferramentas; reimporte-o para aplicar uma revisão. Arquivos da pasta de templates são limitados, links simbólicos são ignorados e nenhuma conexão é descoberta ou ativada automaticamente. O certificado corporativo importado para o LiteLLM é reutilizado pelo MCP HTTPS. Antes de cada ferramenta, o VS Code exibe uma aprovação modal e informa que o resultado corporativo pode ser incluído na próxima chamada ao modelo LiteLLM configurado. **Plan only** não conecta nem disponibiliza ferramentas MCP.
 
 O VS Code precisa considerar a pasta confiável antes de ativar o agente, pois a extensão lê arquivos e pode executar ferramentas locais após as confirmações aplicáveis. Ao enviar uma mensagem, uma pré-verificação exclusivamente local confirma workspace, concorrência entre janelas, gateway, chave no Secret Storage, perfil do modelo e certificado corporativo. Se algo estiver incompleto, a mensagem volta intacta ao compositor e a configuração relevante é aberta; nenhuma thread, execução ou chamada externa é criada pela pré-verificação.
 
@@ -384,6 +408,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 - O certificado PEM opcional é validado e copiado para o armazenamento global local da extensão; o caminho original não é persistido.
 - Arquivos só podem ser lidos ou alterados dentro do workspace aberto.
 - Comandos são executados diretamente, sem shell, depois de confirmação do usuário.
+- Servidores MCP `stdio` são uma classe separada de comando: somente uma cópia exata importada e aprovada é iniciada, com ambiente reduzido, pacote fixado e encerramento junto da sessão. O processo e cada ferramenta continuam capazes de executar o comportamento documentado pelo servidor; revise o catálogo e cada aprovação.
 - Interpretadores, código inline, wrappers, clientes de rede e operações de download, publicação e Git remoto são bloqueados nas ferramentas do agente.
 - A política de comandos é uma defesa local em profundidade, não um sandbox do sistema operacional: um script já presente no workspace e aprovado pelo usuário pode conter comportamento próprio. Revise o comando e os scripts associados antes de autorizar.
 - O histórico do agente fica no armazenamento local do workspace do VS Code; não é copiado para `memory.md`.
@@ -449,7 +474,8 @@ VS Code Secondary Sidebar
             ├── HTTPS ──► LiteLLM POST /v1/chat/completions
             ├── HTTPS ──► LiteLLM POST /v1/embeddings (opcional)
             ├── HTTPS ──► catálogo GET /models (opcional e sob demanda)
-            └── HTTPS ──► MCP corporativo exato (opcional, allowlist + aprovação)
+            ├── HTTPS ──► MCP corporativo exato (opcional, allowlist + aprovação)
+            └── stdio ──► processo MCP local aprovado (opcional, sem shell)
 ```
 
 ## Limitações
@@ -467,6 +493,6 @@ VS Code Secondary Sidebar
 - A automação visual precisa de Edge, Chrome ou outro Chromium configurado já instalado no host do Extension Host. Políticas corporativas do navegador ainda podem impedir inicialização ou automação mesmo sem exigir privilégio administrativo.
 - A aba exibida no navegador integrado e a sessão automatizada carregam a mesma URL, mas não compartilham cookies, login ou armazenamento. A sessão do agente é deliberadamente efêmera e isolada.
 - A interpretação visual exige um modelo multimodal. Modelos somente de texto ainda podem validar DOM, controles, console e erros de página.
-- Esta versão aceita MCP corporativo por Streamable HTTP. Servidores locais `stdio` distribuídos por npm/npx ainda não são iniciados pela extensão; por isso o registry npm corporativo não é usado por este fluxo HTTP.
+- MCPs locais `stdio` dependem de o executável indicado pelo catálogo estar disponível no `PATH`. No caso de `npx`, Node.js precisa estar instalado e o registry corporativo precisa estar acessível; falhas de proxy, CA ou política do registry são apresentadas como diagnóstico do processo.
 - O inventário de terceiros é derivado do bundle no momento do build; consulte `dist/licenses/third-party-manifest.json` para versões, licenças, fontes e alertas de conformidade exatos do pacote gerado.
-- Não há suporte a ferramentas hospedadas, web search, descoberta pública de MCP ou execução do agente em nuvem. MCP remoto existe somente para endpoints corporativos HTTPS importados explicitamente.
+- Não há suporte a ferramentas hospedadas, web search, descoberta pública de MCP ou execução do agente em nuvem. MCP remoto existe somente para endpoints corporativos HTTPS importados explicitamente; MCP local existe somente para comandos `stdio` importados e aprovados explicitamente.

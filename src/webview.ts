@@ -46,12 +46,18 @@ import { ContextCollector } from "./context";
 import { estimateContextTokens } from "./context-budget";
 import { ProjectMemory } from "./memory";
 import { memoryChunks } from "./memory-chunks";
+import type { SaveMcpConnectionInput } from "./mcp-manager";
 import {
+  isSecretMcpEnvironment,
   isSecretMcpHeader,
+  mcpConnectionDescription,
   mcpTemplatePlaceholders,
+  normalizeMcpCommand,
   normalizeMcpEndpoint,
+  normalizeMcpEnvironment,
   parseMcpTemplate,
-  stripSecretHeaderPrefix
+  stripSecretHeaderPrefix,
+  validateMcpArgument
 } from "./mcp-config";
 import type { McpConnectionSnapshot } from "./mcp-config";
 import { redactSensitiveText, safeErrorMessage } from "./redaction";
@@ -82,7 +88,7 @@ function mcpConnectionState(connections: readonly McpConnectionSnapshot[]) {
   return {
     count: connections.length,
     enabled: connections.filter((connection) => connection.enabled).length,
-    needsAttention: connections.filter((connection) => connection.missingSecretHeaders.length > 0).length
+    needsAttention: connections.filter((connection) => connection.missingSecrets.length > 0).length
   };
 }
 
@@ -623,9 +629,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         ...connections.map((connection) => ({
           label: `${connection.enabled ? "$(plug)" : "$(circle-slash)"} ${connection.name}`,
           description: `${connection.enabled ? "Enabled" : "Disabled"} · ${connection.tools.length} tool${connection.tools.length === 1 ? "" : "s"}`,
-          detail: connection.missingSecretHeaders.length
-            ? `Missing credentials: ${connection.missingSecretHeaders.join(", ")}`
-            : connection.url,
+          detail: connection.missingSecrets.length
+            ? `Missing credentials: ${connection.missingSecrets.join(", ")}`
+            : mcpConnectionDescription(connection),
           value: connection.id
         }))
       ], {
@@ -733,9 +739,13 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     try {
       await vscode.workspace.fs.stat(destination);
     } catch {
-      const template = {
-        mcpServers: {
-          "corporate-service": {
+      const transport = await vscode.window.showQuickPick([
+        { label: "$(globe) Corporate HTTPS", description: "Connect to an exact Streamable HTTP endpoint", value: "http" },
+        { label: "$(terminal) Local stdio", description: "Start an exact catalog command without a shell", value: "stdio" }
+      ], { title: "Choose the MCP template transport", ignoreFocusOut: true });
+      if (!transport) return;
+      const server = transport.value === "http"
+        ? {
             type: "http",
             url: "https://<input:Corporate MCP host>/<input:Service route>/mcp",
             headers: {
@@ -744,8 +754,16 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             },
             tools: ["read_only_tool"]
           }
-        }
-      };
+        : {
+            type: "local",
+            command: "npx",
+            args: ["--yes", "<input:Pinned MCP package and version>"],
+            env: {
+              npm_config_registry: "<input:Corporate npm registry HTTPS URL>"
+            },
+            tools: ["*"]
+          };
+      const template = { mcpServers: { "corporate-service": server } };
       await vscode.workspace.fs.writeFile(destination, new TextEncoder().encode(`${JSON.stringify(template, null, 2)}\n`));
     }
     await vscode.window.showTextDocument(destination, { preview: false });
@@ -760,7 +778,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       ? parsed[0]!
       : (await vscode.window.showQuickPick(parsed.map((candidate) => ({
           label: candidate.name,
-          description: candidate.url,
+          description: candidate.transport === "http"
+            ? candidate.url
+            : [candidate.command, ...candidate.args].join(" "),
           value: candidate
         })), {
           title: "Choose the MCP server to import",
@@ -776,34 +796,114 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       validateInput: (value) => value.trim() ? undefined : "Enter a connection name."
     });
     if (name === undefined) return;
-    const url = await this.resolveMcpEndpointTemplate(name, server.url);
-    if (url === undefined) return;
-
-    const headers: Record<string, string> = {};
-    const secrets: Record<string, string> = {};
     const resolvedValues = new Map<string, string>();
-    for (const [header, templateValue] of Object.entries(server.headers)) {
-      const resolved = await this.resolveMcpHeaderTemplate(name, header, templateValue, resolvedValues);
-      if (resolved === undefined) return;
-      if (!resolved.value) continue;
-      if (resolved.secret) secrets[header] = resolved.value;
-      else headers[header] = resolved.value;
+    let draft: SaveMcpConnectionInput;
+    if (server.transport === "http") {
+      const url = await this.resolveMcpEndpointTemplate(name, server.url);
+      if (url === undefined) return;
+      const headers: Record<string, string> = {};
+      const secrets: Record<string, string> = {};
+      for (const [header, templateValue] of Object.entries(server.headers)) {
+        const resolved = await this.resolveMcpHeaderTemplate(name, header, templateValue, resolvedValues);
+        if (resolved === undefined) return;
+        if (!resolved.value) continue;
+        if (resolved.secret) secrets[header] = resolved.value;
+        else headers[header] = resolved.value;
+      }
+      draft = { transport: "http", name, url, enabled: true, headers, secrets, tools: [] };
+    } else {
+      const command = normalizeMcpCommand(server.command);
+      const args: string[] = [];
+      for (const [index, templateValue] of server.args.entries()) {
+        const resolved = await this.resolveMcpArgumentTemplate(name, index, templateValue, resolvedValues);
+        if (resolved === undefined) return;
+        args.push(validateMcpArgument(resolved));
+      }
+      const env: Record<string, string> = {};
+      const secrets: Record<string, string> = {};
+      for (const [environmentName, templateValue] of Object.entries(server.env)) {
+        const resolved = await this.resolveMcpEnvironmentTemplate(
+          name,
+          environmentName,
+          templateValue,
+          resolvedValues
+        );
+        if (resolved === undefined) return;
+        if (resolved.secret) secrets[environmentName] = resolved.value;
+        else env[environmentName] = resolved.value;
+      }
+      draft = {
+        transport: "stdio",
+        name,
+        command,
+        args,
+        env: normalizeMcpEnvironment(env),
+        enabled: true,
+        secrets,
+        tools: []
+      };
     }
 
-    let configuredTools = server.tools;
-    if (!configuredTools.length) {
-      const toolsText = await vscode.window.showInputBox({
-        title: `${name} · allowed tools`,
-        prompt: "Enter the exact catalog tool names separated by commas.",
-        ignoreFocusOut: true,
-        validateInput: (value) => value.split(",").some((tool) => tool.trim())
-          ? undefined
-          : "Enter at least one tool name."
-      });
-      if (toolsText === undefined) return;
-      configuredTools = toolsText.split(",").map((tool) => tool.trim()).filter(Boolean);
+    const selection = await this.selectMcpTools(name, draft, server.tools);
+    if (!selection) return;
+    const tools = selection.tools;
+    const approval = await vscode.window.showInformationMessage(
+      `Add the corporate MCP connection “${name.trim()}”?`,
+      {
+        modal: true,
+        detail: [
+          ...this.mcpImportSummary(draft),
+          `Tools: ${tools.join(", ")}`,
+          "",
+          "Every tool call requires approval. MCP results may be included in requests to your configured LiteLLM model. Credentials remain in VS Code Secret Storage."
+        ].join("\n")
+      },
+      "Add connection"
+    );
+    if (approval !== "Add connection") return;
+    const saved = await this.agent.saveMcpConnection({ ...draft, tools });
+    this.post({ type: "mcpConnectionChanged", ...(await this.mcpConnectionState()), message: `${saved.name} added` });
+    if (selection.tested) return;
+    const test = await vscode.window.showInformationMessage(
+      `${saved.name} was saved securely. Test its handshake and tool catalog now?`,
+      "Test connection",
+      "Later"
+    );
+    if (test === "Test connection") await this.testMcpConnection(saved.id);
+  }
+
+  private async selectMcpTools(
+    name: string,
+    draft: SaveMcpConnectionInput,
+    configuredTools: string[]
+  ): Promise<{ tools: string[]; tested: boolean } | undefined> {
+    const discover = configuredTools.length === 0 || configuredTools.includes("*");
+    let availableTools = configuredTools;
+    if (discover) {
+      const approval = await vscode.window.showInformationMessage(
+        `Start “${name}” once to discover its tools?`,
+        {
+          modal: true,
+          detail: [
+            ...this.mcpImportSummary(draft),
+            "",
+            draft.transport === "stdio"
+              ? "This starts the exact local command without a shell. npx may obtain the pinned package from the configured corporate registry and cache it for this user."
+              : "This performs only the MCP handshake and tool-catalog request against the exact HTTPS endpoint.",
+            "No MCP tool is executed during discovery."
+          ].join("\n")
+        },
+        "Discover tools"
+      );
+      if (approval !== "Discover tools") return undefined;
+      availableTools = await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Discovering tools from ${name}`,
+        cancellable: false
+      }, () => this.agent.discoverMcpTools(draft));
+      if (!availableTools.length) throw new Error(`MCP server “${name}” did not advertise any tools.`);
     }
-    const selectedTools = await vscode.window.showQuickPick(configuredTools.map((tool) => ({
+    const selectedTools = await vscode.window.showQuickPick(availableTools.map((tool) => ({
       label: tool,
       picked: true
     })), {
@@ -812,38 +912,21 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       canPickMany: true,
       ignoreFocusOut: true
     });
-    if (!selectedTools) return;
+    if (!selectedTools) return undefined;
     if (!selectedTools.length) throw new Error("Choose at least one MCP tool.");
+    return { tools: selectedTools.map(({ label }) => label), tested: discover };
+  }
 
-    const approval = await vscode.window.showInformationMessage(
-      `Add the corporate MCP connection “${name.trim()}”?`,
-      {
-        modal: true,
-        detail: [
-          `Endpoint: ${normalizeMcpEndpoint(url)}`,
-          `Tools: ${selectedTools.map(({ label }) => label).join(", ")}`,
-          "",
-          "Tool calls require approval. MCP results may be included in requests to your configured LiteLLM model. Credentials remain in VS Code Secret Storage."
-        ].join("\n")
-      },
-      "Add connection"
-    );
-    if (approval !== "Add connection") return;
-    const saved = await this.agent.saveMcpConnection({
-      name,
-      url,
-      enabled: true,
-      headers,
-      secrets,
-      tools: selectedTools.map(({ label }) => label)
-    });
-    this.post({ type: "mcpConnectionChanged", ...(await this.mcpConnectionState()), message: `${saved.name} added` });
-    const test = await vscode.window.showInformationMessage(
-      `${saved.name} was saved securely. Test its handshake and tool catalog now?`,
-      "Test connection",
-      "Later"
-    );
-    if (test === "Test connection") await this.testMcpConnection(saved.id);
+  private mcpImportSummary(input: SaveMcpConnectionInput): string[] {
+    if (input.transport === "http") return [`Endpoint: ${normalizeMcpEndpoint(input.url)}`];
+    const environment = [
+      ...Object.entries(input.env).map(([name, value]) => `${name}=${value}`),
+      ...Object.keys(input.secrets).map((name) => `${name}=<stored securely>`)
+    ];
+    return [
+      `Local command: ${[input.command, ...input.args].join(" ")}`,
+      environment.length ? `Environment: ${environment.join(", ")}` : "Environment: default safe process variables only"
+    ];
   }
 
   private async resolveMcpEndpointTemplate(name: string, template: string): Promise<string | undefined> {
@@ -931,19 +1014,106 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     return { value: resolved.trim(), secret: containsSecret };
   }
 
+  private async resolveMcpArgumentTemplate(
+    connectionName: string,
+    index: number,
+    template: string,
+    resolvedValues: Map<string, string>
+  ): Promise<string | undefined> {
+    let resolved = template;
+    for (const placeholder of mcpTemplatePlaceholders(template)) {
+      if (placeholder.kind === "secret") {
+        throw new Error(`Secret placeholder “${placeholder.title}” cannot be used in MCP process arguments. Put credentials in env.`);
+      }
+      const cacheKey = `input:${placeholder.title.toLowerCase()}`;
+      let value = resolvedValues.get(cacheKey);
+      if (value === undefined) {
+        const entered = await vscode.window.showInputBox({
+          title: `${connectionName} · ${placeholder.title}`,
+          prompt: `This value replaces ${placeholder.raw} in local argument ${index + 1}.`,
+          ignoreFocusOut: true,
+          validateInput: (candidate) => candidate.trim() ? undefined : `Enter ${placeholder.title}.`
+        });
+        if (entered === undefined) return undefined;
+        value = entered.trim();
+        resolvedValues.set(cacheKey, value);
+      }
+      resolved = resolved.replaceAll(placeholder.raw, value);
+    }
+    return resolved;
+  }
+
+  private async resolveMcpEnvironmentTemplate(
+    connectionName: string,
+    environmentName: string,
+    template: string,
+    resolvedValues: Map<string, string>
+  ): Promise<{ value: string; secret: boolean } | undefined> {
+    const placeholders = mcpTemplatePlaceholders(template);
+    const inferredSecret = isSecretMcpEnvironment(environmentName);
+    if (!placeholders.length) {
+      if (!inferredSecret) return { value: template.trim(), secret: false };
+      const entered = await vscode.window.showInputBox({
+        title: `${connectionName} · ${environmentName}`,
+        password: true,
+        prompt: "Enter this credential again. Values copied inside JSON are never trusted or persisted.",
+        placeHolder: environmentName,
+        ignoreFocusOut: true,
+        validateInput: (value) => value.trim() ? undefined : `Enter the credential for ${environmentName}.`
+      });
+      return entered === undefined ? undefined : { value: entered.trim(), secret: true };
+    }
+
+    let resolved = template;
+    let containsSecret = false;
+    for (const placeholder of placeholders) {
+      const kind = placeholder.kind ?? (inferredSecret ? "secret" : "input");
+      containsSecret ||= kind === "secret";
+      const cacheKey = `${kind}:${placeholder.title.toLowerCase()}`;
+      let value = resolvedValues.get(cacheKey);
+      if (value === undefined) {
+        const entered = await vscode.window.showInputBox({
+          title: `${connectionName} · ${placeholder.title}`,
+          password: kind === "secret",
+          prompt: kind === "secret"
+            ? "Stored only in VS Code Secret Storage. It is never written to the template, settings, logs, prompts, or memory."
+            : `This value replaces ${placeholder.raw} in ${environmentName}.`,
+          placeHolder: kind === "secret" ? placeholder.title : undefined,
+          ignoreFocusOut: true,
+          validateInput: (candidate) => candidate.trim()
+            ? undefined
+            : kind === "secret" ? `Enter ${placeholder.title}.` : undefined
+        });
+        if (entered === undefined) return undefined;
+        value = entered.trim();
+        if (value) resolvedValues.set(cacheKey, value);
+      }
+      resolved = resolved.replaceAll(placeholder.raw, value);
+    }
+    return { value: resolved.trim(), secret: containsSecret };
+  }
+
   private async manageMcpConnection(id: string): Promise<void> {
     const connection = (await this.agent.mcpSnapshots()).find((candidate) => candidate.id === id);
     if (!connection) throw new Error("The MCP connection no longer exists.");
     const action = await vscode.window.showQuickPick([
       { label: "$(pulse) Test connection", description: "Handshake and list tools without executing one", value: "test" },
-      { label: "$(key) Update endpoint or credentials", description: "Replace routing values or rotated secrets securely", value: "update" },
+      {
+        label: connection.transport === "http"
+          ? "$(key) Update endpoint or credentials"
+          : "$(key) Update environment or credentials",
+        description: connection.transport === "http"
+          ? "Replace routing values or rotated secrets securely"
+          : "Keep the approved command and update its environment securely",
+        value: "update"
+      },
       {
         label: connection.enabled ? "$(circle-slash) Disable for the agent" : "$(plug) Enable for the agent",
         description: connection.enabled ? "Keep the configuration but hide its tools" : "Expose its selected tools on the next run",
         value: "toggle"
       },
       { label: "$(trash) Remove connection", description: "Also delete its credentials from Secret Storage", value: "remove" }
-    ], { title: connection.name, placeHolder: connection.url, ignoreFocusOut: true });
+    ], { title: connection.name, placeHolder: mcpConnectionDescription(connection), ignoreFocusOut: true });
     if (!action) return;
     if (action.value === "test") {
       await this.testMcpConnection(id);
@@ -973,6 +1143,47 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async updateMcpConnection(connection: McpConnectionSnapshot): Promise<void> {
+    if (connection.transport === "stdio") {
+      const env: Record<string, string> = {};
+      for (const [environmentName, current] of Object.entries(connection.env)) {
+        const value = await vscode.window.showInputBox({
+          title: `${connection.name} · ${environmentName}`,
+          value: current,
+          prompt: "Leave blank to omit this non-secret process variable.",
+          ignoreFocusOut: true
+        });
+        if (value === undefined) return;
+        if (value.trim()) env[environmentName] = value.trim();
+      }
+      const secrets: Record<string, string> = {};
+      for (const environmentName of connection.secretEnvironment) {
+        const value = await vscode.window.showInputBox({
+          title: `${connection.name} · ${environmentName}`,
+          password: true,
+          prompt: "Leave blank to preserve the credential already stored in VS Code Secret Storage.",
+          ignoreFocusOut: true
+        });
+        if (value === undefined) return;
+        secrets[environmentName] = value.trim();
+      }
+      await this.agent.saveMcpConnection({
+        id: connection.id,
+        transport: "stdio",
+        name: connection.name,
+        command: connection.command,
+        args: connection.args,
+        env,
+        enabled: connection.enabled,
+        secrets,
+        tools: connection.tools
+      });
+      this.post({
+        type: "mcpConnectionChanged",
+        ...(await this.mcpConnectionState()),
+        message: `${connection.name} updated`
+      });
+      return;
+    }
     const url = await vscode.window.showInputBox({
       title: `${connection.name} · HTTPS endpoint`,
       value: connection.url,
@@ -1011,6 +1222,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     await this.agent.saveMcpConnection({
       id: connection.id,
+      transport: "http",
       name: connection.name,
       url,
       enabled: connection.enabled,
