@@ -62,7 +62,7 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Chave virtual LiteLLM armazenada exclusivamente no Secret Storage do VS Code.
 - Transporte externo restrito às rotas HTTPS exatas de Chat Completions e embeddings derivadas do gateway configurado; métodos inesperados, parâmetros na URL e redirects são recusados antes que credenciais possam sair para outro destino.
 - Bundle PEM corporativo opcional, importado uma vez para o armazenamento global local da extensão.
-- Conexões MCP corporativas via ícone de plugue: importe o template JSON do catálogo pela área de transferência ou por arquivo, preencha placeholders em diálogos nativos do VS Code e exponha somente as ferramentas selecionadas.
+- Conexões MCP corporativas via ícone de plugue: importe o template JSON do catálogo pela área de transferência, por arquivo ou pelo catálogo editável do workspace em `.codex-agent/mcp.json` e `.codex-agent/mcp/*.json`; placeholders são preenchidos em diálogos nativos e somente as ferramentas selecionadas são expostas.
 - Adaptador MCP oficial do LangChain com URL HTTPS exata, redirects bloqueados, CA corporativa reutilizada, credenciais por header no Secret Storage e aprovação antes de cada chamada de ferramenta.
 - Catálogo de modelos opcional carregado da URL informada pelo usuário com `Cache-Control: no-cache` e `api-key` usando a chave do Secret Storage.
 - Aviso de primeiro uso na própria sidebar enquanto gateway, alias de chat e chave segura ainda não estiverem configurados.
@@ -156,14 +156,38 @@ O comando abre a Secondary Sidebar diretamente no único formulário de configur
 
 ### Conectar um MCP corporativo
 
-1. Copie o JSON `mcpServers` fornecido pelo catálogo corporativo, ou salve-o como arquivo `.json`.
+1. Copie o JSON `mcpServers` fornecido pelo catálogo corporativo, salve-o como arquivo `.json` ou mantenha templates compartilháveis em `.codex-agent/mcp.json` e `.codex-agent/mcp/*.json`.
 2. Clique no ícone de plugue no cabeçalho do chat.
-3. Escolha **Add corporate MCP from clipboard** ou **from JSON file**.
-4. Substitua o placeholder do workspace na URL, informe a rota opcional e preencha cada credencial nos campos protegidos do VS Code.
-5. Revise a lista de ferramentas permitidas e confirme. Para o template Databricks SQL, mantenha apenas `execute_sql_read_only` e `poll_sql_result`.
-6. Execute **Test connection**. O teste faz somente o handshake e a descoberta do catálogo de ferramentas; não executa SQL.
+3. Escolha a origem: clipboard, arquivo avulso ou **workspace templates**. A ação **Create an editable workspace template** cria `.codex-agent/mcp/example.json` como ponto de partida.
+4. Preencha os valores comuns e as credenciais solicitadas pelos títulos dos placeholders.
+5. Revise a URL final, selecione a allowlist exata de ferramentas e confirme a conexão.
+6. Execute **Test connection**. O teste faz somente o handshake e a descoberta do catálogo de ferramentas; não executa ferramentas do servidor.
 
-A URL resolvida, headers não sensíveis, estado habilitado e allowlist ficam no estado local do workspace. `apikey`, `Authorization` e outros headers reconhecidos como segredo ficam individualmente no Secret Storage. O valor `Bearer` é montado localmente. O JSON colado não é persistido. O certificado corporativo importado para o LiteLLM é reutilizado pelo MCP. Antes de cada ferramenta, o VS Code exibe uma aprovação modal e informa que o resultado corporativo pode ser incluído na próxima chamada ao modelo LiteLLM configurado. **Plan only** não conecta nem disponibiliza ferramentas MCP.
+Um arquivo pode conter um ou vários servidores. Para deixar claro o que é configuração comum e o que é credencial, use placeholders titulados:
+
+```json
+{
+  "mcpServers": {
+    "corporate-service": {
+      "type": "http",
+      "url": "https://<input:Corporate MCP host>/<input:Workspace>/mcp",
+      "headers": {
+        "X-Route": "<input:Environment>",
+        "api-key": "<secret:Subscription key>",
+        "Authorization": "Bearer <secret:Access token>"
+      },
+      "tools": ["read_only_tool", "poll_result"]
+    }
+  }
+}
+```
+
+- `<input:Título>` ou `${input:Título}` abre um campo comum.
+- `<secret:Título>` ou `${secret:Título}` abre um campo protegido e guarda o header resolvido somente no Secret Storage do VS Code.
+- Templates legados como `<WORKSPACE>` e `<SUBSCRIPTION KEY>` continuam aceitos: placeholders na URL são comuns; em headers, são tratados como segredo, exceto headers públicos conhecidos como `X-Route`, `Accept` e `Content-Type`.
+- O mesmo placeholder titulado repetido em headers durante uma importação é solicitado uma vez. Nunca coloque o valor real do token no JSON.
+
+A URL resolvida, headers não sensíveis, estado habilitado e allowlist ficam no estado local do workspace. `apikey`, `Authorization` e outros headers reconhecidos como segredo ficam individualmente no Secret Storage. O valor `Bearer` é montado localmente. Templates podem ser versionados porque contêm somente marcadores; o conteúdo importado não vira uma conexão até a aprovação final. Depois da importação, a conexão é uma cópia aprovada: editar o template não muda silenciosamente endpoint, headers ou ferramentas; reimporte-o para aplicar uma revisão. Arquivos da pasta de templates são limitados, links simbólicos são ignorados e nenhuma conexão é descoberta ou ativada automaticamente. O certificado corporativo importado para o LiteLLM é reutilizado pelo MCP. Antes de cada ferramenta, o VS Code exibe uma aprovação modal e informa que o resultado corporativo pode ser incluído na próxima chamada ao modelo LiteLLM configurado. **Plan only** não conecta nem disponibiliza ferramentas MCP.
 
 O VS Code precisa considerar a pasta confiável antes de ativar o agente, pois a extensão lê arquivos e pode executar ferramentas locais após as confirmações aplicáveis. Ao enviar uma mensagem, uma pré-verificação exclusivamente local confirma workspace, concorrência entre janelas, gateway, chave no Secret Storage, perfil do modelo e certificado corporativo. Se algo estiver incompleto, a mensagem volta intacta ao compositor e a configuração relevante é aberta; nenhuma thread, execução ou chamada externa é criada pela pré-verificação.
 

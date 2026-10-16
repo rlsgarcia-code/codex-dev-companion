@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   hasMcpPlaceholder,
   isSecretMcpHeader,
+  mcpTemplatePlaceholders,
   mcpSecretStorageKey,
   normalizeMcpEndpoint,
   parseMcpTemplate,
@@ -50,6 +51,19 @@ test("accepts only final credential-free HTTPS MCP routes", () => {
   assert.throws(() => normalizeMcpEndpoint("https://user:password@api.example.test/mcp"), /credentials/);
   assert.throws(() => normalizeMcpEndpoint("https://api.example.test/mcp?token=x"), /query parameters/);
   assert.throws(() => normalizeMcpEndpoint("https://api.example.test/<WORKSPACE>/mcp"), /placeholder/);
+});
+
+test("classifies titled input and secret placeholders while preserving legacy templates", () => {
+  assert.deepEqual(mcpTemplatePlaceholders(
+    "Bearer <secret:Databricks token> for ${input:Workspace} and <Legacy key>"
+  ), [
+    { raw: "<secret:Databricks token>", title: "Databricks token", kind: "secret" },
+    { raw: "${input:Workspace}", title: "Workspace", kind: "input" },
+    { raw: "<Legacy key>", title: "Legacy key" }
+  ]);
+  assert.equal(isSecretMcpHeader("Content-Type"), false);
+  assert.equal(isSecretMcpHeader("X-Corporate-Token"), true);
+  assert.throws(() => mcpTemplatePlaceholders("<secret:   >"), /needs a title/);
 });
 
 test("rejects stdio and malformed tool catalogs", () => {

@@ -96,6 +96,11 @@ test("keeps corporate MCP onboarding native, secret-separated, and approval-gate
   assertMessageType("openMcpConnections");
   assert.match(source, /id="mcp-connections"[^>]*aria-pressed="false"/);
   assert.match(source, /Add corporate MCP from clipboard/);
+  assert.match(source, /Add MCP from workspace templates/);
+  assert.match(source, /vscode\.Uri\.joinPath\(folder\.uri, "\.codex-agent", "mcp"\)/);
+  assert.match(source, /vscode\.Uri\.joinPath\(directory, "example\.json"\)/);
+  assert.match(source, /mcpTemplatePlaceholders\(template\)/);
+  assert.match(source, /Values copied inside JSON are never trusted or persisted/);
   assert.match(source, /password: true/);
   assert.match(source, /Credentials remain in VS Code Secret Storage/);
   assert.match(source, /Handshake and list tools without executing one/);

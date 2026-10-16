@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 const MAX_MCP_TEMPLATE_CHARACTERS = 64_000;
-const PLACEHOLDER = /<[^<>]{3,240}>|\$\{[^{}]{1,240}\}/;
+const PLACEHOLDER_SOURCE = String.raw`<[^<>\r\n]{1,240}>|\$\{[^{}\r\n]{1,240}\}`;
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/;
 const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,200}$/;
 
@@ -19,6 +19,12 @@ export type ImportedMcpServer = {
   url: string;
   headers: Record<string, string>;
   tools: string[];
+};
+
+export type McpTemplatePlaceholder = {
+  raw: string;
+  title: string;
+  kind?: "input" | "secret";
 };
 
 export type McpConnectionProfile = {
@@ -100,11 +106,24 @@ export function normalizeMcpEndpoint(value: string): string {
 }
 
 export function hasMcpPlaceholder(value: string): boolean {
-  return PLACEHOLDER.test(value);
+  return new RegExp(PLACEHOLDER_SOURCE).test(value);
+}
+
+export function mcpTemplatePlaceholders(value: string): McpTemplatePlaceholder[] {
+  const matches = value.match(new RegExp(PLACEHOLDER_SOURCE, "g")) ?? [];
+  return [...new Set(matches)].map((raw) => {
+    const inner = raw.startsWith("${") ? raw.slice(2, -1) : raw.slice(1, -1);
+    const qualified = inner.match(/^\s*(input|secret)\s*:\s*(.*?)\s*$/i);
+    const kind = qualified?.[1]?.toLowerCase() as McpTemplatePlaceholder["kind"];
+    const title = (qualified?.[2] ?? inner).replace(/[\0\r\n\t]/g, " ").replace(/\s+/g, " ").trim();
+    if (!title) throw new Error(`MCP placeholder ${raw} needs a title.`);
+    if (title.length > 120) throw new Error(`MCP placeholder ${raw} has a title longer than 120 characters.`);
+    return { raw, title, ...(kind ? { kind } : {}) };
+  });
 }
 
 export function isSecretMcpHeader(name: string): boolean {
-  return !/^x-route$/i.test(name.trim());
+  return !/^(accept|content-type|user-agent|x-route)$/i.test(name.trim());
 }
 
 export function validateMcpHeaderName(value: string): string {

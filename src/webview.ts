@@ -47,8 +47,8 @@ import { estimateContextTokens } from "./context-budget";
 import { ProjectMemory } from "./memory";
 import { memoryChunks } from "./memory-chunks";
 import {
-  hasMcpPlaceholder,
   isSecretMcpHeader,
+  mcpTemplatePlaceholders,
   normalizeMcpEndpoint,
   parseMcpTemplate,
   stripSecretHeaderPrefix
@@ -610,6 +610,16 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           description: "Select a portable mcpServers or VS Code servers configuration",
           value: "add-file"
         },
+        {
+          label: "$(folder-library) Add MCP from workspace templates",
+          description: "Choose .codex-agent/mcp.json or a JSON file in .codex-agent/mcp/",
+          value: "add-workspace"
+        },
+        {
+          label: "$(new-file) Create an editable workspace template",
+          description: "Create .codex-agent/mcp/example.json without credentials",
+          value: "create-workspace"
+        },
         ...connections.map((connection) => ({
           label: `${connection.enabled ? "$(plug)" : "$(circle-slash)"} ${connection.name}`,
           description: `${connection.enabled ? "Enabled" : "Disabled"} · ${connection.tools.length} tool${connection.tools.length === 1 ? "" : "s"}`,
@@ -624,10 +634,14 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         ignoreFocusOut: true
       });
       if (!selection) return;
-      if (selection.value === "add-clipboard" || selection.value === "add-file") {
+      if (selection.value === "create-workspace") {
+        await this.createWorkspaceMcpTemplate();
+      } else if (selection.value === "add-clipboard" || selection.value === "add-file" || selection.value === "add-workspace") {
         const source = selection.value === "add-clipboard"
           ? await vscode.env.clipboard.readText()
-          : await this.readMcpTemplateFile();
+          : selection.value === "add-file"
+            ? await this.readMcpTemplateFile()
+            : await this.readWorkspaceMcpTemplate();
         if (source === undefined) return;
         await this.importMcpTemplate(source);
       } else {
@@ -657,6 +671,89 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     return new TextDecoder().decode(await vscode.workspace.fs.readFile(selected[0]));
   }
 
+  private async readWorkspaceMcpTemplate(): Promise<string | undefined> {
+    const candidates: Array<{ uri: vscode.Uri; label: string; description: string }> = [];
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const single = vscode.Uri.joinPath(folder.uri, ".codex-agent", "mcp.json");
+      try {
+        const stat = await vscode.workspace.fs.stat(single);
+        if ((stat.type & vscode.FileType.File) && !(stat.type & vscode.FileType.SymbolicLink) && stat.size <= 64_000) {
+          candidates.push({ uri: single, label: "mcp.json", description: folder.name });
+        }
+      } catch {
+        // An absent optional template is expected.
+      }
+
+      const directory = vscode.Uri.joinPath(folder.uri, ".codex-agent", "mcp");
+      try {
+        const entries = await vscode.workspace.fs.readDirectory(directory);
+        for (const [entry, type] of entries.sort(([left], [right]) => left.localeCompare(right)).slice(0, 50)) {
+          if (!(type & vscode.FileType.File) || type & vscode.FileType.SymbolicLink || !entry.toLowerCase().endsWith(".json")) continue;
+          const uri = vscode.Uri.joinPath(directory, entry);
+          const stat = await vscode.workspace.fs.stat(uri);
+          if (stat.size <= 64_000) candidates.push({ uri, label: entry, description: `${folder.name}/.codex-agent/mcp` });
+        }
+      } catch {
+        // An absent optional template directory is expected.
+      }
+    }
+    if (!candidates.length) {
+      const create = await vscode.window.showInformationMessage(
+        "No workspace MCP templates were found in .codex-agent/mcp.json or .codex-agent/mcp/.",
+        "Create template"
+      );
+      if (create === "Create template") await this.createWorkspaceMcpTemplate();
+      return undefined;
+    }
+    const selected = candidates.length === 1
+      ? candidates[0]
+      : await vscode.window.showQuickPick(candidates, {
+          title: "Choose a workspace MCP template",
+          placeHolder: "The file is reviewed and imported only after your approval",
+          ignoreFocusOut: true
+        });
+    if (!selected) return undefined;
+    return new TextDecoder().decode(await vscode.workspace.fs.readFile(selected.uri));
+  }
+
+  private async createWorkspaceMcpTemplate(): Promise<void> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (!folders.length) throw new Error("Open a workspace folder before creating an MCP template.");
+    const folder = folders.length === 1
+      ? folders[0]
+      : (await vscode.window.showQuickPick(folders.map((candidate) => ({
+          label: candidate.name,
+          description: candidate.uri.fsPath,
+          folder: candidate
+        })), { title: "Choose the workspace for the MCP template", ignoreFocusOut: true }))?.folder;
+    if (!folder) return;
+    const directory = vscode.Uri.joinPath(folder.uri, ".codex-agent", "mcp");
+    const destination = vscode.Uri.joinPath(directory, "example.json");
+    await vscode.workspace.fs.createDirectory(directory);
+    try {
+      await vscode.workspace.fs.stat(destination);
+    } catch {
+      const template = {
+        mcpServers: {
+          "corporate-service": {
+            type: "http",
+            url: "https://<input:Corporate MCP host>/<input:Service route>/mcp",
+            headers: {
+              "api-key": "<secret:Subscription key>",
+              Authorization: "Bearer <secret:Access token>"
+            },
+            tools: ["read_only_tool"]
+          }
+        }
+      };
+      await vscode.workspace.fs.writeFile(destination, new TextEncoder().encode(`${JSON.stringify(template, null, 2)}\n`));
+    }
+    await vscode.window.showTextDocument(destination, { preview: false });
+    void vscode.window.showInformationMessage(
+      "Workspace MCP template ready. Keep placeholders in the file; credentials are requested only during import."
+    );
+  }
+
   private async importMcpTemplate(source: string): Promise<void> {
     const parsed = parseMcpTemplate(source);
     const server = parsed.length === 1
@@ -684,35 +781,13 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     const headers: Record<string, string> = {};
     const secrets: Record<string, string> = {};
+    const resolvedValues = new Map<string, string>();
     for (const [header, templateValue] of Object.entries(server.headers)) {
-      if (isSecretMcpHeader(header)) {
-        const { prefix, secret: detectedSecret } = stripSecretHeaderPrefix(header, templateValue);
-        const detected = detectedSecret && !hasMcpPlaceholder(detectedSecret) ? detectedSecret : "";
-        const entered = await vscode.window.showInputBox({
-          title: `${name} · ${header}`,
-          password: true,
-          prompt: detected
-            ? "A value was copied with the template. Leave blank to use it without displaying it."
-            : "Stored only in VS Code Secret Storage. It is never written to settings or workspace files.",
-          placeHolder: prefix ? `${prefix.trim()} credential` : "Secret credential",
-          ignoreFocusOut: true,
-          validateInput: (value) => value.trim() || detected ? undefined : `Enter the credential for ${header}.`
-        });
-        if (entered === undefined) return;
-        secrets[header] = `${prefix}${entered.trim() || detected}`;
-        continue;
-      }
-      if (hasMcpPlaceholder(templateValue)) {
-        const entered = await vscode.window.showInputBox({
-          title: `${name} · ${header}`,
-          prompt: "Optional routing value from the corporate catalog. Leave blank to omit this header.",
-          ignoreFocusOut: true
-        });
-        if (entered === undefined) return;
-        if (entered.trim()) headers[header] = entered.trim();
-      } else if (templateValue.trim()) {
-        headers[header] = templateValue.trim();
-      }
+      const resolved = await this.resolveMcpHeaderTemplate(name, header, templateValue, resolvedValues);
+      if (resolved === undefined) return;
+      if (!resolved.value) continue;
+      if (resolved.secret) secrets[header] = resolved.value;
+      else headers[header] = resolved.value;
     }
 
     let configuredTools = server.tools;
@@ -773,17 +848,19 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async resolveMcpEndpointTemplate(name: string, template: string): Promise<string | undefined> {
     let resolved = template;
-    const placeholders = [...new Set(template.match(/<[^<>]{3,240}>|\$\{[^{}]{1,240}\}/g) ?? [])];
+    const placeholders = mcpTemplatePlaceholders(template);
     for (const placeholder of placeholders) {
-      const label = placeholder.replace(/^<|>$|^\$\{|}$/g, "").trim();
+      if (placeholder.kind === "secret") {
+        throw new Error(`Secret placeholder “${placeholder.title}” cannot be used in an MCP URL. Put credentials in headers.`);
+      }
       const value = await vscode.window.showInputBox({
-        title: `${name} · ${label}`,
-        prompt: `This value replaces ${placeholder} in the MCP URL.`,
+        title: `${name} · ${placeholder.title}`,
+        prompt: `This value replaces ${placeholder.raw} in the MCP URL.`,
         ignoreFocusOut: true,
         validateInput: (candidate) => candidate.trim() ? undefined : "Enter the value supplied by the corporate catalog."
       });
       if (value === undefined) return undefined;
-      resolved = resolved.replaceAll(placeholder, value.trim());
+      resolved = resolved.replaceAll(placeholder.raw, value.trim());
     }
     const url = await vscode.window.showInputBox({
       title: `${name} · HTTPS endpoint`,
@@ -802,6 +879,56 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       }
     });
     return url === undefined ? undefined : normalizeMcpEndpoint(url);
+  }
+
+  private async resolveMcpHeaderTemplate(
+    connectionName: string,
+    header: string,
+    template: string,
+    resolvedValues: Map<string, string>
+  ): Promise<{ value: string; secret: boolean } | undefined> {
+    const placeholders = mcpTemplatePlaceholders(template);
+    if (!placeholders.length) {
+      if (!isSecretMcpHeader(header)) return { value: template.trim(), secret: false };
+      const { prefix } = stripSecretHeaderPrefix(header, template);
+      const entered = await vscode.window.showInputBox({
+        title: `${connectionName} · ${header}`,
+        password: true,
+        prompt: "Enter this credential again. Values copied inside JSON are never trusted or persisted.",
+        placeHolder: prefix ? `${prefix.trim()} credential` : "Secret credential",
+        ignoreFocusOut: true,
+        validateInput: (value) => value.trim() ? undefined : `Enter the credential for ${header}.`
+      });
+      return entered === undefined ? undefined : { value: `${prefix}${entered.trim()}`, secret: true };
+    }
+
+    let resolved = template;
+    let containsSecret = false;
+    for (const placeholder of placeholders) {
+      const kind = placeholder.kind ?? (isSecretMcpHeader(header) ? "secret" : "input");
+      containsSecret ||= kind === "secret";
+      const cacheKey = `${kind}:${placeholder.title.toLowerCase()}`;
+      let value = resolvedValues.get(cacheKey);
+      if (value === undefined) {
+        const entered = await vscode.window.showInputBox({
+          title: `${connectionName} · ${placeholder.title}`,
+          password: kind === "secret",
+          prompt: kind === "secret"
+            ? "Stored only in VS Code Secret Storage. It is never written to the template, settings, logs, prompts, or memory."
+            : `This value replaces ${placeholder.raw}.`,
+          placeHolder: kind === "secret" ? placeholder.title : undefined,
+          ignoreFocusOut: true,
+          validateInput: (candidate) => candidate.trim()
+            ? undefined
+            : kind === "secret" ? `Enter ${placeholder.title}.` : undefined
+        });
+        if (entered === undefined) return undefined;
+        value = entered.trim();
+        if (value) resolvedValues.set(cacheKey, value);
+      }
+      resolved = resolved.replaceAll(placeholder.raw, value);
+    }
+    return { value: resolved.trim(), secret: containsSecret };
   }
 
   private async manageMcpConnection(id: string): Promise<void> {
