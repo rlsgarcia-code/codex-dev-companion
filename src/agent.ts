@@ -60,6 +60,7 @@ import {
   modelProviderSupportsCatalog,
   modelProviderSupportsCorporateCa,
   normalizeOllamaEndpoint,
+  ollamaShowUrl,
   ollamaTagsUrl,
   validateModelConnection,
   type ModelConnection
@@ -118,6 +119,11 @@ type ConnectionDiagnosticOptions = {
   profile: LiteLlmModelProfile;
   modelsEndpoint?: string;
   embeddingModel?: string;
+};
+
+export type ModelCatalogResult = {
+  models: string[];
+  embeddingModels?: string[];
 };
 
 export class DevelopmentAgent implements vscode.Disposable {
@@ -300,7 +306,7 @@ export class DevelopmentAgent implements vscode.Disposable {
     return { ready: true };
   }
 
-  public async listModels(endpointInput: string, transientApiKey = ""): Promise<string[]> {
+  public async listModels(endpointInput: string, transientApiKey = ""): Promise<ModelCatalogResult> {
     const workspace = vscode.workspace.workspaceFolders?.[0];
     if (!workspace) throw new Error("Open a workspace before loading the model catalog.");
     const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
@@ -320,13 +326,13 @@ export class DevelopmentAgent implements vscode.Disposable {
       ? new UndiciAgent({ connect: { ca: certificateAuthorities } })
       : undefined;
     try {
-      return await this.fetchModelCatalog(endpoint, apiKey, dispatcher);
+      return { models: await this.fetchModelCatalog(endpoint, apiKey, dispatcher) };
     } finally {
       await dispatcher?.close();
     }
   }
 
-  private async listOllamaModels(endpointInput: string): Promise<string[]> {
+  private async listOllamaModels(endpointInput: string): Promise<ModelCatalogResult> {
     const endpoint = normalizeOllamaEndpoint(endpointInput);
     const tagsUrl = ollamaTagsUrl(endpoint);
     const response = await gatewayFetch(
@@ -348,7 +354,32 @@ export class DevelopmentAgent implements vscode.Disposable {
     if (!models.length) {
       throw new Error("Ollama is running, but no local models were found. Install a model and try again.");
     }
-    return [...new Set(models)].sort();
+    const uniqueModels = [...new Set(models)].sort();
+    const embeddingModels = await this.discoverOllamaEmbeddingModels(endpoint, uniqueModels);
+    return { models: uniqueModels, embeddingModels };
+  }
+
+  private async discoverOllamaEmbeddingModels(endpoint: string, models: string[]): Promise<string[]> {
+    const showUrl = ollamaShowUrl(endpoint);
+    const inspect = gatewayFetch(showUrl, true, undefined, undefined, undefined, ["POST"]);
+    const candidates = await Promise.all(models.slice(0, 100).map(async (name) => {
+      try {
+        const response = await inspect(showUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name })
+        });
+        if (!response.ok) return undefined;
+        const payload = await response.json() as { capabilities?: unknown };
+        const capabilities = Array.isArray(payload.capabilities)
+          ? payload.capabilities.filter((value): value is string => typeof value === "string")
+          : [];
+        return capabilities.includes("embedding") ? name : undefined;
+      } catch {
+        return undefined;
+      }
+    }));
+    return candidates.filter((name): name is string => Boolean(name));
   }
 
   public async diagnoseConnection(options: ConnectionDiagnosticOptions): Promise<ConnectionDiagnostic[]> {

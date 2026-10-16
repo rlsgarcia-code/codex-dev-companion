@@ -1509,15 +1509,21 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     try {
       const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
       if (provider === "ollama") {
-        const models = await this.agent.listModels(endpointInput, "");
-        this.post({ type: "modelsLoaded", models, endpoint: endpointInput, message: `${models.length} local Ollama models loaded` });
+        const catalog = await this.agent.listModels(endpointInput, "");
+        this.post({
+          type: "modelsLoaded",
+          models: catalog.models,
+          embeddingModels: catalog.embeddingModels,
+          endpoint: endpointInput,
+          message: `${catalog.models.length} local Ollama models loaded`
+        });
         return;
       }
       const endpoint = normalizeLiteLlmModelsEndpoint(endpointInput);
-      const models = await this.agent.listModels(endpoint, transientApiKey);
+      const catalog = await this.agent.listModels(endpoint, transientApiKey);
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       await configuration.update("liteLlmModelsEndpoint", endpoint, vscode.ConfigurationTarget.Global);
-      this.post({ type: "modelsLoaded", models, endpoint, message: `${models.length} models loaded` });
+      this.post({ type: "modelsLoaded", models: catalog.models, endpoint, message: `${catalog.models.length} models loaded` });
     } catch (error) {
       this.post({
         type: "modelsLoadError",
@@ -4538,7 +4544,9 @@ function applyDiagnosticFix(fix) {
 }
 
 function isEmbeddingModel(model) {
-  return String(model).toLowerCase().includes('embedd');
+  const normalized = String(model).toLowerCase();
+  return normalized.includes('embed')
+    || /(^|[-_:])(?:bge|e5|gte|minilm)(?:[-_:]|$)/.test(normalized);
 }
 
 function fillEmbeddingModelOptions(models, selected) {
@@ -5157,8 +5165,9 @@ window.addEventListener('message', ({ data }) => {
       loadedModelCatalog = data.models || [];
       const catalogModels = [...new Set([...loadedModelCatalog, ...Object.keys(liteLlmModelProfiles)])]
         .sort();
-      const chatModels = catalogModels.filter(model => !isEmbeddingModel(model));
-      const embeddingModels = catalogModels.filter(isEmbeddingModel);
+      const discoveredEmbeddingModels = new Set(data.embeddingModels || []);
+      const chatModels = catalogModels.filter(model => !discoveredEmbeddingModels.has(model) && !isEmbeddingModel(model));
+      const embeddingModels = catalogModels.filter(model => discoveredEmbeddingModels.has(model) || isEmbeddingModel(model));
       liteLlmModelAliases.innerHTML = chatModels
         .map(model => '<option value="' + escapeHtml(model) + '"></option>')
         .join('');

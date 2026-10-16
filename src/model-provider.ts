@@ -144,6 +144,14 @@ export function ollamaTagsUrl(value: string): string {
   return base.toString();
 }
 
+export function ollamaShowUrl(value: string): string {
+  const base = new URL(normalizeOllamaEndpoint(value));
+  base.pathname = "/api/show";
+  base.search = "";
+  base.hash = "";
+  return base.toString();
+}
+
 export function validateModelConnection(
   input: LiteLlmConnection & { provider?: unknown },
   variant: ProviderVariant = PROVIDER_VARIANT
