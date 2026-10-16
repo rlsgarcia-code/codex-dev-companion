@@ -25,8 +25,9 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Notificação local de conclusão ou falha quando a sidebar está oculta, com badge e ação para abrir o resultado; pode ser configurada como sempre ou nunca e não inclui conteúdo do projeto ou da conversa.
 - Até 30 threads locais por workspace, com busca, fixação, troca, título automático, renomeação e exclusão; threads fixadas permanecem no topo e são protegidas da remoção automática por recência.
 - Rascunho independente por thread, preservado localmente ao trocar de conversa ou recarregar a sidebar.
+- Resposta textual progressiva em uma única mensagem, com identidade estável do runtime até o histórico final, sem transformar chamadas de ferramenta em mensagens permanentes da conversa.
 - Recuperação de solicitações interrompidas com **Try again**, **Edit & resend** ou descarte confirmado, sem duplicar a mensagem no contexto do agente nem apagar turnos já concluídos.
-- Detecção de execução abandonada após reiniciar o Extension Host, com **Restart request** explícito e preservação do modo original.
+- Detecção de execução abandonada após reiniciar o Extension Host, com preservação local da resposta parcial, **Restart request** explícito e manutenção do modo original.
 - Coordenação defensiva entre janelas: uma execução ativa em outro processo do VS Code bloqueia uma segunda execução no mesmo workspace e oferece atualização manual de status.
 - Seletor visível entre **LangChain Agent** e **Deep Agent**, persistido por workspace.
 - Contexto automático do arquivo ativo, seleção, cursor, diagnósticos, arquivos abertos e amostra da árvore.
@@ -313,13 +314,13 @@ Em cada turno, o runtime local:
 4. recupera o checkpoint pelo `MemorySaver` ou restaura sua projeção local limitada e aplica o middleware de janela de contexto;
 5. quando configurado, indexa e consulta a memória do projeto no ChromaDB local por meio do vector store LangChain;
 6. instancia `ChatOpenAICompletions` sobre a base URL do LiteLLM;
-7. entrega mensagens e ferramentas ao `createAgent` ou `createDeepAgent`, conforme a escolha do usuário;
+7. entrega mensagens e ferramentas ao `createAgent` ou `createDeepAgent`, conforme a escolha do usuário, e consome o `streamEvents` nativo do LangChain;
 8. valida cada chamada por schema Zod e executa a ferramenta local correspondente;
-9. deixa o runtime LangChain devolver resultados como `ToolMessage` e repetir o ciclo até a resposta final.
+9. deixa o runtime LangChain devolver resultados como `ToolMessage` e repetir o ciclo até a resposta final; texto de um turno que solicita ferramenta é transitório, enquanto a resposta final é consolidada com o mesmo identificador mostrado durante o stream.
 
 No **LangChain Agent**, a janela de conversa é limitada por middleware e todas as ferramentas são as implementações locais explícitas do projeto. No **Deep Agent**, a orquestração de tarefas longas, a compactação, o filesystem e a delegação para subagentes vêm de `deepagents`; o limite artificial de 50 passos foi removido em favor do limite nativo alto do Deep Agent. O projeto fica montado em `/workspace`, enquanto o `StateBackend` mantém arquivos grandes/offload no estado LangGraph. O plano visível continua sendo publicado pela ferramenta local `update_plan`.
 
-Durante uma execução, a thread persiste apenas metadados mínimos da tentativa — identificador, modo, runtime, horários e processo proprietário. Um lease atômico separado, mantido no armazenamento privado global da extensão e nunca no repositório, impede que duas janelas executem o agente simultaneamente sobre o mesmo workspace. Se o processo proprietário desaparecer antes de salvar a resposta, o lease pode ser recuperado e a tentativa passa para **interrupted**. O botão **Restart request** repete o último pedido desde o início usando a projeção local restaurada; ele não afirma continuar do ponto exato de um checkpoint perdido. `MemorySaver` permanece o único checkpointer do runtime LangGraph.
+Durante uma execução, a thread persiste metadados mínimos da tentativa — identificador, modo, runtime, horários e processo proprietário — e uma projeção limitada da resposta parcial mais recente para recuperação de interface. Essa projeção não é adicionada à memória do projeto nem ao contexto como resposta concluída; ela é removida ao consolidar a mensagem final ou descartar a solicitação. Um lease atômico separado, mantido no armazenamento privado global da extensão e nunca no repositório, impede que duas janelas executem o agente simultaneamente sobre o mesmo workspace. Se o processo proprietário desaparecer antes de salvar a resposta, o lease pode ser recuperado, a tentativa passa para **interrupted** e o texto parcial permanece visível como incompleto. O botão **Restart request** repete o último pedido desde o início usando a projeção local restaurada; ele não afirma continuar do ponto exato de um checkpoint perdido. `MemorySaver` permanece o único checkpointer do runtime LangGraph.
 
 Não existe cliente HTTP alternativo nem loop manual de function calling no projeto. A classe `ChatOpenAICompletions` força o caminho Chat Completions e não usa Responses API. O tracing externo do LangChain/LangSmith é explicitamente desativado pelo runtime.
 

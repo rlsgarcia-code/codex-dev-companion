@@ -140,6 +140,78 @@ test("preserves ask-first recovery mode for an interrupted request", () => {
   assert.equal(collection.threads[0]?.recovery?.mode, "review");
 });
 
+test("preserves a bounded partial assistant response for interrupted-run recovery", () => {
+  const collection = normalizeThreadCollection({
+    version: 1,
+    activeThreadId: "active",
+    threads: [{
+      id: "active",
+      title: "Streaming task",
+      createdAt: 10,
+      updatedAt: 30,
+      messages: [{ id: "pending", role: "user", content: "keep going", createdAt: 20 }],
+      recovery: {
+        id: "run-stream",
+        status: "interrupted",
+        mode: "review",
+        runtime: "standard",
+        startedAt: 21,
+        updatedAt: 30,
+        partialAssistant: {
+          id: "assistant-stream",
+          content: "I inspected the relevant files and",
+          createdAt: 22,
+          updatedAt: 29,
+          sequence: 17
+        }
+      }
+    }]
+  });
+
+  assert.deepEqual(collection.threads[0]?.recovery?.partialAssistant, {
+    id: "assistant-stream",
+    content: "I inspected the relevant files and",
+    createdAt: 22,
+    updatedAt: 29,
+    sequence: 17
+  });
+});
+
+test("normalizes stable run metadata on completed assistant messages", () => {
+  const collection = normalizeThreadCollection({
+    version: 1,
+    activeThreadId: "active",
+    threads: [{
+      id: "active",
+      title: "Completed task",
+      createdAt: 10,
+      updatedAt: 30,
+      messages: [
+        { id: "user", role: "user", content: "finish", createdAt: 20 },
+        {
+          id: "assistant",
+          role: "assistant",
+          content: "done",
+          createdAt: 21,
+          completedAt: 30,
+          runId: "run-complete",
+          status: "complete"
+        }
+      ]
+    }]
+  });
+
+  assert.deepEqual(collection.threads[0]?.messages[1], {
+    id: "assistant",
+    role: "assistant",
+    content: "done",
+    createdAt: 21,
+    completedAt: 30,
+    runId: "run-complete",
+    status: "complete"
+  });
+});
+
 test("keeps storage bounded while retaining the active thread", () => {
   const threads = Array.from({ length: MAX_LOCAL_THREADS + 5 }, (_, index) =>
     createLocalThread(`thread-${index}`, index, `Thread ${index}`)

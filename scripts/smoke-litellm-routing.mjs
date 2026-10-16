@@ -13,6 +13,27 @@ process.env.OTEL_ENABLED = "false";
 delete process.env.LANGCHAIN_TRACING;
 
 const requests = [];
+
+async function streamAgent(agent, input) {
+  const run = await agent.streamEvents(input, { version: "v3" });
+  const visibleMessages = [];
+  let toolTurns = 0;
+  const messagePump = (async () => {
+    for await (const message of run.messages) {
+      let text = "";
+      for await (const delta of message.text) text += delta;
+      const output = await message.output;
+      if (output.tool_calls?.length) {
+        toolTurns += 1;
+      } else if (text) {
+        visibleMessages.push(text);
+      }
+    }
+  })();
+  const [output] = await Promise.all([run.output, messagePump]);
+  return { output, visibleMessages, toolTurns };
+}
+
 const server = createServer((request, response) => {
   let body = "";
   request.setEncoding("utf8");
@@ -69,11 +90,13 @@ try {
     tools: [readMarker],
     systemPrompt: "Read-only local routing smoke test."
   });
-  const result = await agent.invoke({
+  const streamed = await streamAgent(agent, {
     messages: [{ role: "user", content: "Read the safe marker, then reply with smoke-ok." }]
   });
 
-  assert.equal(result.messages.at(-1)?.text, "smoke-ok");
+  assert.equal(streamed.output.messages.at(-1)?.text, "smoke-ok");
+  assert.deepEqual(streamed.visibleMessages, ["smoke-ok"]);
+  assert.equal(streamed.toolTurns, 1);
   assert.equal(localToolCalls, 1);
   assert.equal(requests.length, 2);
   assert.equal(requests[0].method, "POST");
@@ -114,10 +137,11 @@ try {
     tools: [readMarker],
     systemPrompt: "Read-only Deep Agent local routing smoke test. Do not call tools."
   });
-  const deepResult = await deepAgent.invoke({
+  const deepStreamed = await streamAgent(deepAgent, {
     messages: [{ role: "user", content: "Reply with smoke-ok without changing anything." }]
   });
-  assert.equal(deepResult.messages.at(-1)?.text, "smoke-ok");
+  assert.equal(deepStreamed.output.messages.at(-1)?.text, "smoke-ok");
+  assert.deepEqual(deepStreamed.visibleMessages, ["smoke-ok"]);
   assert.equal(requests.length, 3);
   assert.equal(requests[2].method, "POST");
   assert.equal(requests[2].url, "/v1/chat/completions");
@@ -152,10 +176,11 @@ try {
     tools: [readMarker],
     systemPrompt: "Read-only Azure-compatible header smoke test. Do not call tools."
   });
-  const azureHeaderResult = await azureHeaderAgent.invoke({
+  const azureHeaderStreamed = await streamAgent(azureHeaderAgent, {
     messages: [{ role: "user", content: "Reply with smoke-ok without changing anything." }]
   });
-  assert.equal(azureHeaderResult.messages.at(-1)?.text, "smoke-ok");
+  assert.equal(azureHeaderStreamed.output.messages.at(-1)?.text, "smoke-ok");
+  assert.deepEqual(azureHeaderStreamed.visibleMessages, ["smoke-ok"]);
   assert.equal(requests.length, 4);
   assert.equal(requests[3].headers.authorization, undefined);
   assert.equal(requests[3].headers["api-key"], "azure-smoke-key");

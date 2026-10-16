@@ -8,6 +8,17 @@ export type ThreadMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: number;
+  runId?: string;
+  status?: "complete";
+  completedAt?: number;
+};
+
+export type ThreadPartialAssistant = {
+  id: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+  sequence: number;
 };
 
 export type ThreadRunRecovery = {
@@ -19,6 +30,7 @@ export type ThreadRunRecovery = {
   updatedAt: number;
   ownerSessionId?: string;
   ownerPid?: number;
+  partialAssistant?: ThreadPartialAssistant;
 };
 
 export type LocalThread = {
@@ -278,6 +290,7 @@ function normalizeRecovery(
   if (!status || !mode || !runtime) return undefined;
   const ownerPid = finiteNumber(value.ownerPid);
   const ownerSessionId = stringValue(value.ownerSessionId);
+  const partialAssistant = normalizePartialAssistant(value.partialAssistant, fallbackTime, createId);
   return {
     id: stringValue(value.id) || createId(),
     status,
@@ -286,7 +299,8 @@ function normalizeRecovery(
     startedAt: finiteNumber(value.startedAt) ?? fallbackTime,
     updatedAt: finiteNumber(value.updatedAt) ?? fallbackTime,
     ...(ownerSessionId ? { ownerSessionId } : {}),
-    ...(ownerPid && Number.isInteger(ownerPid) && ownerPid > 0 ? { ownerPid } : {})
+    ...(ownerPid && Number.isInteger(ownerPid) && ownerPid > 0 ? { ownerPid } : {}),
+    ...(partialAssistant ? { partialAssistant } : {})
   };
 }
 
@@ -299,11 +313,35 @@ function normalizeMessage(
   const role = value.role === "user" || value.role === "assistant" ? value.role : undefined;
   const content = stringValue(value.content);
   if (!role || !content) return undefined;
+  const runId = stringValue(value.runId);
+  const completedAt = finiteNumber(value.completedAt);
   return {
     id: stringValue(value.id) || createId(),
     role,
     content,
-    createdAt: finiteNumber(value.createdAt) ?? fallbackTime
+    createdAt: finiteNumber(value.createdAt) ?? fallbackTime,
+    ...(runId ? { runId } : {}),
+    ...(value.status === "complete" ? { status: "complete" as const } : {}),
+    ...(completedAt !== undefined ? { completedAt } : {})
+  };
+}
+
+function normalizePartialAssistant(
+  value: unknown,
+  fallbackTime: number,
+  createId: () => string
+): ThreadPartialAssistant | undefined {
+  if (!isRecord(value)) return undefined;
+  const content = typeof value.content === "string" ? value.content.slice(0, 200_000) : "";
+  if (!content) return undefined;
+  const createdAt = finiteNumber(value.createdAt) ?? fallbackTime;
+  const sequence = finiteNumber(value.sequence);
+  return {
+    id: stringValue(value.id) || createId(),
+    content,
+    createdAt,
+    updatedAt: finiteNumber(value.updatedAt) ?? createdAt,
+    sequence: sequence !== undefined && Number.isInteger(sequence) && sequence >= 0 ? sequence : 0
   };
 }
 

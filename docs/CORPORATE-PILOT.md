@@ -28,7 +28,7 @@ Instale o VSIX correspondente ao sistema em que o **Extension Host** executa. Em
 9. Tente um comando de rede ou shell indireto. A política local deve bloqueá-lo antes da execução.
 10. Configure um modelo de embeddings, adicione uma nota não sensível à memória e confirme recuperação semântica. Docker não deve ser necessário.
 11. Abra uma segunda janela no mesmo workspace durante uma execução. Apenas uma janela deve manter a execução; a outra deve explicar o bloqueio e se recuperar quando a primeira terminar.
-12. Inicie uma tarefa longa, recolha a faixa de atividade, cancele a execução e recarregue a janela. O estado deve ser coerente e a solicitação interrompida deve oferecer recuperação explícita.
+12. Inicie uma tarefa longa e confirme que a resposta cresce em uma única mensagem sem forçar a rolagem enquanto você lê o histórico. Recolha a faixa de atividade, cancele durante o texto e recarregue a janela: a resposta parcial deve reaparecer marcada como incompleta, e a solicitação deve oferecer recuperação explícita sem duplicar mensagens.
 13. Repita uma tarefa curta com cada perfil de modelo disponível. Altere `reasoning_effort`, `temperature` e `top_p` somente quando o modelo suportar; erros incompatíveis devem oferecer uma correção explícita, nunca silenciosa.
 14. Inicie uma aplicação de teste no workspace e peça ao agente para abrir sua URL de `localhost`. Confirme que o modal aparece antes do acesso, a página é exibida para acompanhamento e DOM, controles e console são inspecionados.
 15. Faça a página tentar carregar um recurso remoto e confirme que ele aparece como bloqueado. Verifique também que campo de senha, download e URL não local não podem ser usados pela automação.

@@ -17,6 +17,7 @@ import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import * as vscode from "vscode";
 import { z } from "zod";
 import { requiresLocalApproval } from "./autonomy";
+import { consumeAssistantMessageStreams } from "./assistant-stream";
 import { LocalBrowserSession } from "./browser";
 import type { LocalBrowserChannel } from "./browser-policy";
 import { importedGatewayCaPath, readImportedGatewayCa, storeImportedGatewayCa } from "./certificate";
@@ -116,6 +117,8 @@ export class DevelopmentAgent implements vscode.Disposable {
   private readonly hydratedThreads = new Set<string>();
   private readonly sessionId = crypto.randomUUID();
   private activeRunId: string | undefined;
+  private activeRunCollection: ThreadCollection | undefined;
+  private activeRunThreadId: string | undefined;
   private runHeartbeat: ReturnType<typeof setInterval> | undefined;
   private isRunning = false;
   private browserSession: LocalBrowserSession | undefined;
@@ -505,6 +508,10 @@ export class DevelopmentAgent implements vscode.Disposable {
         now: requestTime,
         replacePendingUser: options.replacePendingUser
       });
+      const stagedUserMessage = conversation.messages.at(-1);
+      if (!stagedUserMessage || stagedUserMessage.role !== "user") {
+        throw new Error("The request could not be staged in the active conversation.");
+      }
       if (!priorMessages.some((message) => message.role === "user")) {
         conversation.title = titleFromRequest(request);
       }
@@ -513,6 +520,7 @@ export class DevelopmentAgent implements vscode.Disposable {
         maxConversationCharacters
       );
       runId = crypto.randomUUID();
+      const assistantMessageId = crypto.randomUUID();
       const runStartedAt = Date.now();
       conversation.recovery = {
         id: runId,
@@ -525,9 +533,19 @@ export class DevelopmentAgent implements vscode.Disposable {
         ownerPid: process.pid
       };
       this.activeRunId = runId;
+      this.activeRunCollection = collection;
+      this.activeRunThreadId = threadId;
       await this.saveThreadCollection(collection);
       this.startRunHeartbeat(threadId, runId);
-      onEvent({ type: "thread", threadId });
+      onEvent({
+        type: "thread",
+        threadId,
+        userMessage: {
+          id: stagedUserMessage.id,
+          text: stagedUserMessage.content,
+          createdAt: stagedUserMessage.createdAt
+        }
+      });
 
       const authentication = openAiClientAuthentication(connection);
       const [memoryText, snapshot] = await Promise.all([
@@ -704,6 +722,89 @@ export class DevelopmentAgent implements vscode.Disposable {
       controller.signal.throwIfAborted();
 
       onEvent({ type: "status", label: `${agentRuntimeLabel(runtime)} is thinking` });
+      const assistantCreatedAt = Date.now();
+      let streamedAssistantText = "";
+      let pendingAssistantDelta = "";
+      let streamSequence = 0;
+      let assistantStreamVisible = false;
+      let lastDeltaPublishedAt = 0;
+      let partialPersistedAt = 0;
+      let partialPersistedCharacters = 0;
+      const persistPartialAssistant = async (force = false): Promise<void> => {
+        const recovery = conversation.recovery;
+        if (!recovery || recovery.id !== runId) return;
+        const now = Date.now();
+        if (!force
+          && partialPersistedAt
+          && now - partialPersistedAt < 750
+          && Math.abs(streamedAssistantText.length - partialPersistedCharacters) < 1_024) {
+          return;
+        }
+        recovery.updatedAt = now;
+        partialPersistedAt = now;
+        partialPersistedCharacters = streamedAssistantText.length;
+        await this.saveThreadCollection(collection);
+      };
+      const flushAssistantDelta = async (): Promise<void> => {
+        if (!pendingAssistantDelta) return;
+        if (!assistantStreamVisible) {
+          assistantStreamVisible = true;
+          onEvent({
+            type: "assistantStart",
+            id: assistantMessageId,
+            runId: runId!,
+            createdAt: assistantCreatedAt
+          });
+        }
+        const delta = pendingAssistantDelta;
+        pendingAssistantDelta = "";
+        lastDeltaPublishedAt = Date.now();
+        streamSequence += 1;
+        conversation.recovery!.partialAssistant = {
+          id: assistantMessageId,
+          content: streamedAssistantText.slice(0, 200_000),
+          createdAt: assistantCreatedAt,
+          updatedAt: Date.now(),
+          sequence: streamSequence
+        };
+        onEvent({
+          type: "assistantDelta",
+          id: assistantMessageId,
+          runId: runId!,
+          sequence: streamSequence,
+          delta
+        });
+        await persistPartialAssistant();
+      };
+      const publishAssistantDelta = async (delta: string): Promise<void> => {
+        if (!delta) return;
+        streamedAssistantText += delta;
+        pendingAssistantDelta += delta;
+        if (!lastDeltaPublishedAt
+          || Date.now() - lastDeltaPublishedAt >= 40
+          || pendingAssistantDelta.length >= 512) {
+          await flushAssistantDelta();
+        }
+      };
+      const resetTransientAssistant = async (): Promise<void> => {
+        await flushAssistantDelta();
+        if (!assistantStreamVisible && !streamedAssistantText) return;
+        assistantStreamVisible = false;
+        streamedAssistantText = "";
+        streamSequence += 1;
+        delete conversation.recovery?.partialAssistant;
+        onEvent({
+          type: "assistantReset",
+          id: assistantMessageId,
+          runId: runId!,
+          sequence: streamSequence
+        });
+        await persistPartialAssistant(true);
+      };
+      const finishAssistantModelTurn = async (toolTurn: boolean): Promise<void> => {
+        await flushAssistantDelta();
+        if (toolTurn) await resetTransientAssistant();
+      };
       const invocationConfig = {
         configurable: { thread_id: threadId },
         ...(runtime === "standard"
@@ -739,7 +840,14 @@ export class DevelopmentAgent implements vscode.Disposable {
           permissions,
           checkpointer: this.checkpointer
         });
-        const result = await agent.invoke({ messages }, invocationConfig);
+        const run = await agent.streamEvents(
+          { messages },
+          { ...invocationConfig, version: "v3" as const }
+        );
+        const [result] = await Promise.all([
+          run.output,
+          consumeAssistantMessageStreams(run.messages, publishAssistantDelta, finishAssistantModelTurn)
+        ]);
         resultMessages = result.messages as BaseMessage[];
       } else {
         const agent = createAgent({
@@ -749,7 +857,14 @@ export class DevelopmentAgent implements vscode.Disposable {
           middleware: [conversationWindowMiddleware(maxConversationCharacters)],
           checkpointer: this.checkpointer
         });
-        const result = await agent.invoke({ messages }, invocationConfig);
+        const run = await agent.streamEvents(
+          { messages },
+          { ...invocationConfig, version: "v3" as const }
+        );
+        const [result] = await Promise.all([
+          run.output,
+          consumeAssistantMessageStreams(run.messages, publishAssistantDelta, finishAssistantModelTurn)
+        ]);
         resultMessages = result.messages as BaseMessage[];
       }
       let answer = finalAssistantText(resultMessages);
@@ -797,11 +912,15 @@ export class DevelopmentAgent implements vscode.Disposable {
         }
       }
       this.hydratedThreads.add(threadId);
+      const assistantCompletedAt = Date.now();
       conversation.messages.push({
-        id: crypto.randomUUID(),
+        id: assistantMessageId,
         role: "assistant",
         content: answer,
-        createdAt: Date.now()
+        createdAt: assistantCreatedAt,
+        runId,
+        status: "complete",
+        completedAt: assistantCompletedAt
       });
       conversation.messages = this.compactPersistedConversation(
         conversation.messages,
@@ -812,7 +931,14 @@ export class DevelopmentAgent implements vscode.Disposable {
       delete conversation.recovery;
       await this.saveThreadCollection(collection);
       outcome = "completed";
-      onEvent({ type: "assistant", text: answer });
+      onEvent({
+        type: "assistant",
+        id: assistantMessageId,
+        runId,
+        text: answer,
+        createdAt: assistantCreatedAt,
+        completedAt: assistantCompletedAt
+      });
       onEvent({ type: "usage", input: usage.input, output: usage.output });
       onEvent({ type: "status", label: "Ready" });
     } catch (error) {
@@ -826,7 +952,8 @@ export class DevelopmentAgent implements vscode.Disposable {
           mode: recovery.mode,
           runtime: recovery.runtime,
           startedAt: recovery.startedAt,
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
+          ...(recovery.partialAssistant ? { partialAssistant: { ...recovery.partialAssistant } } : {})
         };
         activeConversation.updatedAt = Date.now();
         await this.saveThreadCollection(activeCollection).catch(() => undefined);
@@ -852,6 +979,8 @@ export class DevelopmentAgent implements vscode.Disposable {
       await workspaceLease?.release().catch(() => undefined);
       this.isRunning = false;
       this.abortController = undefined;
+      this.activeRunCollection = undefined;
+      this.activeRunThreadId = undefined;
       onEvent({ type: "done", outcome });
     }
   }
@@ -950,7 +1079,16 @@ export class DevelopmentAgent implements vscode.Disposable {
       activeThreadId: active.id,
       threads: summarizeThreads(collection),
       messages: [...active.messages],
-      ...(active.recovery ? { recovery: { ...active.recovery } } : {})
+      ...(active.recovery
+        ? {
+            recovery: {
+              ...active.recovery,
+              ...(active.recovery.partialAssistant
+                ? { partialAssistant: { ...active.recovery.partialAssistant } }
+                : {})
+            }
+          }
+        : {})
     };
   }
 
@@ -1084,6 +1222,15 @@ export class DevelopmentAgent implements vscode.Disposable {
 
   private async refreshRunHeartbeat(threadId: string, runId: string): Promise<void> {
     if (!this.isRunning || this.activeRunId !== runId) return;
+    if (this.activeRunCollection && this.activeRunThreadId === threadId) {
+      const activeThread = this.activeRunCollection.threads.find((candidate) => candidate.id === threadId);
+      if (activeThread?.recovery?.id !== runId
+        || activeThread.recovery.ownerSessionId !== this.sessionId) return;
+      activeThread.recovery.updatedAt = Date.now();
+      if (!this.isRunning || this.activeRunId !== runId) return;
+      await this.saveThreadCollection(this.activeRunCollection);
+      return;
+    }
     const stored = this.extensionContext.workspaceState.get<unknown>(this.conversationStorageKey());
     const collection = normalizeThreadCollection(stored);
     const thread = collection.threads.find((candidate) => candidate.id === threadId);
@@ -1332,7 +1479,8 @@ function interruptedRecovery(recovery: ThreadRunRecovery): ThreadRunRecovery {
     mode: recovery.mode,
     runtime: recovery.runtime,
     startedAt: recovery.startedAt,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    ...(recovery.partialAssistant ? { partialAssistant: { ...recovery.partialAssistant } } : {})
   };
 }
 

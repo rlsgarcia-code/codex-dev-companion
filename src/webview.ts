@@ -1731,14 +1731,21 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           if (event.type === "thread" && !requestAccepted) {
             requestAccepted = true;
             if (replacePending) {
-              this.post({ type: "pendingUserReplaced", text: clean, html: renderSafeMarkdown(clean) });
+              this.post({
+                type: "pendingUserReplaced",
+                id: event.userMessage.id,
+                text: event.userMessage.text,
+                html: renderSafeMarkdown(event.userMessage.text),
+                createdAt: event.userMessage.createdAt
+              });
             } else {
               const userMessage: ChatMessage = {
-                id: crypto.randomUUID(),
+                id: event.userMessage.id,
                 role: "user",
-                text: clean,
-                html: renderSafeMarkdown(clean),
-                createdAt: Date.now()
+                text: event.userMessage.text,
+                html: renderSafeMarkdown(event.userMessage.text),
+                createdAt: event.userMessage.createdAt,
+                status: "complete"
               };
               this.post({ type: "user", message: userMessage });
             }
@@ -1836,11 +1843,14 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async forwardAgentEvent(event: AgentUiEvent): Promise<void> {
     if (event.type === "assistant") {
       const assistantMessage: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: event.id,
         role: "assistant",
         text: event.text,
         html: renderSafeMarkdown(event.text),
-        createdAt: Date.now()
+        createdAt: event.createdAt,
+        completedAt: event.completedAt,
+        runId: event.runId,
+        status: "complete"
       };
       this.post({ type: "assistant", message: assistantMessage });
       return;
@@ -2198,7 +2208,10 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       role: message.role,
       text: message.content,
       html: renderSafeMarkdown(message.content),
-      createdAt: message.createdAt
+      createdAt: message.createdAt,
+      ...(message.runId ? { runId: message.runId } : {}),
+      status: message.status ?? "complete",
+      ...(message.completedAt !== undefined ? { completedAt: message.completedAt } : {})
     }));
   }
 
@@ -2861,9 +2874,13 @@ h1 { margin: 2px 0 0; font-size: 24px; line-height: 1; letter-spacing: -.045em; 
 .starters button:hover .starter-arrow { color: var(--accent); transform: translateX(2px); }
 .starter-note { display: block; margin-top: 11px; }
 .message { padding: 18px 0; border-bottom: 1px solid var(--line); animation: reveal .2s ease-out; }
-.message-role { margin-bottom: 7px; color: var(--muted); font: 600 9px/1 var(--vscode-editor-font-family); letter-spacing: .14em; }
+.message-role { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; color: var(--muted); font: 600 9px/1 var(--vscode-editor-font-family); letter-spacing: .14em; }
+.message-state { color: var(--muted); font-size: 8px; font-weight: 500; letter-spacing: .02em; text-transform: none; }
 .message.user .message-body { font-size: 14px; }
 .message.assistant .message-body { line-height: 1.62; }
+.message.assistant.streaming .message-body { min-height: 1.62em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message.assistant.streaming .message-body::after { display: inline-block; width: 2px; height: 1em; margin-left: 3px; background: var(--accent); content: ""; vertical-align: -.12em; animation: stream-cursor .85s steps(1, end) infinite; }
+.message.assistant.interrupted, .message.assistant.failed, .message.assistant.cancelled { padding-left: 10px; border-left: 2px solid var(--line); }
 .message-body p { margin: 0 0 9px; }
 .message-body p:last-child { margin-bottom: 0; }
 .message-body h3, .message-body h4, .message-body h5 { margin: 14px 0 7px; line-height: 1.3; }
@@ -2971,8 +2988,9 @@ textarea { display: block; width: 100%; min-height: 58px; max-height: 180px; res
 button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, [tabindex="0"]:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 .hidden { display: none !important; }
 @keyframes pulse { 0%,100% { opacity: .55; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); } 50% { opacity: 1; box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 5%, transparent); } }
+@keyframes stream-cursor { 0%,48% { opacity: 1; } 49%,100% { opacity: .18; } }
 @keyframes reveal { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media (forced-colors: active) { .signal, .readiness-signal, .model-compatibility-signal, .run-review-signal { border: 1px solid currentColor; } }
 `;
 
@@ -3102,6 +3120,7 @@ const SCROLL_STICK_THRESHOLD = 48;
 let hiddenHistoryMessages = [];
 let conversationPinnedToBottom = true;
 let unseenConversationUpdates = 0;
+const assistantStreamStates = new Map();
 const runReviews = new Map();
 let activeRunReviewId = '';
 let activeThreadId = '';
@@ -3237,17 +3256,28 @@ function scrollConversationToBottom({ force = false, countUpdate = true } = {}) 
 
 function createMessageElement(message) {
   const element = document.createElement('article');
-  element.className = 'message ' + message.role;
+  const messageStatus = message.status || 'complete';
+  element.className = 'message ' + message.role + (messageStatus === 'complete' ? '' : ' ' + messageStatus);
   element.dataset.messageRole = message.role;
+  element.dataset.messageStatus = messageStatus;
   const messageId = message.id || crypto.randomUUID();
   element.dataset.messageId = messageId;
+  if (message.runId) element.dataset.runId = message.runId;
   messageSources.set(element, String(message.text || ''));
-  const actions = message.role === 'assistant'
+  const actions = message.role === 'assistant' && messageStatus === 'complete'
     ? '<div class="message-actions"><button type="button" data-copy-message aria-label="Copy agent response">Copy</button>' +
       '<button type="button" data-add-memory-message aria-label="Add a confirmed project-memory entry from this response"' +
       ((busy || remoteRunActive) ? ' disabled' : '') + '>Add memory…</button></div>'
     : '';
-  element.innerHTML = '<div class="message-role">' + (message.role === 'user' ? 'YOU' : 'AGENT') + '</div>' +
+  const statusLabels = {
+    streaming: 'responding',
+    interrupted: 'partial · interrupted',
+    failed: 'partial · failed',
+    cancelled: 'partial · cancelled'
+  };
+  const stateLabel = statusLabels[messageStatus] || '';
+  element.innerHTML = '<div class="message-role"><span>' + (message.role === 'user' ? 'YOU' : 'AGENT') + '</span>' +
+    (stateLabel ? '<span class="message-state">' + escapeHtml(stateLabel) + '</span>' : '') + '</div>' +
     '<div class="message-body">' + (message.html || renderText(message.text)) + '</div>' + actions;
   return element;
 }
@@ -3258,6 +3288,143 @@ function appendMessage(message, announceResponse = true) {
   timeline.appendChild(element);
   scrollConversationToBottom({ force: message.role === 'user' });
   if (announceResponse && message.role === 'assistant') announce('Agent response added to the conversation.');
+}
+
+function assistantMessageElement(id) {
+  return timeline.querySelector('.message.assistant[data-message-id="' + CSS.escape(id || '') + '"]');
+}
+
+function startAssistantStream(data) {
+  if (!data?.id || !data?.runId) return;
+  let state = assistantStreamStates.get(data.id);
+  if (state && state.runId !== data.runId) {
+    if (state.frame) cancelAnimationFrame(state.frame);
+    state.element?.remove();
+    assistantStreamStates.delete(data.id);
+    state = undefined;
+  }
+  if (!state) {
+    state = {
+      runId: data.runId,
+      sequence: 0,
+      text: '',
+      pending: '',
+      frame: 0,
+      element: null,
+      countedUnseen: false
+    };
+    assistantStreamStates.set(data.id, state);
+  }
+  if (state.element?.isConnected) return;
+  document.getElementById('welcome')?.remove();
+  const element = createMessageElement({
+    id: data.id,
+    runId: data.runId,
+    role: 'assistant',
+    text: '',
+    createdAt: data.createdAt || Date.now(),
+    status: 'streaming'
+  });
+  const body = element.querySelector('.message-body');
+  if (body) body.textContent = '';
+  state.element = element;
+  state.countedUnseen = !conversationPinnedToBottom;
+  timeline.appendChild(element);
+  scrollConversationToBottom();
+  announce('Agent response started.');
+}
+
+function flushAssistantStream(id) {
+  const state = assistantStreamStates.get(id);
+  if (!state) return;
+  state.frame = 0;
+  if (!state.pending) return;
+  state.text += state.pending;
+  state.pending = '';
+  const element = state.element?.isConnected ? state.element : assistantMessageElement(id);
+  const body = element?.querySelector('.message-body');
+  if (body) body.textContent = state.text;
+  if (element) messageSources.set(element, state.text);
+  scrollConversationToBottom({ countUpdate: false });
+}
+
+function appendAssistantDelta(data) {
+  if (!data?.id || !data?.runId || typeof data.delta !== 'string') return;
+  if (!assistantStreamStates.has(data.id)) {
+    startAssistantStream({ id: data.id, runId: data.runId, createdAt: Date.now() });
+  }
+  const state = assistantStreamStates.get(data.id);
+  if (!state || state.runId !== data.runId || Number(data.sequence) <= state.sequence) return;
+  state.sequence = Number(data.sequence);
+  state.pending += data.delta;
+  if (!state.frame) state.frame = requestAnimationFrame(() => flushAssistantStream(data.id));
+}
+
+function resetAssistantStream(data) {
+  const state = assistantStreamStates.get(data?.id);
+  if (!state || state.runId !== data.runId || Number(data.sequence) <= state.sequence) return;
+  state.sequence = Number(data.sequence);
+  if (state.frame) cancelAnimationFrame(state.frame);
+  state.frame = 0;
+  state.pending = '';
+  state.text = '';
+  state.element?.remove();
+  state.element = null;
+  if (state.countedUnseen && unseenConversationUpdates > 0) {
+    unseenConversationUpdates -= 1;
+    renderJumpToLatest();
+  }
+  state.countedUnseen = false;
+}
+
+function completeAssistantMessage(message) {
+  const state = assistantStreamStates.get(message.id);
+  if (state?.frame) cancelAnimationFrame(state.frame);
+  const existing = state?.element?.isConnected ? state.element : assistantMessageElement(message.id);
+  const completed = createMessageElement({ ...message, status: 'complete' });
+  if (existing) {
+    existing.replaceWith(completed);
+    scrollConversationToBottom({ countUpdate: false });
+  } else {
+    document.getElementById('welcome')?.remove();
+    timeline.appendChild(completed);
+    scrollConversationToBottom();
+  }
+  assistantStreamStates.delete(message.id);
+  messageSources.set(completed, String(message.text || ''));
+  announce('Agent response completed.');
+}
+
+function markAssistantStreamsInterrupted(outcome) {
+  const statusName = outcome === 'cancelled' ? 'cancelled' : 'failed';
+  assistantStreamStates.forEach((state, id) => {
+    if (state.frame) cancelAnimationFrame(state.frame);
+    if (state.pending) {
+      state.text += state.pending;
+      state.pending = '';
+    }
+    const element = state.element?.isConnected ? state.element : assistantMessageElement(id);
+    if (!element || !state.text) {
+      element?.remove();
+      return;
+    }
+    element.classList.remove('streaming');
+    element.classList.add(statusName);
+    element.dataset.messageStatus = statusName;
+    const label = element.querySelector('.message-state');
+    if (label) label.textContent = 'partial · ' + statusName;
+    const body = element.querySelector('.message-body');
+    if (body) body.textContent = state.text;
+    messageSources.set(element, state.text);
+  });
+  assistantStreamStates.clear();
+}
+
+function clearAssistantStreams() {
+  assistantStreamStates.forEach(state => {
+    if (state.frame) cancelAnimationFrame(state.frame);
+  });
+  assistantStreamStates.clear();
 }
 
 function historyBatchStart(messages, preferredStart) {
@@ -4382,6 +4549,7 @@ function wireStarterButtons() {
 
 function resetConversation(context, history, threads, draft = '') {
   finishRunActivity();
+  clearAssistantStreams();
   hiddenHistoryMessages = [];
   timeline.innerHTML = welcomeMarkup;
   resetConversationScroll();
@@ -4404,9 +4572,22 @@ function resetConversation(context, history, threads, draft = '') {
   const latest = (history || []).at(-1);
   pendingRequestText = latest?.role === 'user' ? latest.text : '';
   pendingRequestId = latest?.role === 'user' ? latest.id : '';
+  if (pendingRequestText && recovery?.partialAssistant?.content) {
+    appendMessage({
+      id: recovery.partialAssistant.id,
+      runId: recovery.id,
+      role: 'assistant',
+      text: recovery.partialAssistant.content,
+      html: renderText(recovery.partialAssistant.content),
+      createdAt: recovery.partialAssistant.createdAt,
+      status: recovery.status === 'running' ? 'streaming' : recovery.status
+    }, false);
+  }
   if (pendingRequestText && recovery?.status === 'running') {
     appendRecovery(
-      'This request is still marked active in another VS Code window. Continue there, or refresh after that run finishes.',
+      recovery.partialAssistant?.content
+        ? 'A partial response is preserved above. This request is still active in another VS Code window; continue there or refresh after it finishes.'
+        : 'This request is still marked active in another VS Code window. Continue there, or refresh after that run finishes.',
       false,
       false,
       'Try again',
@@ -4414,15 +4595,28 @@ function resetConversation(context, history, threads, draft = '') {
     );
   } else if (pendingRequestText && recovery?.status === 'interrupted') {
     appendRecovery(
-      'The previous extension session ended before an answer was saved. Restarting replays this request safely from the beginning.',
+      recovery.partialAssistant?.content
+        ? 'The partial response above was preserved after the previous session ended. Restarting replays the request safely from the beginning.'
+        : 'The previous extension session ended before an answer was saved. Restarting replays this request safely from the beginning.',
       false,
       true,
       'Restart request'
     );
   } else if (pendingRequestText && recovery?.status === 'cancelled') {
-    appendRecovery('This run was cancelled. You can run the request again or edit it first.', false, true, 'Run again');
+    appendRecovery(
+      recovery.partialAssistant?.content
+        ? 'The run was cancelled and its partial response was preserved above. You can run the request again or edit it first.'
+        : 'This run was cancelled. You can run the request again or edit it first.',
+      false,
+      true,
+      'Run again'
+    );
   } else if (pendingRequestText && recovery?.status === 'failed') {
-    appendRecovery('This run ended with an error. You can retry it or edit the request first.');
+    appendRecovery(
+      recovery.partialAssistant?.content
+        ? 'The run ended with an error and its partial response was preserved above. You can retry it or edit the request first.'
+        : 'This run ended with an error. You can retry it or edit the request first.'
+    );
   } else if (pendingRequestText) {
     appendRecovery('This request did not receive an answer. You can retry it or edit it before sending again.');
   }
@@ -4922,15 +5116,26 @@ window.addEventListener('message', ({ data }) => {
       break;
     case 'pendingUserReplaced':
       pendingRequestText = data.text || pendingRequestText;
+      pendingRequestId = data.id || pendingRequestId;
       updatePendingMessage(pendingRequestText, data.html || '');
       timeline.querySelectorAll('.recovery-actions').forEach(element => element.remove());
+      timeline.querySelectorAll('.message.assistant[data-message-status]:not([data-message-status="complete"])').forEach(element => element.remove());
+      break;
+    case 'assistantStart':
+      startAssistantStream(data);
+      break;
+    case 'assistantDelta':
+      appendAssistantDelta(data);
+      break;
+    case 'assistantReset':
+      resetAssistantStream(data);
       break;
     case 'assistant':
       pendingRequestText = '';
       pendingRequestId = '';
       replacePendingOnSubmit = false;
       timeline.querySelectorAll('.recovery-actions').forEach(element => element.remove());
-      appendMessage(data.message);
+      completeAssistantMessage(data.message);
       break;
     case 'sendRejected':
       prompt.value = data.text || pendingRequestText;
@@ -5063,6 +5268,7 @@ window.addEventListener('message', ({ data }) => {
       setCancellationPending(false);
       currentRunSummary.cancelled = data.outcome === 'cancelled';
       currentRunSummary.failed = data.outcome === 'failed';
+      if (data.outcome !== 'completed') markAssistantStreamsInterrupted(data.outcome);
       renderRunSummary();
       break;
     case 'reset': resetConversation(data.context, data.history, data, data.draft); break;

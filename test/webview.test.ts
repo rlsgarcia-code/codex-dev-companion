@@ -476,6 +476,26 @@ test("preserves the reader position and offers an explicit jump to new activity"
   assert.match(source, /scrollConversationToBottom\(\{ force: true, countUpdate: false \}\)/);
 });
 
+test("streams one stable assistant message without counting every token as a new update", () => {
+  assert.match(source, /case 'assistantStart'/);
+  assert.match(source, /case 'assistantDelta'/);
+  assert.match(source, /case 'assistantReset'/);
+  assert.match(source, /function startAssistantStream/);
+  assert.match(source, /function appendAssistantDelta/);
+  assert.match(source, /requestAnimationFrame\(\(\) => flushAssistantStream/);
+  assert.match(source, /scrollConversationToBottom\(\{ countUpdate: false \}\)/);
+  assert.match(source, /function completeAssistantMessage/);
+  assert.match(source, /existing\.replaceWith\(completed\)/);
+});
+
+test("restores partial assistant output with an explicit non-final state", () => {
+  assert.match(source, /recovery\?\.partialAssistant\?\.content/);
+  assert.match(source, /partial response was preserved/);
+  assert.match(source, /function markAssistantStreamsInterrupted/);
+  assert.match(source, /data-message-status/);
+  assert.match(source, /partial · interrupted/);
+});
+
 test("renders trusted locally sanitized Markdown instead of parsing model HTML in the webview", () => {
   assert.match(source, /import \{ renderSafeMarkdown \} from "\.\/safe-markdown"/);
   assert.match(source, /html: renderSafeMarkdown\(event\.text\)/);

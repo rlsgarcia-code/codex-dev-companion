@@ -2,6 +2,7 @@
 
 ## 0.11.0
 
+- Stream agent text through the native LangChain event lifecycle into one stable sidebar message, discard transient tool-call prose, consolidate the final answer without duplication, and preserve bounded partial output across cancellation, failure, or Extension Host restart.
 - Added corporate local `stdio` MCP imports with exact no-shell commands, pinned `npx` packages, per-process HTTPS registries, secure environment secrets, wildcard tool discovery followed by explicit selection, and subprocess cleanup with the MCP session.
 - Added VS Code-native corporate MCP onboarding from clipboard or JSON files, with placeholder resolution, per-header Secret Storage, explicit tool allowlists, enable/disable/remove controls, and a read-only handshake/catalog test.
 - Added official LangChain MCP tool adaptation for both agent runtimes, exact-route HTTPS transport with redirects blocked and corporate CA reuse, plus approval before every MCP tool call and no MCP access in Plan-only mode.

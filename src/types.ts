@@ -31,6 +31,9 @@ export type ChatMessage = {
   text: string;
   html?: string;
   createdAt: number;
+  runId?: string;
+  status?: "complete" | "streaming" | "interrupted" | "failed" | "cancelled";
+  completedAt?: number;
 };
 
 export type PinnedContextSource = {
@@ -86,7 +89,11 @@ export type ContextSnapshot = {
 };
 
 export type AgentUiEvent =
-  | { type: "thread"; threadId: string }
+  | {
+      type: "thread";
+      threadId: string;
+      userMessage: { id: string; text: string; createdAt: number };
+    }
   | { type: "status"; label: string }
   | { type: "plan"; items: Array<{ text: string; completed: boolean }> }
   | { type: "activity"; kind: string; title: string; detail?: string }
@@ -94,7 +101,17 @@ export type AgentUiEvent =
   | { type: "evidence"; evidence: RunEvidenceSnapshot }
   | { type: "verification"; review: CompletionReview }
   | { type: "contextReceipt"; receipt: AgentContextReceipt }
-  | { type: "assistant"; text: string }
+  | { type: "assistantStart"; id: string; runId: string; createdAt: number }
+  | { type: "assistantDelta"; id: string; runId: string; sequence: number; delta: string }
+  | { type: "assistantReset"; id: string; runId: string; sequence: number }
+  | {
+      type: "assistant";
+      id: string;
+      runId: string;
+      text: string;
+      createdAt: number;
+      completedAt: number;
+    }
   | { type: "usage"; input: number; output: number }
   | { type: "error"; message: string; recoverable?: boolean }
   | { type: "done"; outcome: RunOutcome };
