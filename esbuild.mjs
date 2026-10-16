@@ -1,9 +1,14 @@
 import * as esbuild from "esbuild";
-import { copyFile, cp, mkdir, readdir, rm } from "node:fs/promises";
+import { copyFile, cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { generateThirdPartyNotices } from "./scripts/generate-third-party-notices.mjs";
 
 const watch = process.argv.includes("--watch");
+const providerArgument = process.argv.find((argument) => argument.startsWith("--provider="));
+const providerVariant = providerArgument?.slice("--provider=".length) || "litellm";
+if (!["litellm", "ollama", "openai"].includes(providerVariant)) {
+  throw new Error(`Unsupported provider variant: ${providerVariant}`);
+}
 const context = await esbuild.context({
   entryPoints: ["src/extension.ts"],
   bundle: true,
@@ -15,11 +20,19 @@ const context = await esbuild.context({
   sourcemap: true,
   minify: false,
   metafile: true,
-  logLevel: "info"
+  logLevel: "info",
+  define: {
+    __LOCAL_COMPANION_PROVIDER_VARIANT__: JSON.stringify(providerVariant)
+  }
 });
 
 const result = await context.rebuild();
 const nativePackage = await copyNativeAssets();
+await writeFile(
+  path.join("dist", "provider-variant.json"),
+  `${JSON.stringify({ providerVariant }, null, 2)}\n`,
+  "utf8"
+);
 await generateThirdPartyNotices({
   metafile: result.metafile,
   additionalPackages: [nativePackage, "playwright-core"]

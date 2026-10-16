@@ -2,6 +2,7 @@
 
 ## 0.11.0
 
+- Added explicit Ollama and OpenAI VSIX variants while keeping the default package LiteLLM-only; provider allowlists are build-bound, Ollama is restricted to loopback without a key, OpenAI is fixed to `api.openai.com`, and all model traffic retains exact-route Chat Completions guards.
 - Stream agent text through the native LangChain event lifecycle into one stable sidebar message, discard transient tool-call prose, consolidate the final answer without duplication, and preserve bounded partial output across cancellation, failure, or Extension Host restart.
 - Added corporate local `stdio` MCP imports with exact no-shell commands, pinned `npx` packages, per-process HTTPS registries, secure environment secrets, wildcard tool discovery followed by explicit selection, and subprocess cleanup with the MCP session.
 - Added VS Code-native corporate MCP onboarding from clipboard or JSON files, with placeholder resolution, per-header Secret Storage, explicit tool allowlists, enable/disable/remove controls, and a read-only handshake/catalog test.

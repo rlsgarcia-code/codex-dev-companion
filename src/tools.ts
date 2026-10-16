@@ -499,7 +499,7 @@ export class LocalToolHost {
         (input) => this.safe(() => this.browserVisualCheck(input, signal)),
         {
           name: "browser_visual_check",
-          description: "Capture the current local app viewport and ask the configured multimodal LiteLLM model to identify visual defects. Use after important UI changes; if the model lacks image support, continue with browser_inspect.",
+          description: "Capture the current local app viewport and ask the configured multimodal model to identify visual defects. Use after important UI changes; if the model lacks image support, continue with browser_inspect.",
           schema: z.object({
             question: z.string().min(1).max(1_000).optional()
               .describe("Specific visual acceptance criteria or suspected layout issue.")
@@ -518,7 +518,7 @@ export class LocalToolHost {
         (input) => this.safe(() => this.compareBrowserVisuals(input, signal)),
         {
           name: "browser_compare",
-          description: "Capture the current viewport and ask the configured multimodal LiteLLM model to compare it with the run's baseline. Use only when a meaningful before/after comparison exists.",
+          description: "Capture the current viewport and ask the configured multimodal model to compare it with the run's baseline. Use only when a meaningful before/after comparison exists.",
           schema: z.object({
             question: z.string().min(1).max(1_000).optional(),
             label: z.string().min(1).max(120).optional()
@@ -564,7 +564,7 @@ export class LocalToolHost {
         prompt: "Allow the local agent to inspect and control this localhost application?",
         action: "Allow local browser session",
         target: origin,
-        explanation: "The isolated session can reach loopback addresses only. Page text, console output, interactions, and screenshots may be sent to the configured LiteLLM model for this session. Downloads, password fields, service workers, and non-local HTTP/WebSocket requests are blocked.",
+        explanation: "The isolated session can reach loopback addresses only. Page text, console output, interactions, and screenshots may be sent to the configured model provider for this session. Downloads, password fields, service workers, and non-local HTTP/WebSocket requests are blocked.",
         risk: "sensitive",
         sensitiveValues: this.sensitiveValues
       });

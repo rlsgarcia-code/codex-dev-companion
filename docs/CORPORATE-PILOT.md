@@ -10,6 +10,7 @@ Registre apenas informações não sensíveis:
 - sistema operacional e arquitetura (`x64` ou `arm64`);
 - execução local, Remote SSH, WSL ou Dev Container;
 - nome do arquivo VSIX e SHA-256;
+- variante do provedor: padrão/LiteLLM, Ollama ou OpenAI;
 - runtime escolhido: LangChain Agent ou Deep Agent;
 - família do modelo: GPT, Claude ou alias corporativo não identificável.
 
@@ -20,7 +21,7 @@ Instale o VSIX correspondente ao sistema em que o **Extension Host** executa. Em
 1. Instale o VSIX em um perfil de teste do VS Code e reinicie a janela. Ao substituir outro build com o mesmo número de versão, use `code --install-extension <arquivo>.vsix --force` e execute **Developer: Reload Window**.
 2. Abra **Developer: Show Running Extensions** e confirme que **Local Dev Companion** está ativo e sem erro.
 3. Abra a sidebar direita, crie duas threads, alterne entre elas e recarregue a janela. Os rascunhos e títulos devem permanecer corretos, sem congelamento.
-4. Configure gateway, alias, chave segura e, se necessário, importe o PEM. Feche e abra outra janela do VS Code; a conexão deve continuar funcionando sem solicitar o PEM novamente.
+4. Confirme que o seletor mostra somente os provedores previstos pelo nome do VSIX. Configure provedor, modelo e, quando exigida, chave segura; para LiteLLM, importe o PEM se necessário. Feche e abra outra janela do VS Code; a conexão deve continuar funcionando sem solicitar novamente chave ou PEM.
 5. Execute **Test connection**. O catálogo, Chat Completions com tool metadata e embeddings opcionais devem informar resultados separados e acionáveis.
 6. Em **Plan only**, peça uma análise de um arquivo. Nenhum arquivo, memória ou comando deve ser alterado.
 7. Em **Ask first**, solicite uma pequena edição reversível. A confirmação deve aparecer antes da gravação; confira o diff em **Review run** e restaure o arquivo.
@@ -40,6 +41,8 @@ Instale o VSIX correspondente ao sistema em que o **Extension Host** executa. Em
 21. Em uma mudança visual, capture um estado anterior e compare com o resultado final. Confirme que **Review run** mostra a observação textual e que nenhuma imagem foi gravada no repositório.
 22. Copie um template MCP corporativo com placeholders e headers sensíveis. Importe-o pelo ícone de plugue, confirme que os segredos não aparecem em settings, memória, logs ou arquivos, e execute **Test connection**; nenhuma ferramenta ou SQL deve rodar nesse teste.
 23. Em **Ask first**, peça uma consulta usando uma ferramenta MCP permitida. Confirme o modal antes da chamada, recuse uma vez para verificar que não há contorno e depois aprove uma chamada de leitura. Em **Plan only**, confirme que nenhuma ferramenta MCP fica disponível.
+24. Se estiver validando a variante Ollama, confirme que somente uma URL de loopback é aceita, nenhuma chave é solicitada e desligar o Ollama produz um erro local acionável. Uma URL LAN ou pública deve ser recusada antes da rede.
+25. Se estiver validando a variante OpenAI, confirme que a base fica fixa em `https://api.openai.com/v1`, a chave não aparece em settings ou bundle de suporte e uma base alternativa é recusada. No VSIX padrão, `ollama` e `openai` em `settings.json` devem ser recusados como não instalados.
 
 ## Critério de aprovação
 

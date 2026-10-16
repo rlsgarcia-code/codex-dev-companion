@@ -10,6 +10,7 @@ const runMode = z.enum(["review", "execute", "plan"]);
 const runtime = z.enum(["standard", "deep"]);
 const finalReviewMode = z.enum(["off", "changes", "always"]);
 const authHeader = z.enum(["authorization", "api-key", "ocp-apim-subscription-key"]);
+const modelProvider = z.enum(["litellm", "ollama", "openai"]);
 const noPayload = <Type extends string>(type: Type) => z.object({ type: z.literal(type) }).strict();
 const boundedDiagnostics = z.unknown().refine((value) => {
   try {
@@ -21,6 +22,7 @@ const boundedDiagnostics = z.unknown().refine((value) => {
 });
 
 const liteLlmFields = {
+  provider: modelProvider,
   endpoint: urlText,
   model: shortText,
   apiKey: secretText,

@@ -21,7 +21,7 @@ export function evaluateCommandPolicy(command: string, args: string[]): CommandR
   const subcommand = args[0]?.toLowerCase();
 
   if (NETWORK_CLIENTS.has(executable)) {
-    throw new Error("Network client commands are disabled; only the configured LiteLLM endpoints may be contacted.");
+    throw new Error("Network client commands are disabled; model traffic is allowed only through the configured provider client.");
   }
   if (SHELLS.has(executable)) {
     throw new Error("Shell interpreters are disabled. Run the intended executable directly instead.");
@@ -70,7 +70,7 @@ function rejectRemoteUrls(args: string[]): void {
       try {
         const hostname = new URL(match[0]).hostname.toLowerCase();
         if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) {
-          throw new Error("Remote URLs are disabled for local commands. Use only the configured LiteLLM connection.");
+          throw new Error("Remote URLs are disabled for local commands. Use only the configured model provider connection.");
         }
       } catch (error) {
         if (error instanceof Error && /Remote URLs are disabled/.test(error.message)) throw error;

@@ -18,10 +18,8 @@ import {
   serializeConnectionProfile
 } from "./connection-profile";
 import {
-  LITELLM_API_KEY_SECRET,
   LITELLM_MODEL_CAPABILITIES,
   liteLlmModelProfile,
-  normalizeLiteLlmEndpoint,
   normalizeLiteLlmModelsEndpoint,
   parseLiteLlmAuthHeader,
   parseLiteLlmModelPreset,
@@ -31,7 +29,6 @@ import {
   parseOptionalTopP,
   resolveLiteLlmModelPreset,
   updateLiteLlmModelProfile,
-  validateLiteLlmConnection,
   validateLiteLlmModelProfile
 } from "./litellm";
 import type {
@@ -41,6 +38,20 @@ import type {
   LiteLlmModelProfiles,
   LiteLlmReasoningEffort
 } from "./litellm";
+import {
+  AVAILABLE_MODEL_PROVIDERS,
+  modelProviderAuthHeader,
+  modelProviderDefaultEndpoint,
+  modelProviderLabel,
+  modelProviderRequiresKey,
+  modelProviderSecret,
+  modelProviderSupportsCatalog,
+  modelProviderSupportsCorporateCa,
+  parseModelProvider,
+  PROVIDER_VARIANT,
+  validateModelConnection,
+  type ModelProvider
+} from "./model-provider";
 import { parseRunMode, runModeLabel } from "./autonomy";
 import { ContextCollector } from "./context";
 import { estimateContextTokens } from "./context-budget";
@@ -93,6 +104,7 @@ function mcpConnectionState(connections: readonly McpConnectionSnapshot[]) {
 }
 
 type LiteLlmFormFields = {
+  provider: ModelProvider;
   endpoint: string;
   model: string;
   apiKey: string;
@@ -107,6 +119,14 @@ type LiteLlmFormFields = {
 };
 
 type LiteLlmSettingsSnapshot = {
+  provider: ModelProvider;
+  providerVariant: string;
+  availableProviders: readonly ModelProvider[];
+  providerKeyStates: Record<ModelProvider, boolean>;
+  providerLabel: string;
+  requiresKey: boolean;
+  supportsCatalog: boolean;
+  supportsCorporateCa: boolean;
   endpoint: string;
   modelsEndpoint: string;
   model: string;
@@ -511,16 +531,29 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async liteLlmSettingsSnapshot(): Promise<LiteLlmSettingsSnapshot> {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const configuredProvider = parseModelProvider(configuration.get("modelProvider"));
+    const provider = AVAILABLE_MODEL_PROVIDERS.includes(configuredProvider) ? configuredProvider : "litellm";
     const model = configuration.get<string>("liteLlmModel", "");
     const modelProfiles = parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"));
     const profile = liteLlmModelProfile(modelProfiles, model);
     const resolvedPreset = resolveLiteLlmModelPreset(model, profile.preset);
-    const [hasApiKey, hasGlobalCa] = await Promise.all([
-      this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET).then(Boolean),
-      hasImportedGatewayCa(this.extensionContext)
+    const secretName = modelProviderSecret(provider);
+    const [hasApiKey, hasGlobalCa, liteLlmKey, openAiKey] = await Promise.all([
+      secretName ? this.extensionContext.secrets.get(secretName).then(Boolean) : Promise.resolve(false),
+      hasImportedGatewayCa(this.extensionContext),
+      this.extensionContext.secrets.get(modelProviderSecret("litellm")!).then(Boolean),
+      this.extensionContext.secrets.get(modelProviderSecret("openai")!).then(Boolean)
     ]);
     return {
-      endpoint: configuration.get<string>("liteLlmEndpoint", ""),
+      provider,
+      providerVariant: PROVIDER_VARIANT,
+      availableProviders: AVAILABLE_MODEL_PROVIDERS,
+      providerKeyStates: { litellm: liteLlmKey, ollama: false, openai: openAiKey },
+      providerLabel: modelProviderLabel(provider),
+      requiresKey: modelProviderRequiresKey(provider),
+      supportsCatalog: modelProviderSupportsCatalog(provider),
+      supportsCorporateCa: modelProviderSupportsCorporateCa(provider),
+      endpoint: configuration.get<string>("liteLlmEndpoint", "") || modelProviderDefaultEndpoint(provider),
       modelsEndpoint: configuration.get<string>("liteLlmModelsEndpoint", ""),
       model,
       hasApiKey,
@@ -545,6 +578,10 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async configureGatewayCa(): Promise<void> {
     try {
       await this.assertProviderConfigurationEditable();
+      const provider = parseModelProvider(vscode.workspace.getConfiguration("codexDevCompanion").get("modelProvider"));
+      if (!modelProviderSupportsCorporateCa(provider)) {
+        throw new Error("Corporate CA import is available only for the LiteLLM provider.");
+      }
       const hasCertificate = await hasImportedGatewayCa(this.extensionContext);
       const choice = await vscode.window.showQuickPick(
         [
@@ -855,7 +892,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           ...this.mcpImportSummary(draft),
           `Tools: ${tools.join(", ")}`,
           "",
-          "Every tool call requires approval. MCP results may be included in requests to your configured LiteLLM model. Credentials remain in VS Code Secret Storage."
+          "Every tool call requires approval. MCP results may be included in requests to your configured model provider. Credentials remain in VS Code Secret Storage."
         ].join("\n")
       },
       "Add connection"
@@ -1263,6 +1300,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async exportConnectionProfile(): Promise<void> {
     try {
+      const provider = parseModelProvider(vscode.workspace.getConfiguration("codexDevCompanion").get("modelProvider"));
+      if (provider !== "litellm") throw new Error("Portable connection profiles are currently available only for LiteLLM.");
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       const requiresCorporateCa = await hasImportedGatewayCa(this.extensionContext)
         || Boolean(configuration.get<string>("gatewayCaCertificatePath", "").trim());
@@ -1339,6 +1378,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       await Promise.all([
+        configuration.update("modelProvider", "litellm", vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmEndpoint", profile.gateway.endpoint, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModelsEndpoint", profile.gateway.modelsEndpoint, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmAuthHeader", profile.gateway.authHeader, vscode.ConfigurationTarget.Global),
@@ -1352,7 +1392,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       await this.agent.reloadProviderConfiguration();
       const [liteLlm, hasApiKey, hasCorporateCa] = await Promise.all([
         this.liteLlmSettingsSnapshot(),
-        this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET).then(Boolean),
+        this.extensionContext.secrets.get(modelProviderSecret("litellm")!).then(Boolean),
         hasImportedGatewayCa(this.extensionContext)
       ]);
       this.post({
@@ -1375,10 +1415,12 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       const model = configuration.get<string>("liteLlmModel", "");
       const modelProfiles = parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"));
       const profile = liteLlmModelProfile(modelProfiles, model);
+      const provider = parseModelProvider(configuration.get("modelProvider"));
+      const secretName = modelProviderSecret(provider);
       const [threadSnapshot, memorySnapshot, keyPresent, corporateCaPresent] = await Promise.all([
         this.agent.threadSnapshot(),
         this.memory.snapshot().catch(() => undefined),
-        this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET).then(Boolean),
+        secretName ? this.extensionContext.secrets.get(secretName).then(Boolean) : Promise.resolve(false),
         hasImportedGatewayCa(this.extensionContext)
       ]);
       const recoveryStates = threadSnapshot.threads.reduce<Record<string, number>>((counts, thread) => {
@@ -1410,6 +1452,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           standardRecursionLimit: configuration.get<number>("standardRecursionLimit", 200)
         },
         connection: {
+          provider,
           endpoint: configuration.get<string>("liteLlmEndpoint", ""),
           modelsEndpoint: configuration.get<string>("liteLlmModelsEndpoint", ""),
           authHeader: parseLiteLlmAuthHeader(configuration.get("liteLlmAuthHeader")),
@@ -1565,7 +1608,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       await this.assertProviderConfigurationEditable();
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       const { connection, modelsEndpoint, modelProfiles } = await this.parseLiteLlmForm(message);
+      const secretName = modelProviderSecret(connection.provider);
       await Promise.all([
+        configuration.update("modelProvider", connection.provider, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmEndpoint", connection.endpoint, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModel", connection.model, vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmModelsEndpoint", modelsEndpoint, vscode.ConfigurationTarget.Global),
@@ -1573,15 +1618,15 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         configuration.update("liteLlmModelProfiles", modelProfiles, vscode.ConfigurationTarget.Global),
         configuration.update("semanticMemoryEnabled", message.semanticMemoryEnabled, vscode.ConfigurationTarget.Global),
         configuration.update("embeddingModel", message.embeddingModel.trim(), vscode.ConfigurationTarget.Global),
-        ...(message.apiKey.trim()
-          ? [this.extensionContext.secrets.store(LITELLM_API_KEY_SECRET, message.apiKey.trim())]
+        ...(secretName && message.apiKey.trim()
+          ? [this.extensionContext.secrets.store(secretName, message.apiKey.trim())]
           : [])
       ]);
       await this.agent.reloadProviderConfiguration();
       this.post({
         type: "liteLlmSaved",
         liteLlm: await this.liteLlmSettingsSnapshot(),
-        message: `LiteLLM updated · ${connection.model}`
+        message: `${modelProviderLabel(connection.provider)} updated · ${connection.model}`
       });
     } catch (error) {
       this.post({
@@ -1599,7 +1644,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     } catch (error) {
       const detail = await this.safeError(error, message.apiKey);
       const fixes = connectionDiagnosticFixes(detail, {
-        authHeader: parseLiteLlmAuthHeader(message.authHeader),
+        authHeader: modelProviderAuthHeader(parseModelProvider(message.provider), message.authHeader),
         surface: "configuration"
       });
       this.post({
@@ -1647,15 +1692,18 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async parseLiteLlmForm(message: LiteLlmFormFields) {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-    const existingApiKey = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
+    const provider = parseModelProvider(message.provider);
+    const secretName = modelProviderSecret(provider);
+    const existingApiKey = secretName ? await this.extensionContext.secrets.get(secretName) : undefined;
     const apiKey = message.apiKey.trim() || existingApiKey || "";
-    const connection = validateLiteLlmConnection({
-      endpoint: normalizeLiteLlmEndpoint(message.endpoint),
+    const connection = validateModelConnection({
+      provider,
+      endpoint: message.endpoint,
       model: message.model,
       apiKey,
-      authHeader: parseLiteLlmAuthHeader(message.authHeader)
+      authHeader: modelProviderAuthHeader(provider, message.authHeader)
     });
-    const modelsEndpoint = message.modelsEndpoint.trim()
+    const modelsEndpoint = modelProviderSupportsCatalog(provider) && message.modelsEndpoint.trim()
       ? normalizeLiteLlmModelsEndpoint(message.modelsEndpoint)
       : "";
     const preset = parseLiteLlmModelPreset(message.preset);
@@ -1868,8 +1916,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
     if (event.type === "contextReceipt") {
-      const storedSecret = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
-      const sensitiveValues = storedSecret ? [storedSecret] : [];
+      const sensitiveValues = await this.storedModelSecrets();
       this.post({
         ...event,
         receipt: {
@@ -1894,15 +1941,15 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async memoryPayload() {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-    const [snapshot, storedSecret] = await Promise.all([
+    const [snapshot, storedSecrets] = await Promise.all([
       this.memory.snapshot(),
-      this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET)
+      this.storedModelSecrets()
     ]);
     const embeddingModel = configuration.get<string>("embeddingModel", "").trim();
     const semantic = configuration.get<boolean>("semanticMemoryEnabled", true) && Boolean(embeddingModel);
     return {
       entries: snapshot.entries.map((entry) => {
-        const text = redactSensitiveText(entry.text, storedSecret ? [storedSecret] : []);
+        const text = redactSensitiveText(entry.text, storedSecrets);
         return { ...entry, text, redacted: text !== entry.text };
       }),
       total: snapshot.total,
@@ -1923,12 +1970,12 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async addMemoryEntry(): Promise<void> {
     try {
       await this.assertMemoryEditable();
-      const storedSecret = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
+      const storedSecrets = await this.storedModelSecrets();
       const note = await vscode.window.showInputBox({
         title: "Add durable project memory",
         prompt: "Save only a confirmed decision, fact, or convention. This writes to .codex-agent/memory.md.",
         ignoreFocusOut: true,
-        validateInput: (value) => this.validateMemoryEntry(value, storedSecret)
+        validateInput: (value) => this.validateMemoryEntry(value, storedSecrets)
       });
       if (note === undefined) return;
       await this.assertMemoryEditable();
@@ -1944,13 +1991,13 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async editMemoryEntry(id: string): Promise<void> {
     try {
       await this.assertMemoryEditable();
-      const [snapshot, storedSecret] = await Promise.all([
+      const [snapshot, storedSecrets] = await Promise.all([
         this.memory.snapshot(),
-        this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET)
+        this.storedModelSecrets()
       ]);
       const entry = snapshot.entries.find((candidate) => candidate.id === id);
       if (!entry) throw new Error("This memory entry changed or no longer exists. Refresh and try again.");
-      const redacted = redactSensitiveText(entry.text, storedSecret ? [storedSecret] : []) !== entry.text;
+      const redacted = redactSensitiveText(entry.text, storedSecrets) !== entry.text;
       const note = await vscode.window.showInputBox({
         title: "Edit durable project memory",
         prompt: redacted
@@ -1958,7 +2005,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           : "Keep the entry concise, durable, and verifiable.",
         value: redacted ? "" : entry.text,
         ignoreFocusOut: true,
-        validateInput: (value) => this.validateMemoryEntry(value, storedSecret)
+        validateInput: (value) => this.validateMemoryEntry(value, storedSecrets)
       });
       if (note === undefined) return;
       await this.assertMemoryEditable();
@@ -1994,10 +2041,10 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
   }
 
-  private validateMemoryEntry(value: string, storedSecret: string | undefined): string | undefined {
+  private validateMemoryEntry(value: string, storedSecrets: string[]): string | undefined {
     if (!value.trim()) return "Enter a durable decision, fact, or convention.";
     if (value.length > 4_000) return "Keep one memory entry under 4,000 characters.";
-    if (redactSensitiveText(value, storedSecret ? [storedSecret] : []) !== value) {
+    if (redactSensitiveText(value, storedSecrets) !== value) {
       return "Remove credentials, tokens, passwords, or private-key material before saving.";
     }
     return undefined;
@@ -2119,8 +2166,14 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async safeError(error: unknown, transientSecret = ""): Promise<string> {
-    const storedSecret = await this.extensionContext.secrets.get(LITELLM_API_KEY_SECRET);
-    return safeErrorMessage(error, [storedSecret ?? "", transientSecret]);
+    return safeErrorMessage(error, [...await this.storedModelSecrets(), transientSecret]);
+  }
+
+  private async storedModelSecrets(): Promise<string[]> {
+    const names = [modelProviderSecret("litellm"), modelProviderSecret("openai")]
+      .filter((name): name is string => Boolean(name));
+    const values = await Promise.all(names.map((name) => this.extensionContext.secrets.get(name)));
+    return values.filter((value): value is string => Boolean(value));
   }
 
   private async threadPayload() {
@@ -2376,7 +2429,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       <section class="settings-panel hidden" id="litellm-settings" role="region" aria-labelledby="litellm-settings-title" aria-hidden="true">
       <div class="settings-heading">
         <div>
-          <div class="section-label">LITELLM GATEWAY</div>
+          <div class="section-label" id="provider-section-label">MODEL PROVIDER</div>
           <h2 id="litellm-settings-title" tabindex="-1">Connection</h2>
         </div>
         <button class="icon-button settings-close" id="litellm-close" title="Close settings" aria-label="Close settings">×</button>
@@ -2396,14 +2449,19 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       <section class="setup-step" data-setup-step="1" aria-labelledby="setup-step-gateway-title">
         <div class="setup-step-heading">
           <div class="section-label">STEP 1 OF 3</div>
-          <h3 id="setup-step-gateway-title" tabindex="-1">Connect the gateway</h3>
-          <p>Use the approved HTTPS route and keep the key in VS Code Secret Storage.</p>
+          <h3 id="setup-step-gateway-title" tabindex="-1">Connect the provider</h3>
+          <p id="provider-setup-note">Use the approved route and keep credentials in VS Code Secret Storage.</p>
         </div>
-        <label class="field">
-          <span>Gateway Base URL</span>
-          <input id="litellm-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/v1 or …/chat/completions" />
+        <label class="field" id="model-provider-field">
+          <span>Provider</span>
+          <select id="model-provider"></select>
+          <small id="provider-variant-note"></small>
         </label>
         <label class="field">
+          <span id="provider-endpoint-label">Gateway Base URL</span>
+          <input id="litellm-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/v1 or …/chat/completions" />
+        </label>
+        <label class="field" id="auth-header-field">
           <span>Key Header</span>
           <select id="litellm-auth-header">
             <option value="authorization">Authorization: Bearer</option>
@@ -2411,8 +2469,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             <option value="ocp-apim-subscription-key">Ocp-Apim-Subscription-Key</option>
           </select>
         </label>
-        <label class="field">
-          <span>Gateway Key <small id="litellm-key-state"></small></span>
+        <label class="field" id="provider-key-field">
+          <span id="provider-key-label">Provider Key <small id="litellm-key-state"></small></span>
           <input id="litellm-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the stored key" />
         </label>
       </section>
@@ -2422,7 +2480,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           <h3 id="setup-step-models-title" tabindex="-1">Choose the models</h3>
           <p>Load the optional catalog or enter the exact aliases supplied by your gateway administrator.</p>
         </div>
-        <div class="field">
+        <div class="field" id="model-catalog-field">
           <label for="litellm-models-endpoint">Models URL <small>optional</small></label>
           <div class="input-action">
             <input id="litellm-models-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://gateway.example.com/models" />
@@ -2486,12 +2544,11 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           <span>Retrieve relevant project memory with embeddings</span>
         </label>
         <label class="field">
-          <span>Embedding Model <small>optional · from Models URL</small></span>
-          <select id="embedding-model">
-            <option value="">Disabled · use memory.md only</option>
-          </select>
+          <span>Embedding Model <small>optional</small></span>
+          <input id="embedding-model" type="text" list="embedding-model-aliases" autocomplete="off" spellcheck="false" placeholder="Disabled · use memory.md only" />
+          <datalist id="embedding-model-aliases"></datalist>
         </label>
-        <p class="settings-note">The same model catalog and LiteLLM base are used for chat and embeddings. Vectors and Chroma data stay on this machine.</p>
+        <p class="settings-note" id="embedding-provider-note">The selected provider is used for chat and embeddings. Vectors and Chroma data stay on this machine.</p>
       </section>
       <section class="setup-step" data-setup-step="3" aria-labelledby="setup-step-verify-title" hidden>
         <div class="setup-step-heading">
@@ -2503,7 +2560,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         <div class="connection-diagnostics hidden" id="connection-diagnostics" role="status" aria-live="polite" aria-atomic="true"></div>
       </section>
       <p class="settings-error hidden" id="litellm-settings-error" role="alert"></p>
-      <div class="profile-actions">
+      <div class="profile-actions" id="profile-actions">
         <button class="secondary-action" id="profile-import" type="button">Import profile</button>
         <button class="secondary-action" id="profile-export" type="button">Export profile</button>
         <button class="secondary-action" id="support-export" type="button">Export support</button>
@@ -3036,6 +3093,17 @@ const runReviewTitle = document.getElementById('run-review-title');
 const runReviewContent = document.getElementById('run-review-content');
 const liteLlmSettings = document.getElementById('litellm-settings');
 const liteLlmToggle = document.getElementById('litellm');
+const modelProvider = document.getElementById('model-provider');
+const modelProviderField = document.getElementById('model-provider-field');
+const providerVariantNote = document.getElementById('provider-variant-note');
+const providerSetupNote = document.getElementById('provider-setup-note');
+const providerEndpointLabel = document.getElementById('provider-endpoint-label');
+const providerKeyField = document.getElementById('provider-key-field');
+const providerKeyLabel = document.getElementById('provider-key-label');
+const authHeaderField = document.getElementById('auth-header-field');
+const modelCatalogField = document.getElementById('model-catalog-field');
+const profileActions = document.getElementById('profile-actions');
+const embeddingProviderNote = document.getElementById('embedding-provider-note');
 const liteLlmEndpoint = document.getElementById('litellm-endpoint');
 const liteLlmModelsEndpoint = document.getElementById('litellm-models-endpoint');
 const liteLlmModel = document.getElementById('litellm-model');
@@ -3080,6 +3148,7 @@ const contextMemoryEntry = document.getElementById('context-memory-entry');
 const promptTokenEstimate = document.getElementById('prompt-token-estimate');
 const semanticMemoryEnabled = document.getElementById('semantic-memory-enabled');
 const embeddingModel = document.getElementById('embedding-model');
+const embeddingModelAliases = document.getElementById('embedding-model-aliases');
 const newThreadButton = document.getElementById('new-thread');
 const mcpConnections = document.getElementById('mcp-connections');
 const browserControl = document.getElementById('browser-control');
@@ -3105,6 +3174,10 @@ let diagnosticFixApplied = false;
 let connectionSetupStep = 1;
 let planManuallyCollapsed = false;
 let hasStoredLiteLlmKey = false;
+let activeProvider = 'litellm';
+let availableModelProviders = ['litellm'];
+let providerKeyStates = { litellm: false, ollama: false, openai: false };
+const providerDrafts = {};
 let browserControlEnabled = false;
 let browserControlPending = false;
 let mcpConnectionCount = 0;
@@ -3911,7 +3984,7 @@ function updateRunControlsSummary() {
   const reviewDescriptions = {
     off: 'Do not make a separate final-review model call.',
     changes: 'Review runs that changed files or collected execution evidence.',
-    always: 'Review every executable run with a separate call through the same LiteLLM route.'
+    always: 'Review every executable run with a separate call through the same model provider.'
   };
   const runtime = agentRuntime.value === 'deep' ? 'deep' : 'standard';
   const mode = ['review', 'execute', 'plan'].includes(autonomyMode.value) ? autonomyMode.value : 'review';
@@ -4217,7 +4290,8 @@ function submit() {
 
 function setupStepComplete(step) {
   if (step === 1) {
-    return Boolean(liteLlmEndpoint.value.trim() && (liteLlmApiKey.value.trim() || hasStoredLiteLlmKey));
+    const keyReady = modelProvider.value === 'ollama' || liteLlmApiKey.value.trim() || hasStoredLiteLlmKey;
+    return Boolean(liteLlmEndpoint.value.trim() && keyReady);
   }
   if (step === 2) return Boolean(liteLlmModel.value.trim());
   return false;
@@ -4234,7 +4308,7 @@ function showConnectionSetupStep(step, focus = false) {
   });
   setupBackButton.classList.toggle('hidden', connectionSetupStep === 1);
   setupNextButton.classList.toggle('hidden', connectionSetupStep === 3);
-  advancedSetupButton.classList.toggle('hidden', connectionSetupStep !== 1);
+  advancedSetupButton.classList.toggle('hidden', connectionSetupStep !== 1 || modelProvider.value !== 'litellm');
   connectionTestButton.classList.toggle('hidden', connectionSetupStep !== 3);
   connectionSaveButton.classList.toggle('hidden', connectionSetupStep !== 3);
   setupStepCount.textContent = 'Step ' + connectionSetupStep + ' of 3';
@@ -4251,8 +4325,8 @@ function moveToConnectionSetupStep(target) {
   if (next > 1 && !setupStepComplete(1)) {
     showConnectionSetupStep(1, true);
     liteLlmSettingsError.textContent = liteLlmEndpoint.value.trim()
-      ? 'Add the gateway key before choosing models.'
-      : 'Add the approved HTTPS gateway URL before choosing models.';
+      ? 'Add the provider key before choosing models.'
+      : 'Add the provider endpoint before choosing models.';
     liteLlmSettingsError.classList.remove('hidden');
     (liteLlmEndpoint.value.trim() ? liteLlmApiKey : liteLlmEndpoint).focus();
     return;
@@ -4269,6 +4343,20 @@ function moveToConnectionSetupStep(target) {
 
 function fillLiteLlmSettings(liteLlm) {
   diagnosticFixApplied = false;
+  activeProvider = liteLlm.provider || 'litellm';
+  availableModelProviders = liteLlm.availableProviders || ['litellm'];
+  providerKeyStates = liteLlm.providerKeyStates || providerKeyStates;
+  modelProvider.innerHTML = availableModelProviders.map(provider => {
+    const label = provider === 'ollama' ? 'Ollama local' : provider === 'openai' ? 'OpenAI API' : 'LiteLLM';
+    return '<option value="' + provider + '">' + label + '</option>';
+  }).join('');
+  modelProvider.value = activeProvider;
+  liteLlmToggle.textContent = liteLlm.providerLabel || 'LiteLLM';
+  document.getElementById('setup-callout-title').textContent = 'Connect ' + (liteLlm.providerLabel || 'LiteLLM');
+  modelProviderField.classList.toggle('hidden', availableModelProviders.length < 2);
+  providerVariantNote.textContent = liteLlm.providerVariant === 'litellm'
+    ? 'Standard package · LiteLLM only'
+    : 'Optional ' + liteLlm.providerVariant + ' package installed';
   liteLlmModelProfiles = liteLlm.modelProfiles || {};
   liteLlmEndpoint.value = liteLlm.endpoint || '';
   liteLlmModelsEndpoint.value = liteLlm.modelsEndpoint || '';
@@ -4294,12 +4382,16 @@ function fillLiteLlmSettings(liteLlm) {
   finalReviewMode.value = ['off', 'always'].includes(liteLlm.finalReviewMode) ? liteLlm.finalReviewMode : 'changes';
   updateRunControlsSummary();
   hasStoredLiteLlmKey = Boolean(liteLlm.hasApiKey);
-  const savedConnectionReady = Boolean(liteLlm.endpoint && liteLlm.model && liteLlm.hasApiKey);
+  renderProviderFields();
+  const savedConnectionReady = Boolean(liteLlm.endpoint && liteLlm.model && (!liteLlm.requiresKey || liteLlm.hasApiKey));
   setupCallout.classList.toggle('hidden', savedConnectionReady);
-  document.getElementById('litellm-key-state').textContent = liteLlm.hasApiKey ? '· stored securely' : '· required';
+  document.getElementById('litellm-key-state').textContent = liteLlm.requiresKey
+    ? (liteLlm.hasApiKey ? '· stored securely' : '· required')
+    : '· not required';
   const details = [];
   if (liteLlm.caCertificatePath) details.push('CA: ' + liteLlm.caCertificatePath);
-  details.push('Auth: ' + (liteLlm.authHeader || 'authorization'));
+  details.push(liteLlm.providerLabel || 'LiteLLM');
+  if (liteLlm.requiresKey) details.push('Auth: ' + (liteLlm.authHeader || 'authorization'));
   details.push('POST /chat/completions');
   document.getElementById('litellm-details').textContent = details.join(' · ');
   liteLlmSettingsError.classList.add('hidden');
@@ -4316,16 +4408,48 @@ function setConnectionReadiness(state, title, detail) {
 }
 
 function updateConnectionReadiness() {
+  const requiresKey = modelProvider.value !== 'ollama';
   const configured = Boolean(
     liteLlmEndpoint.value.trim() &&
     liteLlmModel.value.trim() &&
-    (liteLlmApiKey.value.trim() || hasStoredLiteLlmKey)
+    (!requiresKey || liteLlmApiKey.value.trim() || hasStoredLiteLlmKey)
   );
   if (configured) {
-    setConnectionReadiness('configured', 'Ready to test', 'Validate chat, catalog and semantic memory before saving.');
+    setConnectionReadiness('configured', 'Ready to test', 'Validate chat, tools and semantic memory before saving.');
   } else {
-    setConnectionReadiness('', 'Setup required', 'Add the gateway, model alias and key.');
+    setConnectionReadiness('', 'Setup required', requiresKey
+      ? 'Add the endpoint, model and provider key.'
+      : 'Add the local endpoint and Ollama model.');
   }
+}
+
+function renderProviderFields() {
+  const provider = modelProvider.value || 'litellm';
+  const isLiteLlm = provider === 'litellm';
+  const isOllama = provider === 'ollama';
+  providerSetupNote.textContent = isOllama
+    ? 'Connect only to an Ollama server on this machine. No API key is used.'
+    : provider === 'openai'
+      ? 'Direct OpenAI access is enabled only by this explicitly installed package. The key stays in VS Code Secret Storage.'
+      : 'Use the approved HTTPS gateway and keep its key in VS Code Secret Storage.';
+  providerEndpointLabel.textContent = isOllama ? 'Local Ollama Base URL' : provider === 'openai' ? 'OpenAI Base URL' : 'Gateway Base URL';
+  providerKeyLabel.childNodes[0].textContent = provider === 'openai' ? 'OpenAI API Key ' : 'Gateway Key ';
+  providerKeyField.classList.toggle('hidden', isOllama);
+  authHeaderField.classList.toggle('hidden', !isLiteLlm);
+  modelCatalogField.classList.toggle('hidden', !isLiteLlm);
+  profileActions.classList.toggle('hidden', !isLiteLlm);
+  advancedSetupButton.classList.toggle('hidden', connectionSetupStep !== 1 || !isLiteLlm);
+  liteLlmEndpoint.readOnly = provider === 'openai';
+  liteLlmEndpoint.placeholder = isOllama
+    ? 'http://127.0.0.1:11434/v1'
+    : provider === 'openai'
+      ? 'https://api.openai.com/v1'
+      : 'https://gateway.example.com/v1 or …/chat/completions';
+  embeddingProviderNote.textContent = isOllama
+    ? 'Ollama serves chat and embeddings locally. Enter an embedding model explicitly if desired; Chroma data stays on this machine.'
+    : provider === 'openai'
+      ? 'OpenAI provides chat and optional embeddings; Chroma data stays on this machine.'
+      : 'The same model catalog and LiteLLM base are used for chat and embeddings. Vectors and Chroma data stay on this machine.';
 }
 
 function markConnectionEdited() {
@@ -4402,7 +4526,7 @@ function fillEmbeddingModelOptions(models, selected) {
     .map(model => String(model).trim())
     .filter(model => model && (isEmbeddingModel(model) || model === selected)))]
     .sort();
-  embeddingModel.innerHTML = '<option value="">Disabled · use memory.md only</option>' + aliases
+  embeddingModelAliases.innerHTML = aliases
     .map(model => '<option value="' + escapeHtml(model) + '">' + escapeHtml(model) + '</option>')
     .join('');
   embeddingModel.value = selected || '';
@@ -4508,6 +4632,7 @@ function openLiteLlmSettings() {
 function liteLlmFormMessage(type) {
   return {
     type,
+    provider: modelProvider.value,
     endpoint: liteLlmEndpoint.value,
     modelsEndpoint: liteLlmModelsEndpoint.value,
     model: liteLlmModel.value,
@@ -4833,6 +4958,32 @@ timeline.addEventListener('scroll', () => {
   renderJumpToLatest();
 }, { passive: true });
 advancedSetupButton.addEventListener('click', () => vscode.postMessage({ type: 'configureGatewayCa' }));
+modelProvider.addEventListener('change', () => {
+  providerDrafts[activeProvider] = {
+    endpoint: liteLlmEndpoint.value,
+    modelsEndpoint: liteLlmModelsEndpoint.value,
+    model: liteLlmModel.value,
+    embeddingModel: embeddingModel.value
+  };
+  activeProvider = modelProvider.value;
+  const draft = providerDrafts[activeProvider] || {};
+  liteLlmEndpoint.value = draft.endpoint || (activeProvider === 'ollama'
+    ? 'http://127.0.0.1:11434/v1'
+    : activeProvider === 'openai'
+      ? 'https://api.openai.com/v1'
+      : '');
+  liteLlmModelsEndpoint.value = draft.modelsEndpoint || '';
+  liteLlmModel.value = draft.model || '';
+  liteLlmApiKey.value = '';
+  hasStoredLiteLlmKey = Boolean(providerKeyStates[activeProvider]);
+  fillEmbeddingModelOptions([], draft.embeddingModel || '');
+  document.getElementById('litellm-key-state').textContent = activeProvider === 'ollama'
+    ? '· not required'
+    : hasStoredLiteLlmKey ? '· stored securely' : '· required';
+  renderProviderFields();
+  fillModelProfile(liteLlmModel.value, {}, true);
+  markConnectionEdited();
+});
 document.getElementById('litellm-load-models').addEventListener('click', () => {
   liteLlmSettingsError.classList.add('hidden');
   vscode.postMessage({
@@ -4855,6 +5006,7 @@ liteLlmTopP.addEventListener('input', () => {
   if (liteLlmTopP.value !== '') liteLlmTemperature.value = '';
 });
 [
+  modelProvider,
   liteLlmEndpoint,
   liteLlmModelsEndpoint,
   liteLlmModel,

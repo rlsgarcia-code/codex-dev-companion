@@ -88,11 +88,11 @@
       },
       {
         "command": "codexDevCompanion.configureLiteLlm",
-        "title": "Local Companion: Configure LiteLLM"
+        "title": "Local Companion: Configure Model Provider"
       },
       {
         "command": "codexDevCompanion.clearLiteLlmKey",
-        "title": "Local Companion: Remove LiteLLM Key"
+        "title": "Local Companion: Remove Current Provider Key"
       }
     ],
     "menus": {
@@ -114,6 +114,21 @@
     "configuration": {
       "title": "Local Dev Companion",
       "properties": {
+        "codexDevCompanion.modelProvider": {
+          "type": "string",
+          "enum": [
+            "litellm",
+            "ollama",
+            "openai"
+          ],
+          "enumDescriptions": [
+            "Corporate or self-hosted LiteLLM gateway. Available in every package.",
+            "Local Ollama OpenAI-compatible endpoint. Requires the explicit Ollama VSIX variant.",
+            "Direct OpenAI Platform Chat Completions. Requires the explicit OpenAI VSIX variant."
+          ],
+          "default": "litellm",
+          "description": "Model provider selected for this installation. Optional providers are rejected unless their explicit VSIX variant is installed."
+        },
         "codexDevCompanion.agentRuntime": {
           "type": "string",
           "enum": [
@@ -126,7 +141,7 @@
           ],
           "default": "standard",
           "scope": "resource",
-          "description": "Agent runtime used for this workspace. Both options use the same local LiteLLM Chat Completions connection."
+          "description": "Agent runtime used for this workspace. Both options use the selected Chat Completions provider."
         },
         "codexDevCompanion.autonomyMode": {
           "type": "string",
@@ -147,7 +162,7 @@
         "codexDevCompanion.liteLlmEndpoint": {
           "type": "string",
           "default": "",
-          "description": "HTTPS LiteLLM gateway base URL or complete Chat Completions URL."
+          "description": "Selected provider base URL or complete Chat Completions URL. OpenAI is fixed to api.openai.com; Ollama is restricted to loopback."
         },
         "codexDevCompanion.liteLlmAuthHeader": {
           "type": "string",
@@ -167,7 +182,7 @@
         "codexDevCompanion.liteLlmModel": {
           "type": "string",
           "default": "",
-          "description": "Exact client-facing model alias configured by the LiteLLM gateway administrator."
+          "description": "Exact model or gateway alias used by the selected provider."
         },
         "codexDevCompanion.liteLlmModelsEndpoint": {
           "type": "string",
@@ -269,7 +284,7 @@
         "codexDevCompanion.embeddingModel": {
           "type": "string",
           "default": "",
-          "description": "LiteLLM model alias used only for embeddings. Leave blank to use memory.md without semantic retrieval."
+          "description": "Selected-provider model used only for embeddings. Leave blank to use memory.md without semantic retrieval."
         },
         "codexDevCompanion.semanticMemoryResults": {
           "type": "number",
@@ -299,7 +314,7 @@
           ],
           "default": "changes",
           "scope": "resource",
-          "description": "Optional independent final review through the same configured LiteLLM Chat Completions route. No additional service is contacted."
+          "description": "Optional independent final review through the same selected Chat Completions provider. No additional service is contacted."
         },
         "codexDevCompanion.localBrowserToolsEnabled": {
           "type": "boolean",
@@ -353,7 +368,11 @@
     "audit:prod": "node scripts/audit-production.mjs",
     "verify": "npm run check && npm test && npm run build && npm run smoke:litellm && npm run smoke:chroma",
     "package": "npm run build && node scripts/package-native.mjs",
-    "package:verified": "npm run verify && node scripts/package-native.mjs"
+    "package:ollama": "node esbuild.mjs --provider=ollama && node scripts/package-native.mjs --provider=ollama",
+    "package:openai": "node esbuild.mjs --provider=openai && node scripts/package-native.mjs --provider=openai",
+    "package:verified": "npm run verify && node scripts/package-native.mjs",
+    "package:verified:ollama": "npm run verify && node esbuild.mjs --provider=ollama && node scripts/package-native.mjs --provider=ollama",
+    "package:verified:openai": "npm run verify && node esbuild.mjs --provider=openai && node scripts/package-native.mjs --provider=openai"
   },
   "dependencies": {
     "@langchain/community": "^1.1.29",

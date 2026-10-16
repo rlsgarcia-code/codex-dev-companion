@@ -334,10 +334,22 @@ test("keeps sidebar panels and live updates accessible by keyboard and assistive
 
 test("makes incomplete first-run connection setup visible and actionable", () => {
   assert.match(source, /id="setup-callout" role="region" aria-labelledby="setup-callout-title"/);
-  assert.match(source, /Connect your LiteLLM gateway/);
-  assert.match(source, /savedConnectionReady = Boolean\(liteLlm\.endpoint && liteLlm\.model && liteLlm\.hasApiKey\)/);
+  assert.match(source, /id="model-provider"/);
+  assert.match(source, /Connect ' \+ \(liteLlm\.providerLabel \|\| 'LiteLLM'\)/);
+  assert.match(source, /savedConnectionReady = Boolean\(liteLlm\.endpoint && liteLlm\.model && \(!liteLlm\.requiresKey \|\| liteLlm\.hasApiKey\)\)/);
   assert.match(source, /setupCallout\.classList\.toggle\('hidden', savedConnectionReady\)/);
   assert.match(source, /setupCalloutAction\.addEventListener\('click', openLiteLlmSettings\)/);
+});
+
+test("shows only build-authorized model providers and keeps their keys separate", () => {
+  assert.match(source, /availableProviders: AVAILABLE_MODEL_PROVIDERS/);
+  assert.match(source, /providerKeyStates: \{ litellm: liteLlmKey, ollama: false, openai: openAiKey \}/);
+  assert.match(source, /provider: modelProvider\.value/);
+  assert.match(source, /activeProvider === 'ollama'[\s\S]*http:\/\/127\.0\.0\.1:11434\/v1/);
+  assert.match(source, /activeProvider === 'openai'[\s\S]*https:\/\/api\.openai\.com\/v1/);
+  assert.match(source, /providerKeyField\.classList\.toggle\('hidden', isOllama\)/);
+  assert.match(source, /modelCatalogField\.classList\.toggle\('hidden', !isLiteLlm\)/);
+  assert.match(source, /profileActions\.classList\.toggle\('hidden', !isLiteLlm\)/);
 });
 
 test("renders structured connection fixes and retests applied recommendations", () => {
@@ -368,14 +380,14 @@ test("keeps first-run connection setup split into three validated steps", () => 
   assert.match(source, /data-setup-step="1"/);
   assert.match(source, /data-setup-step="2"/);
   assert.match(source, /data-setup-step="3"/);
-  assert.match(source, /Connect the gateway/);
+  assert.match(source, /Connect the provider/);
   assert.match(source, /Choose the models/);
   assert.match(source, /Verify and save/);
   assert.match(source, /function showConnectionSetupStep/);
   assert.match(source, /function moveToConnectionSetupStep/);
   assert.match(source, /setupStepComplete\(1\)/);
   assert.match(source, /setupStepComplete\(2\)/);
-  assert.match(source, /Add the gateway key before choosing models/);
+  assert.match(source, /Add the provider key before choosing models/);
   assert.match(source, /Choose or enter the chat model alias before testing/);
 });
 

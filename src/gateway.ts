@@ -39,7 +39,7 @@ export function gatewayFetch(
       ...(dispatcher ? { dispatcher } : {})
     });
     if (response.status >= 300 && response.status < 400) {
-      throw new Error("The configured LiteLLM route returned a redirect. Configure its final HTTPS URL; redirects are disabled.");
+      throw new Error("The configured model route returned a redirect. Configure its final URL; redirects are disabled.");
     }
     return response;
   }) as typeof globalThis.fetch;
@@ -52,18 +52,22 @@ export function validateGatewayRequest(
 ): void {
   const target = new URL(input instanceof Request ? input.url : input.toString());
   const allowed = new URL(allowedUrl);
+  const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+  const allowedProtocol = allowed.protocol === "https:"
+    || (allowed.protocol === "http:" && loopbackHosts.has(allowed.hostname));
   if (
-    target.protocol !== "https:" ||
+    !allowedProtocol ||
+    target.protocol !== allowed.protocol ||
     target.username ||
     target.password ||
     target.search ||
     target.hash ||
     target.href !== allowed.href
   ) {
-    throw new Error("Blocked a provider request outside the configured LiteLLM route.");
+    throw new Error("Blocked a provider request outside the exact configured model route.");
   }
   const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
   if (method !== "POST") {
-    throw new Error("Blocked a non-POST request to the configured LiteLLM model route.");
+    throw new Error("Blocked a non-POST request to the configured model route.");
   }
 }

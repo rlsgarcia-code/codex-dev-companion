@@ -26,6 +26,7 @@ function input() {
       standardRecursionLimit: 200
     },
     connection: {
+      provider: "litellm" as const,
       endpoint: ENDPOINT,
       modelsEndpoint: "https://private.corporate.example/models",
       authHeader: "api-key" as const,
@@ -61,6 +62,7 @@ function input() {
 test("creates a useful support bundle without raw connection or user content", () => {
   const bundle = createSupportBundle(input(), new Date("2026-10-15T12:00:00.000Z"));
   const serialized = serializeSupportBundle(bundle);
+  assert.equal(bundle.connection.provider, "litellm");
   assert.equal(bundle.connection.endpointConfigured, true);
   assert.equal(bundle.connection.explicitChatCompletionsRoute, true);
   assert.equal(bundle.diagnostics[0]?.suggestedFixKinds[0], "set-auth-header");

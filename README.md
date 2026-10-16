@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rlsgarcia-code/codex-dev-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/rlsgarcia-code/codex-dev-companion/actions/workflows/ci.yml)
 
-Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente e conectados ao gateway LiteLLM e aos MCPs corporativos HTTPS ou `stdio` que o usuário importar e aprovar explicitamente.
+Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente. O VSIX padrão conecta somente ao LiteLLM; variantes instaladas explicitamente podem acrescentar Ollama local ou OpenAI direta. MCPs corporativos HTTPS ou `stdio` continuam sendo importados e aprovados pelo usuário.
 
 O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e previsível, e **Deep Agent** (`createDeepAgent`), preparado para tarefas longas com planejamento, compactação de contexto e subagentes locais. Modelo (`ChatOpenAICompletions`), ferramentas (`tool` + Zod), estado (`MemorySaver`), callbacks, vector store e middleware continuam sendo do ecossistema LangChain. Contexto, histórico, ChromaDB, memória e ferramentas rodam na máquina do usuário. As únicas chamadas externas feitas pela extensão são:
 
@@ -10,12 +10,16 @@ O usuário escolhe entre **LangChain Agent** (`createAgent`), mais enxuto e prev
 POST <LITELLM_BASE_URL>/chat/completions
 POST <LITELLM_BASE_URL>/embeddings       # opcional, se a memória semântica for configurada
 GET  <MODELS_URL>  # opcional, somente quando o usuário clica em Load ou Test connection
+POST http://<LOOPBACK>/v1/chat/completions  # somente no VSIX opcional Ollama
+POST http://<LOOPBACK>/v1/embeddings        # opcional, somente no VSIX Ollama
+POST https://api.openai.com/v1/chat/completions # somente no VSIX opcional OpenAI
+POST https://api.openai.com/v1/embeddings       # opcional, somente no VSIX OpenAI
 POST/GET/DELETE <MCP_URL_EXATA>          # opcional, somente em conexões MCP corporativas habilitadas
 <COMANDO_STDIO_APROVADO>                 # opcional, processo MCP local sem shell
 GET <REGISTRY_NPM_CORPORATIVO>           # opcional, realizado pelo npx aprovado para obter pacote fixado
 ```
 
-Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, ferramentas hospedadas, web search, descoberta pública de MCP, LangSmith, telemetria ou verificação de atualização.
+Não há runtime Codex, loop próprio paralelo, login ChatGPT, ferramentas hospedadas, web search, descoberta pública de MCP, LangSmith, telemetria ou verificação de atualização. A instalação padrão não contém acesso habilitado à OpenAI Platform; a rota direta só é aceita pelo artefato OpenAI escolhido explicitamente.
 
 ## Capacidades
 
@@ -56,14 +60,14 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Revisor final independente e configurável, chamado pelo mesmo `ChatOpenAICompletions`, que recebe evidência limitada e redigida — incluindo recortes reais das mudanças, comandos, diagnósticos, navegador e processos — e sinaliza risco ou verificação ausente sem inventar sucesso.
 - Automação sem instalação de navegador: usa `playwright-core` com Edge ou Chrome já presente na máquina, sem download de Chromium, `node-gyp`, serviço do sistema ou privilégio administrativo.
 - Edição por substituição exata e criação de arquivos, sempre dentro do workspace.
-- Execução de comandos sem shell e sempre com confirmação modal do usuário, estado de aprovação visível na atividade, aviso destacado para ações destrutivas e ambiente sem a chave LiteLLM.
+- Execução de comandos sem shell e sempre com confirmação modal do usuário, estado de aprovação visível na atividade, aviso destacado para ações destrutivas e ambiente sem qualquer chave de provedor.
 - Política limitada para globs controlados pelo modelo: brace expansion é recusada e tamanho, operadores e segmentos são limitados antes dos matchers de filesystem.
 - Confirmação modal obrigatória antes de qualquer exclusão solicitada pelas ferramentas de filesystem do Deep Agent.
 - Modos de autonomia **Ask first**, **Auto edits** e **Plan only**, com padrão seguro persistido por workspace.
 - Cancelamento de turnos e de comandos em andamento.
 - Streaming de Chat Completions e function calling gerenciados por `ChatOpenAICompletions` e pelo runtime escolhido.
-- Chave virtual LiteLLM armazenada exclusivamente no Secret Storage do VS Code.
-- Transporte externo restrito às rotas HTTPS exatas de Chat Completions e embeddings derivadas do gateway configurado; métodos inesperados, parâmetros na URL e redirects são recusados antes que credenciais possam sair para outro destino.
+- Chaves LiteLLM e OpenAI armazenadas separadamente e exclusivamente no Secret Storage do VS Code; Ollama local não solicita nem armazena chave.
+- Transporte restrito às rotas exatas de Chat Completions e embeddings: HTTPS para LiteLLM/OpenAI e loopback `http(s)` para Ollama. Métodos inesperados, parâmetros na URL e redirects são recusados antes que credenciais possam sair para outro destino.
 - Bundle PEM corporativo opcional, importado uma vez para o armazenamento global local da extensão.
 - Conexões MCP corporativas via ícone de plugue: importe templates HTTPS ou `stdio` do catálogo pela área de transferência, por arquivo ou pelo catálogo editável do workspace em `.codex-agent/mcp.json` e `.codex-agent/mcp/*.json`; placeholders são preenchidos em diálogos nativos e somente as ferramentas selecionadas são expostas.
 - Adaptador MCP oficial do LangChain com URL HTTPS exata ou processo local sem shell, CA corporativa reutilizada no transporte HTTP, credenciais de header/ambiente no Secret Storage e aprovação antes de cada chamada de ferramenta.
@@ -73,15 +77,14 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, OpenAI Platform, 
 - Perfis de conexão JSON versionados para transportar gateway, aliases, compatibilidade, runtime e autonomia entre máquinas sem exportar chave, certificado ou qualquer credencial.
 - Bundle de suporte sanitizado, gerado sob demanda, com versões, estado de configuração e resultado dos diagnósticos sem chats, prompts, caminhos, comandos, nomes de arquivos, endpoints, aliases, chaves ou certificados.
 
-O modelo disponibilizado no LiteLLM precisa suportar **Chat Completions function calling**. A arquitetura segue a [documentação de Agents do LangChain](https://docs.langchain.com/oss/javascript/langchain/agents), a [documentação oficial de Deep Agents](https://docs.langchain.com/oss/javascript/deepagents/overview), a [memória de curto prazo](https://docs.langchain.com/oss/javascript/langchain/short-term-memory) e a referência de [`ChatOpenAI`](https://reference.langchain.com/javascript/langchain-openai/ChatOpenAI).
+O modelo selecionado precisa suportar **Chat Completions function calling**. A arquitetura segue a [documentação de Agents do LangChain](https://docs.langchain.com/oss/javascript/langchain/agents), a [documentação oficial de Deep Agents](https://docs.langchain.com/oss/javascript/deepagents/overview), a [memória de curto prazo](https://docs.langchain.com/oss/javascript/langchain/short-term-memory) e a referência de [`ChatOpenAI`](https://reference.langchain.com/javascript/langchain-openai/ChatOpenAI). O Ollama é acessado pela interface OpenAI-compatible local, que suporta Chat Completions, streaming e ferramentas nos modelos compatíveis.
 
 ## Pré-requisitos de uso
 
 - Visual Studio Code 1.106 ou superior.
-- Gateway LiteLLM acessível por HTTPS.
-- URL base HTTPS do gateway ou URL completa terminando em `/chat/completions`.
-- Alias de modelo com suporte a function calling.
-- Chave de API ou subscription key esperada pelo gateway.
+- Para o pacote padrão: gateway LiteLLM HTTPS, alias com function calling e a chave esperada pelo gateway.
+- Para a variante Ollama: Ollama iniciado na própria máquina e um modelo local com tool calling; recomenda-se contexto amplo para tarefas de código.
+- Para a variante OpenAI: chave da OpenAI Platform e um modelo que suporte function tools no endpoint Chat Completions.
 
 ## Instalação para usuários
 
@@ -121,6 +124,31 @@ code --install-extension ./codex-dev-companion-0.11.0-<plataforma>.vsix --force
 
 `npm run package` executa somente o build local e o empacotamento. A chave, o endpoint, o certificado e os aliases serão configurados pelo usuário dentro do VS Code depois da instalação.
 
+### Variantes opcionais de provedor
+
+O equivalente aos extras de um pacote Python é um VSIX alternativo, instalado deliberadamente. Não há download de plugin nem instalação de dependência durante a execução:
+
+```bash
+# padrão: somente LiteLLM
+npm run package
+
+# opt-in: LiteLLM + Ollama local
+npm run package:ollama
+
+# opt-in: LiteLLM + OpenAI Platform direta
+npm run package:openai
+```
+
+Os arquivos opcionais recebem o provedor no nome, por exemplo `codex-dev-companion-0.11.0-ollama-win32-x64.vsix` e `codex-dev-companion-0.11.0-openai-win32-x64.vsix`. Instale somente um deles com **Install from VSIX…** ou `code --install-extension <caminho-absoluto-do-vsix> --force`, depois execute **Developer: Reload Window**. Como todos usam o mesmo ID da extensão, a variante escolhida substitui a anterior e preserva threads, memória e configurações locais.
+
+Cada artefato contém uma allowlist de provedores definida no build:
+
+- padrão: somente LiteLLM;
+- Ollama: LiteLLM ou Ollama, limitado a `localhost`, `127.0.0.1` ou `[::1]`;
+- OpenAI: LiteLLM ou a base fixa `https://api.openai.com/v1`.
+
+Uma alteração manual em `settings.json` não habilita um provedor que não pertença ao VSIX instalado. A seleção fica em **Local Companion: Configure Model Provider**. Ollama não pede chave; OpenAI e LiteLLM mantêm segredos separados no Secret Storage.
+
 Quando concluir, o comando imprime `NATIVE_VSIX_READY` seguido do caminho absoluto do arquivo criado. Use exatamente esse caminho na instalação. O empacotador chama a cópia local do VSCE diretamente pelo Node, sem `npx`, shell, download ou dependência do terminal escolhido.
 
 No Windows, esse fluxo não exige habilitar o Modo de Desenvolvedor nem conceder ao usuário permissão para criar links simbólicos.
@@ -151,11 +179,11 @@ Falhas reproduzíveis podem ser registradas pelo formulário **Relatar uma falha
 
 1. Abra uma pasta de projeto no VS Code.
 2. Pressione `Ctrl/Cmd + Shift + P`.
-3. Execute **Local Companion: Configure LiteLLM**.
+3. Execute **Local Companion: Configure Model Provider**.
 4. Escolha o runtime e informe os valores de conexão e as capacidades do modelo abaixo.
 5. Abra **Local Companion** na barra lateral direita.
 
-O comando abre a Secondary Sidebar diretamente no único formulário de configuração da extensão. **Set up** apresenta o processo em três etapas curtas: **Gateway**, **Models** e **Verify**. A navegação só avança depois dos campos obrigatórios da etapa atual; parâmetros de compatibilidade permanecem recolhidos em **Advanced model settings**. Usuários que já possuem uma configuração também podem percorrer as etapas para revisar somente a parte desejada. Não existe um segundo wizard modal com valores ou regras diferentes.
+O comando abre a Secondary Sidebar diretamente no único formulário de configuração da extensão. **Set up** apresenta o processo em três etapas curtas: **Provider**, **Models** e **Verify**. O seletor mostra somente os provedores permitidos pelo VSIX instalado. A navegação só avança depois dos campos obrigatórios da etapa atual; parâmetros de compatibilidade permanecem recolhidos em **Advanced model settings**. Usuários que já possuem uma configuração também podem percorrer as etapas para revisar somente a parte desejada. Não existe um segundo wizard modal com valores ou regras diferentes.
 
 ### Conectar um MCP corporativo
 
@@ -212,9 +240,9 @@ No Playwright MCP, Chrome ou Edge precisa estar instalado no mesmo ambiente em q
 - Templates legados como `<WORKSPACE>` e `<SUBSCRIPTION KEY>` continuam aceitos: placeholders na URL e em argumentos são comuns; em headers e variáveis cujo nome indica credencial, são tratados como segredo.
 - O mesmo placeholder titulado repetido em headers durante uma importação é solicitado uma vez. Nunca coloque o valor real do token no JSON.
 
-O próprio agente pode criar o arquivo a partir de uma estrutura enviada no chat. Basta pedir para criar um template MCP; sem um caminho indicado, ele usa `.codex-agent/mcp/<nome-do-servidor>.json`, converte credenciais aparentes em `<secret:Título>` e valores variáveis em `<input:Título>`. Essa ação cria somente o template: o agente não solicita segredos, não acessa o Secret Storage e não conecta nem testa o servidor. A importação e a aprovação continuam no menu do plugue. Não envie tokens reais na conversa, pois as mensagens necessárias à inferência são processadas pelo LiteLLM configurado.
+O próprio agente pode criar o arquivo a partir de uma estrutura enviada no chat. Basta pedir para criar um template MCP; sem um caminho indicado, ele usa `.codex-agent/mcp/<nome-do-servidor>.json`, converte credenciais aparentes em `<secret:Título>` e valores variáveis em `<input:Título>`. Essa ação cria somente o template: o agente não solicita segredos, não acessa o Secret Storage e não conecta nem testa o servidor. A importação e a aprovação continuam no menu do plugue. Não envie tokens reais na conversa, pois as mensagens necessárias à inferência são processadas pelo provedor configurado.
 
-A URL resolvida ou o comando/argumentos exatos, valores não sensíveis, estado habilitado e allowlist ficam no estado local do workspace. Headers e variáveis de ambiente reconhecidos como segredo ficam individualmente no Secret Storage. O valor `Bearer` é montado localmente. Templates podem ser versionados porque contêm somente marcadores; o conteúdo importado não vira uma conexão até a aprovação final. Depois da importação, a conexão é uma cópia aprovada: editar o template não muda silenciosamente endpoint, comando, ambiente ou ferramentas; reimporte-o para aplicar uma revisão. Arquivos da pasta de templates são limitados, links simbólicos são ignorados e nenhuma conexão é descoberta ou ativada automaticamente. O certificado corporativo importado para o LiteLLM é reutilizado pelo MCP HTTPS. Antes de cada ferramenta, o VS Code exibe uma aprovação modal e informa que o resultado corporativo pode ser incluído na próxima chamada ao modelo LiteLLM configurado. **Plan only** não conecta nem disponibiliza ferramentas MCP.
+A URL resolvida ou o comando/argumentos exatos, valores não sensíveis, estado habilitado e allowlist ficam no estado local do workspace. Headers e variáveis de ambiente reconhecidos como segredo ficam individualmente no Secret Storage. O valor `Bearer` é montado localmente. Templates podem ser versionados porque contêm somente marcadores; o conteúdo importado não vira uma conexão até a aprovação final. Depois da importação, a conexão é uma cópia aprovada: editar o template não muda silenciosamente endpoint, comando, ambiente ou ferramentas; reimporte-o para aplicar uma revisão. Arquivos da pasta de templates são limitados, links simbólicos são ignorados e nenhuma conexão é descoberta ou ativada automaticamente. O certificado corporativo importado para o LiteLLM é reutilizado pelo MCP HTTPS. Antes de cada ferramenta, o VS Code exibe uma aprovação modal e informa que o resultado corporativo pode ser incluído na próxima chamada ao provedor configurado. **Plan only** não conecta nem disponibiliza ferramentas MCP.
 
 O VS Code precisa considerar a pasta confiável antes de ativar o agente, pois a extensão lê arquivos e pode executar ferramentas locais após as confirmações aplicáveis. Ao enviar uma mensagem, uma pré-verificação exclusivamente local confirma workspace, concorrência entre janelas, gateway, chave no Secret Storage, perfil do modelo e certificado corporativo. Se algo estiver incompleto, a mensagem volta intacta ao compositor e a configuração relevante é aberta; nenhuma thread, execução ou chamada externa é criada pela pré-verificação.
 
@@ -255,7 +283,7 @@ Clique em **Memory** para abrir a central local de conhecimento do projeto. Ela 
 
 Se for informada uma URL base, a extensão acrescenta `/chat/completions`. Se a rota completa já for informada, ela será usada sem duplicação. Caminhos corporativos intermediários são aceitos; query parameters são recusados para evitar que segredos sejam gravados em settings.
 
-Também é possível trocar o runtime e a autonomia diretamente nos dois seletores do compositor. **Ask first** pede confirmação antes de cada edição, atualização de memória ou comando; **Auto edits** aplica edições de arquivo e memória automaticamente, mas continua pedindo confirmação para comandos e exclusões; **Plan only** disponibiliza somente leitura e planejamento. A escolha de autonomia vale para o workspace atual. Clique em **LiteLLM** no rodapé para alterar URL, alias, cabeçalho ou chave. Informe **Models URL** e clique em **Load** para preencher os aliases; essa consulta usa `GET`, `Cache-Control: no-cache` e `api-key: <chave>`. As opções de reasoning, temperatura, Top P e perfil de compatibilidade ficam recolhidas em **Advanced model settings** e são lembradas separadamente para cada alias exato. Se a chave ficar vazia, o valor já armazenado no Secret Storage é preservado. Use **Corporate CA…** na etapa Gateway para importar, substituir ou remover o certificado sem refazer as demais etapas. A cópia importada fica somente no armazenamento global local da extensão e é reutilizada por todas as janelas e workspaces do mesmo perfil e ambiente do VS Code.
+Também é possível trocar o runtime e a autonomia diretamente nos dois seletores do compositor. **Ask first** pede confirmação antes de cada edição, atualização de memória ou comando; **Auto edits** aplica edições de arquivo e memória automaticamente, mas continua pedindo confirmação para comandos e exclusões; **Plan only** disponibiliza somente leitura e planejamento. A escolha de autonomia vale para o workspace atual. Clique no nome do provedor no rodapé para alterar conexão, modelo ou chave. No LiteLLM, informe **Models URL** e clique em **Load** para preencher os aliases; essa consulta usa `GET`, `Cache-Control: no-cache` e `api-key: <chave>`. Ollama e OpenAI usam o nome de modelo informado explicitamente. As opções de reasoning, temperatura, Top P e perfil de compatibilidade ficam recolhidas em **Advanced model settings** e são lembradas separadamente para cada alias exato. Se uma chave aplicável ficar vazia, o valor já armazenado no Secret Storage é preservado. **Corporate CA…** aparece somente para LiteLLM.
 
 Antes de salvar, clique em **Test connection**. O diagnóstico valida os campos localmente e testa, em sequência, o catálogo configurado, o modelo de Chat Completions com streaming e metadados de function tools e, quando habilitado, o modelo de embeddings. Cada etapa apresenta resultado e duração separadamente. O teste de chat não executa ferramentas, e o teste de embeddings envia apenas uma frase fixa de diagnóstico.
 
@@ -268,6 +296,8 @@ Se precisar de ajuda para diagnosticar uma instalação, clique em **Export supp
 Quando a causa é reconhecida, o próprio resultado apresenta uma ação específica. Por exemplo, é possível aplicar `reasoning_effort: none`, omitir Temperature/Top P ou trocar o header da chave e repetir o teste automaticamente. Correções de URL, alias, chave ou CA apenas direcionam o usuário ao controle apropriado porque esses valores não devem ser adivinhados. Uma correção validada continua pendente até o usuário clicar em **Save connection**.
 
 Para ativar recuperação semântica, abra **LiteLLM**, informe **Models URL**, clique em **Load** e selecione um alias em **Embedding Model**. Uma única consulta alimenta os dois seletores: aliases que contêm `embedd` (sem diferenciar maiúsculas de minúsculas) aparecem somente na lista de embeddings, enquanto os demais aparecem somente na lista de chat. A extensão deriva `POST /embeddings` da mesma base LiteLLM usada por Chat Completions, inicia o ChromaDB empacotado em `127.0.0.1`, salva os vetores no armazenamento privado local do VS Code e indexa somente entradas de `.codex-agent/memory.md`. O arquivo Markdown continua sendo a fonte de verdade legível e versionável. A mesma chave, cabeçalho e CA do gateway são reutilizados; nenhum dado é enviado ao Chroma Cloud.
+
+Nas variantes Ollama e OpenAI, informe o modelo de embeddings explicitamente no mesmo formulário. Ollama usa a rota OpenAI-compatible em loopback; OpenAI usa a base fixa oficial. Desativar **Embedding Model** mantém somente a memória textual local em qualquer variante.
 
 O serviço Chroma é iniciado sob demanda e compartilhado de forma defensiva entre janelas por um lock de inicialização e leases de clientes identificados pelo processo. Fechar uma janela preserva o serviço enquanto outro Extension Host ainda o utiliza; o último cliente vivo encerra o processo local. Leases órfãos são removidos automaticamente. Heartbeats são aceitos somente no formato esperado da API local. Se a memória vetorial falhar, a execução continua com `memory.md` e registra a causa exata na revisão do turno.
 
@@ -324,7 +354,7 @@ Durante uma execução, a thread persiste metadados mínimos da tentativa — id
 
 Não existe cliente HTTP alternativo nem loop manual de function calling no projeto. A classe `ChatOpenAICompletions` força o caminho Chat Completions e não usa Responses API. O tracing externo do LangChain/LangSmith é explicitamente desativado pelo runtime.
 
-As ferramentas de leitura usam caminhos relativos e validam caminhos reais para impedir escape por `..` ou links simbólicos. Os comandos não passam por um shell, sempre exigem confirmação e recebem somente um conjunto mínimo de variáveis do sistema — nunca a chave do LiteLLM. A política local bloqueia interpretadores de shell, código inline, wrappers de comandos, clientes de rede, URLs remotas, downloads/publicações por gerenciadores de pacotes e operações Git remotas. Comandos capazes de remover ou descartar dados recebem um aviso destrutivo específico antes da execução.
+As ferramentas de leitura usam caminhos relativos e validam caminhos reais para impedir escape por `..` ou links simbólicos. Os comandos não passam por um shell, sempre exigem confirmação e recebem somente um conjunto mínimo de variáveis do sistema — nunca uma chave de provedor. A política local bloqueia interpretadores de shell, código inline, wrappers de comandos, clientes de rede, URLs remotas, downloads/publicações por gerenciadores de pacotes e operações Git remotas. Comandos capazes de remover ou descartar dados recebem um aviso destrutivo específico antes da execução.
 
 No modo **Ask first**, cada `edit_file`, `create_file`, atualização de memória, escrita/edição do backend do Deep Agent e comando pausa no ponto da ferramenta para aprovação local. No modo **Auto edits**, escritas de arquivo e memória podem prosseguir automaticamente, mas comandos e exclusões continuam confirmados porque a extensão não afirma oferecer um sandbox de sistema operacional. Uma recusa é devolvida ao próprio loop LangChain como resultado da ferramenta e nunca é tratada como autorização implícita para tentar novamente.
 
@@ -356,7 +386,7 @@ Para permitir que o agente confira uma interface que está rodando na raiz do pr
 4. Aprove **Allow local browser session**. A autorização vale para a sessão isolada e é revogada por `browser_close`, pelo ícone de navegador, mudança de configuração ou encerramento do Extension Host.
 5. A mesma URL é aberta para acompanhamento. No VS Code 1.109 ou posterior, mantenha `workbench.browser.openLocalhostLinks` habilitado para que links locais apareçam no navegador integrado.
 
-O agente recebe ferramentas LangChain para abrir, inspecionar, clicar, preencher campos que não sejam de senha, selecionar opções, pressionar teclas, alterar o viewport, recarregar, voltar, capturar a tela e encerrar a sessão. DOM, texto visível, console e a captura solicitada passam somente pelo endpoint LiteLLM já configurado; a análise da imagem requer que o alias selecionado aceite conteúdo multimodal em Chat Completions. Se o modelo rejeitar imagens, a inspeção estrutural continua disponível.
+O agente recebe ferramentas LangChain para abrir, inspecionar, clicar, preencher campos que não sejam de senha, selecionar opções, pressionar teclas, alterar o viewport, recarregar, voltar, capturar a tela e encerrar a sessão. DOM, texto visível, console e a captura solicitada passam somente pelo provedor já configurado; a análise da imagem requer que o modelo selecionado aceite conteúdo multimodal em Chat Completions. Se o modelo rejeitar imagens, a inspeção estrutural continua disponível.
 
 Quando houver um estado anterior significativo, o agente pode manter uma baseline somente durante o run e comparar o viewport final com ela. A imagem é efêmera; a revisão conserva apenas a observação textual redigida do modelo e as contagens de erros da página/console.
 
@@ -392,20 +422,20 @@ code --install-extension codex-dev-companion-0.11.0-<plataforma>.vsix --force
 
 ## Memória
 
-O arquivo `.codex-agent/memory.md` é a fonte de verdade da memória do projeto. Ele deve conter somente decisões, fatos, convenções, follow-ups e resumos de módulo duráveis e verificáveis. Entradas derivadas do código podem registrar caminhos e fingerprints das fontes; se uma fonte mudar ou desaparecer, a entrada continua auditável no Markdown, mas é omitida do contexto do agente até ser atualizada. A central da sidebar projeta no máximo 200 entradas recentes sem criar um segundo armazenamento; entradas antigas continuam preservadas no Markdown. Cada entrada gerenciada tem limite de 4.000 caracteres e o arquivo é recusado para mutações automáticas acima de 2 MB, evitando regravações parciais. Quando um alias de embeddings está configurado, a extensão transforma essas entradas em chunks limitados, gera embeddings pelo LiteLLM e mantém o índice no ChromaDB local.
+O arquivo `.codex-agent/memory.md` é a fonte de verdade da memória do projeto. Ele deve conter somente decisões, fatos, convenções, follow-ups e resumos de módulo duráveis e verificáveis. Entradas derivadas do código podem registrar caminhos e fingerprints das fontes; se uma fonte mudar ou desaparecer, a entrada continua auditável no Markdown, mas é omitida do contexto do agente até ser atualizada. A central da sidebar projeta no máximo 200 entradas recentes sem criar um segundo armazenamento; entradas antigas continuam preservadas no Markdown. Cada entrada gerenciada tem limite de 4.000 caracteres e o arquivo é recusado para mutações automáticas acima de 2 MB, evitando regravações parciais. Quando um modelo de embeddings está configurado, a extensão transforma essas entradas em chunks limitados, gera embeddings pelo provedor selecionado e mantém o índice no ChromaDB local.
 
 Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status transitório ou transcrições do chat.
 
 ## Segurança e privacidade
 
-- A chave LiteLLM fica exclusivamente no Secret Storage do VS Code.
-- A chave não é escrita em settings, logs, prompts, memória ou arquivos do projeto.
+- As chaves LiteLLM e OpenAI ficam separadas e exclusivamente no Secret Storage do VS Code; Ollama não usa chave.
+- Nenhuma chave é escrita em settings, logs, prompts, memória ou arquivos do projeto.
 - Perfis exportados declaram que uma chave local é necessária, mas nunca contêm a chave ou o certificado corporativo; a importação não altera o segredo já armazenado.
 - Erros operacionais, diagnósticos, resultados de leitura/pesquisa e stdout/stderr passam por remoção local de chaves conhecidas, cabeçalhos de autenticação, credenciais em URLs, tokens comuns e blocos de chave privada antes de aparecerem na interface ou retornarem ao modelo.
 - A memória do projeto recusa entradas que contenham a chave configurada ou padrões reconhecíveis de credenciais; mensagens normais do usuário e respostas do agente não são reescritas silenciosamente.
 - Arquivos normalmente usados para credenciais — como `.env`, `.npmrc`, PEM/chaves privadas, keystores, `tfvars` e credenciais cloud — ficam fora do contexto automático, do seletor e de buscas amplas. Uma leitura direta exige confirmação local para aquele arquivo e ainda remove padrões reconhecidos antes de enviar o texto ao modelo.
 - Conversas ficam somente no `workspaceState` local e limitado do VS Code; não são copiadas para `.codex-agent/memory.md`.
-- O endpoint precisa usar HTTPS.
+- LiteLLM e OpenAI exigem HTTPS; Ollama aceita somente `http(s)` em loopback.
 - O certificado PEM opcional é validado e copiado para o armazenamento global local da extensão; o caminho original não é persistido.
 - Arquivos só podem ser lidos ou alterados dentro do workspace aberto.
 - Comandos são executados diretamente, sem shell, depois de confirmação do usuário.
@@ -414,15 +444,16 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 - A política de comandos é uma defesa local em profundidade, não um sandbox do sistema operacional: um script já presente no workspace e aprovado pelo usuário pode conter comportamento próprio. Revise o comando e os scripts associados antes de autorizar.
 - O histórico do agente fica no armazenamento local do workspace do VS Code; não é copiado para `memory.md`.
 - A projeção limitada da conversa fica no estado local do workspace; os vetores Chroma ficam no armazenamento privado local da extensão, fora do repositório.
-- O LiteLLM recebe apenas as mensagens necessárias para inferência, incluindo trechos de arquivos e resultados de ferramentas usados naquele turno. Isso inclui resultados de um MCP corporativo quando o usuário aprovou a chamada e o agente precisa usá-los como contexto.
+- O provedor selecionado recebe apenas as mensagens necessárias para inferência, incluindo trechos de arquivos e resultados de ferramentas usados naquele turno. Isso inclui resultados de um MCP corporativo quando o usuário aprovou a chamada e o agente precisa usá-los como contexto. No modo Ollama local, essas chamadas permanecem em loopback.
 - Revise as alterações antes de fazer commit.
 
 ## Configurações
 
 | Configuração | Padrão | Finalidade |
 | --- | --- | --- |
+| `codexDevCompanion.modelProvider` | `litellm` | Seleciona `litellm`, `ollama` ou `openai`; opções ausentes do VSIX instalado são recusadas. |
 | `codexDevCompanion.agentRuntime` | `standard` | Escolhe `LangChain Agent` (`standard`) ou `Deep Agent` (`deep`) por workspace. |
-| `codexDevCompanion.liteLlmEndpoint` | vazio | Base HTTPS do LiteLLM ou URL completa de Chat Completions. |
+| `codexDevCompanion.liteLlmEndpoint` | vazio | Campo legado compartilhado com a base exata do provedor selecionado. |
 | `codexDevCompanion.liteLlmModelsEndpoint` | vazio | URL HTTPS opcional do catálogo consultado sob demanda com `api-key` e sem cache. |
 | `codexDevCompanion.liteLlmAuthHeader` | `authorization` | Cabeçalho que transporta a chave até o gateway. |
 | `codexDevCompanion.liteLlmModel` | vazio | Alias exato do modelo liberado. |
@@ -474,6 +505,8 @@ VS Code Secondary Sidebar
             │
             ├── HTTPS ──► LiteLLM POST /v1/chat/completions
             ├── HTTPS ──► LiteLLM POST /v1/embeddings (opcional)
+            ├── loopback ──► Ollama /v1/chat/completions|embeddings (VSIX opcional)
+            ├── HTTPS fixo ──► OpenAI /v1/chat/completions|embeddings (VSIX opcional)
             ├── HTTPS ──► catálogo GET /models (opcional e sob demanda)
             ├── HTTPS ──► MCP corporativo exato (opcional, allowlist + aprovação)
             └── stdio ──► processo MCP local aprovado (opcional, sem shell)

@@ -34,6 +34,11 @@ test("keeps direct source-level network calls inside the reviewed gateway and lo
       !destination.includes("${") &&
       !/^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::|\/|$)/.test(destination)
     );
+    if (file === "src/model-provider.ts") {
+      assert.deepEqual(remoteDestinations, ["https://api.openai.com/v1"],
+        "the optional OpenAI variant may hard-code only the official fixed API base");
+      continue;
+    }
     assert.deepEqual(remoteDestinations, [], `${file} must not hard-code a remote network destination`);
   }
 });

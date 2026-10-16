@@ -390,9 +390,9 @@ function mcpApprovalTarget(profile: McpConnectionProfile): string {
 
 function mcpApprovalExplanation(profile: McpConnectionProfile): string {
   if (profile.transport === "http") {
-    return "The request is sent only to this configured HTTPS MCP route. Its result may be included in the next request to your configured LiteLLM model.";
+    return "The request is sent only to this configured HTTPS MCP route. Its result may be included in the next request to your configured model provider.";
   }
-  return `The tool runs through the approved local MCP process “${mcpConnectionDescription(profile)}”. The process may access files, applications, or networks according to that tool. Its result may be included in the next request to your configured LiteLLM model.`;
+  return `The tool runs through the approved local MCP process “${mcpConnectionDescription(profile)}”. The process may access files, applications, or networks according to that tool. Its result may be included in the next request to your configured model provider.`;
 }
 
 function emptySession(): McpRunSession {

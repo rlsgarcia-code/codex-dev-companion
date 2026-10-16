@@ -8,6 +8,7 @@ import {
   nativeTarget,
   packageArguments,
   packageInvocation,
+  verifyProviderVariant,
   verifyPackagedBrowserRuntime
 } from "../scripts/package-native.mjs";
 
@@ -28,6 +29,14 @@ test("builds a versioned target-specific package command", () => {
     nativePackageName("0.11.0", "darwin-arm64"),
     "codex-dev-companion-0.11.0-darwin-arm64.vsix"
   );
+  assert.equal(
+    nativePackageName("0.11.0", "win32-x64", "ollama"),
+    "codex-dev-companion-0.11.0-ollama-win32-x64.vsix"
+  );
+  assert.equal(
+    nativePackageName("0.11.0", "linux-x64", "openai"),
+    "codex-dev-companion-0.11.0-openai-linux-x64.vsix"
+  );
   assert.deepEqual(packageArguments("0.11.0", "win32-x64"), [
     "package",
     "--no-dependencies",
@@ -38,6 +47,7 @@ test("builds a versioned target-specific package command", () => {
   ]);
   assert.throws(() => nativePackageName("latest", "linux-x64"), /Invalid package version/);
   assert.throws(() => nativePackageName("0.11.0", "universal"), /Unsupported VSIX target/);
+  assert.throws(() => nativePackageName("0.11.0", "linux-x64", "both"), /Unsupported provider variant/);
 });
 
 test("invokes the local VSCE CLI through Node without a shell or npx shim", () => {
@@ -77,4 +87,20 @@ test("requires the browser controller to be copied into the distributable", asyn
   assert.equal(verifyPackagedBrowserRuntime(projectRoot), runtimeRoot);
   await rm(path.join(runtimeRoot, "browsers.json"));
   assert.throws(() => verifyPackagedBrowserRuntime(projectRoot), /runtime is incomplete: browsers\.json/);
+});
+
+test("refuses to mislabel a provider build as another VSIX variant", async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "local-companion-provider-"));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await mkdir(path.join(projectRoot, "dist"), { recursive: true });
+  await writeFile(
+    path.join(projectRoot, "dist", "provider-variant.json"),
+    JSON.stringify({ providerVariant: "ollama" }),
+    "utf8"
+  );
+  assert.equal(
+    verifyProviderVariant(projectRoot, "ollama"),
+    path.join(projectRoot, "dist", "provider-variant.json")
+  );
+  assert.throws(() => verifyProviderVariant(projectRoot, "openai"), /Provider build mismatch/);
 });

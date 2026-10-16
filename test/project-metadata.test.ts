@@ -27,6 +27,9 @@ test("keeps professional extension metadata and a valid package icon", () => {
   const autonomy = manifest.contributes?.configuration?.properties?.["codexDevCompanion.autonomyMode"];
   assert.equal(autonomy?.default, "review");
   assert.deepEqual(autonomy?.enum, ["review", "execute", "plan"]);
+  const provider = manifest.contributes?.configuration?.properties?.["codexDevCompanion.modelProvider"];
+  assert.equal(provider?.default, "litellm");
+  assert.deepEqual(provider?.enum, ["litellm", "ollama", "openai"]);
   const notifications = manifest.contributes?.configuration?.properties?.["codexDevCompanion.completionNotifications"];
   assert.equal(notifications?.default, "whenHidden");
   assert.deepEqual(notifications?.enum, ["whenHidden", "always", "never"]);
@@ -36,6 +39,8 @@ test("keeps professional extension metadata and a valid package icon", () => {
   );
   assert.match(manifest.scripts?.test ?? "", /npm run test:repository/);
   assert.equal(manifest.scripts?.package, "npm run build && node scripts/package-native.mjs");
+  assert.equal(manifest.scripts?.["package:ollama"], "node esbuild.mjs --provider=ollama && node scripts/package-native.mjs --provider=ollama");
+  assert.equal(manifest.scripts?.["package:openai"], "node esbuild.mjs --provider=openai && node scripts/package-native.mjs --provider=openai");
   assert.equal(
     manifest.scripts?.verify,
     "npm run check && npm test && npm run build && npm run smoke:litellm && npm run smoke:chroma"

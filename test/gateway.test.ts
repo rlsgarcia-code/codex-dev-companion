@@ -11,19 +11,19 @@ import {
 const CHAT_URL = "https://gateway.example.com/team/chat/completions";
 const EMBEDDINGS_URL = "https://gateway.example.com/team/embeddings";
 
-test("allows only POST requests to the exact configured LiteLLM route", () => {
+test("allows only POST requests to the exact configured model route", () => {
   assert.doesNotThrow(() => validateGatewayRequest(CHAT_URL, { method: "POST" }, CHAT_URL));
   assert.throws(
     () => validateGatewayRequest("https://gateway.example.com/team/embeddings", { method: "POST" }, CHAT_URL),
-    /outside the configured LiteLLM route/
+    /outside the exact configured model route/
   );
   assert.throws(
     () => validateGatewayRequest("https://other.example.com/team/chat/completions", { method: "POST" }, CHAT_URL),
-    /outside the configured LiteLLM route/
+    /outside the exact configured model route/
   );
   assert.throws(
     () => validateGatewayRequest(`${CHAT_URL}?token=secret`, { method: "POST" }, CHAT_URL),
-    /outside the configured LiteLLM route/
+    /outside the exact configured model route/
   );
   assert.throws(
     () => validateGatewayRequest(CHAT_URL, { method: "GET" }, CHAT_URL),
@@ -66,7 +66,7 @@ test("turns a gateway redirect into an actionable failure without following it",
   const fetch = gatewayFetch(CHAT_URL, false, undefined, undefined, transport);
   await assert.rejects(
     fetch(CHAT_URL, { method: "POST" }),
-    /Configure its final HTTPS URL; redirects are disabled/
+    /Configure its final URL; redirects are disabled/
   );
   assert.equal(requestCount, 1);
 });
@@ -80,9 +80,18 @@ test("blocks an unexpected route before invoking the network transport", async (
   const fetch = gatewayFetch(CHAT_URL, false, undefined, undefined, transport);
   await assert.rejects(
     fetch("https://api.openai.com/v1/chat/completions", { method: "POST" }),
-    /outside the configured LiteLLM route/
+    /outside the exact configured model route/
   );
   assert.equal(called, false);
+});
+
+test("allows an exact Ollama loopback route but rejects non-loopback HTTP", () => {
+  const ollama = "http://127.0.0.1:11434/v1/chat/completions";
+  assert.doesNotThrow(() => validateGatewayRequest(ollama, { method: "POST" }, ollama));
+  assert.throws(
+    () => validateGatewayRequest("http://192.168.1.20:11434/v1/chat/completions", { method: "POST" }, "http://192.168.1.20:11434/v1/chat/completions"),
+    /outside the exact configured model route/
+  );
 });
 
 test("routes a real LangChain Chat Completions invocation through the guarded transport", async () => {

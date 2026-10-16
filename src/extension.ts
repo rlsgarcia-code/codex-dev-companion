@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 import { DevelopmentAgent } from "./agent";
 import { ChangeReviewManager } from "./change-review";
-import { LITELLM_API_KEY_SECRET } from "./litellm";
 import { ContextCollector } from "./context";
 import { ProjectMemory } from "./memory";
+import { modelProviderLabel, modelProviderSecret, parseModelProvider } from "./model-provider";
 import { redactSensitiveText, safeErrorMessage } from "./redaction";
 import { AgentViewProvider } from "./webview";
 
@@ -42,8 +42,11 @@ export function activate(context: vscode.ExtensionContext): void {
         placeHolder: "Example: Use Vitest for new unit tests"
       });
       if (!note) return;
-      const storedSecret = await context.secrets.get(LITELLM_API_KEY_SECRET);
-      if (redactSensitiveText(note, storedSecret ? [storedSecret] : []) !== note) {
+      const secretNames = [modelProviderSecret("litellm"), modelProviderSecret("openai")]
+        .filter((name): name is string => Boolean(name));
+      const storedSecrets = (await Promise.all(secretNames.map((name) => context.secrets.get(name))))
+        .filter((value): value is string => Boolean(value));
+      if (redactSensitiveText(note, storedSecrets) !== note) {
         void vscode.window.showErrorMessage("Project memory cannot contain gateway keys or other detected credentials.");
         return;
       }
@@ -54,9 +57,11 @@ export function activate(context: vscode.ExtensionContext): void {
       await provider.openConnectionSettings();
     }),
     vscode.commands.registerCommand("codexDevCompanion.clearLiteLlmKey", async () => {
-      await context.secrets.delete(LITELLM_API_KEY_SECRET);
+      const provider = parseModelProvider(vscode.workspace.getConfiguration("codexDevCompanion").get("modelProvider"));
+      const secretName = modelProviderSecret(provider);
+      if (secretName) await context.secrets.delete(secretName);
       await agent.reloadProviderConfiguration();
-      void vscode.window.showInformationMessage("Gateway key removed from Secret Storage.");
+      void vscode.window.showInformationMessage(`${modelProviderLabel(provider)} key removed from Secret Storage.`);
     })
   );
 }

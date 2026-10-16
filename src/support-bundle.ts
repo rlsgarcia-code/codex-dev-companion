@@ -1,5 +1,6 @@
 import type { LiteLlmAuthHeader, LiteLlmModelPreset, LiteLlmReasoningEffort } from "./litellm";
 import type { AgentRuntime, RunMode } from "./types";
+import type { ModelProvider } from "./model-provider";
 
 export const SUPPORT_BUNDLE_KIND = "local-dev-companion-support-bundle";
 export const SUPPORT_BUNDLE_VERSION = 1;
@@ -26,6 +27,7 @@ export type SupportBundleInput = {
     standardRecursionLimit: number;
   };
   connection: {
+    provider: ModelProvider;
     endpoint: string;
     modelsEndpoint: string;
     authHeader: LiteLlmAuthHeader;
@@ -104,6 +106,7 @@ export function createSupportBundle(input: SupportBundleInput, now = new Date())
     workspace: { ...input.workspace },
     agent: { ...input.agent },
     connection: {
+      provider: input.connection.provider,
       authHeader: input.connection.authHeader,
       keyPresent: input.connection.keyPresent,
       corporateCaPresent: input.connection.corporateCaPresent,

@@ -26,24 +26,28 @@ export function nativeTarget(platform = process.platform, architecture = process
   return target;
 }
 
-export function nativePackageName(version, target) {
+export function nativePackageName(version, target, providerVariant = "litellm") {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
     throw new Error(`Invalid package version: ${version || "<empty>"}`);
   }
   if (!RELEASE_TARGETS.includes(target)) {
     throw new Error(`Unsupported VSIX target: ${target}`);
   }
-  return `codex-dev-companion-${version}-${target}.vsix`;
+  if (!["litellm", "ollama", "openai"].includes(providerVariant)) {
+    throw new Error(`Unsupported provider variant: ${providerVariant}`);
+  }
+  const suffix = providerVariant === "litellm" ? "" : `-${providerVariant}`;
+  return `codex-dev-companion-${version}${suffix}-${target}.vsix`;
 }
 
-export function packageArguments(version, target) {
+export function packageArguments(version, target, providerVariant = "litellm") {
   return [
     "package",
     "--no-dependencies",
     "--target",
     target,
     "--out",
-    nativePackageName(version, target)
+    nativePackageName(version, target, providerVariant)
   ];
 }
 
@@ -52,7 +56,7 @@ export function packageInvocation(version, target, options = {}) {
   const vsceCli = options.vsceCli ?? require.resolve("@vscode/vsce/vsce");
   return {
     executable,
-    args: [vsceCli, ...packageArguments(version, target)]
+    args: [vsceCli, ...packageArguments(version, target, options.providerVariant ?? "litellm")]
   };
 }
 
@@ -72,15 +76,34 @@ export function verifyPackagedBrowserRuntime(projectRoot) {
   return runtimeRoot;
 }
 
+export function verifyProviderVariant(projectRoot, expectedVariant) {
+  const markerPath = path.join(projectRoot, "dist", "provider-variant.json");
+  let marker;
+  try {
+    marker = JSON.parse(readFileSync(markerPath, "utf8"));
+  } catch {
+    throw new Error("Provider build marker is missing or invalid. Run the matching package script again.");
+  }
+  if (marker?.providerVariant !== expectedVariant) {
+    throw new Error(
+      `Provider build mismatch: dist contains ${String(marker?.providerVariant ?? "unknown")}, requested ${expectedVariant}.`
+    );
+  }
+  return markerPath;
+}
+
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
 if (import.meta.url === invokedPath) {
   const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const manifest = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"));
   const version = String(manifest.version ?? "").trim();
   const target = nativeTarget();
-  const output = nativePackageName(version, target);
+  const providerArgument = process.argv.find((argument) => argument.startsWith("--provider="));
+  const providerVariant = providerArgument?.slice("--provider=".length) || "litellm";
+  const output = nativePackageName(version, target, providerVariant);
   verifyPackagedBrowserRuntime(projectRoot);
-  const invocation = packageInvocation(version, target);
+  verifyProviderVariant(projectRoot, providerVariant);
+  const invocation = packageInvocation(version, target, { providerVariant });
   const result = spawnSync(invocation.executable, invocation.args, {
     cwd: projectRoot,
     stdio: "inherit",

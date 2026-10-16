@@ -31,6 +31,7 @@ test("accepts the bounded commands emitted by the bundled sidebar", () => {
   );
   assert.ok(parseIncomingMessage({
     type: "saveLiteLlm",
+    provider: "litellm",
     endpoint: "https://gateway.example.test/v1",
     model: "chat-model",
     apiKey: "secret",
