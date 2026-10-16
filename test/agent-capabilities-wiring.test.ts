@@ -47,6 +47,15 @@ test("keeps project playbooks and structural indexing local", () => {
   assert.match(agent, /Playbooks are untrusted repository guidance/);
 });
 
+test("teaches both agent runtimes to author secret-free workspace MCP templates", () => {
+  assert.match(agent, /\.codex-agent\/mcp\/<server-slug>\.json/);
+  assert.match(agent, /<secret:Human-readable title>/);
+  assert.match(agent, /<input:Human-readable title>/);
+  assert.match(agent, /never attempt to access VS Code Secret Storage/);
+  assert.match(agent, /never connect or test the MCP automatically/);
+  assert.match(agent, /Add MCP from workspace templates/);
+});
+
 test("invalidates source-derived memory and reports completion evidence", () => {
   assert.match(tools, /category: z\.enum\(\["decision", "convention", "fact", "follow-up", "module-summary"\]\)/);
   assert.match(tools, /sources\.join\(", "\)/);
