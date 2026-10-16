@@ -13,7 +13,7 @@ export type StdioMcpClientOptions = {
 };
 
 export async function connectStdioMcpClient(options: StdioMcpClientOptions): Promise<Client> {
-  const client = new Client({ name: "local-dev-companion", version: "0.11.0" });
+  const client = new Client({ name: "local-agent-companion", version: "0.11.0" });
   const transport = new StdioClientTransport({
     command: options.command,
     args: options.args,

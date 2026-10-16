@@ -98,7 +98,7 @@ test("keeps corporate MCP onboarding native, secret-separated, and approval-gate
   assert.match(source, /id="mcp-connections"[^>]*aria-pressed="false"/);
   assert.match(source, /Add corporate MCP from clipboard/);
   assert.match(source, /Add MCP from workspace templates/);
-  assert.match(source, /vscode\.Uri\.joinPath\(folder\.uri, "\.codex-agent", "mcp"\)/);
+  assert.match(source, /vscode\.Uri\.joinPath\(folder\.uri, "\.local-agent", "mcp"\)/);
   assert.match(source, /vscode\.Uri\.joinPath\(directory, "example\.json"\)/);
   assert.match(source, /mcpTemplatePlaceholders\(template\)/);
   assert.match(source, /Values copied inside JSON are never trusted or persisted/);
@@ -141,7 +141,7 @@ test("keeps recovery actions and per-thread draft persistence wired", () => {
     readFileSync("src/agent.ts", "utf8"),
     /The unfinished request changed in another VS Code window and was not discarded/
   );
-  assert.match(source, /codexDevCompanion\.threadDrafts/);
+  assert.match(source, /localAgentCompanion\.threadDrafts/);
   assert.match(source, /function persistWebviewState\(\)[\s\S]{0,100}drafts: localDrafts, brief: briefState/);
   assertMessageType("addFileContext");
   assert.match(source, /data-remove-context/);
@@ -429,7 +429,7 @@ test("notifies only according to the local completion preference and opens the r
   assert.match(source, /view\.onDidDispose/);
   assert.match(source, /if \(this\.view === view\) this\.view = undefined/);
   assert.match(source, /view\.badge = \{ value: 1, tooltip: notification\.message \}/);
-  assert.match(source, /workbench\.view\.extension\.codexDevCompanion/);
+  assert.match(source, /workbench\.view\.extension\.localAgentCompanion/);
   assert.match(source, /currentRunSummary\.cancelled = data\.outcome === 'cancelled'/);
   assert.match(source, /currentRunSummary\.failed = data\.outcome === 'failed'/);
 });

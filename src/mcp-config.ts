@@ -279,7 +279,7 @@ export function stripSecretHeaderPrefix(name: string, value: string): { prefix: 
 
 export function mcpSecretStorageKey(profileId: string, secretName: string): string {
   const digest = createHash("sha256").update(`${profileId}\0${secretName.toLowerCase()}`).digest("hex").slice(0, 24);
-  return `codexDevCompanion.mcp.${digest}`;
+  return `localAgentCompanion.mcp.${digest}`;
 }
 
 export function safeMcpToolPrefix(name: string): string {

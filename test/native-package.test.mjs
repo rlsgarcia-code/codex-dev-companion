@@ -27,15 +27,15 @@ test("refuses to label unsupported native hosts as universal packages", () => {
 test("builds a versioned target-specific package command", () => {
   assert.equal(
     nativePackageName("0.11.0", "darwin-arm64"),
-    "codex-dev-companion-0.11.0-darwin-arm64.vsix"
+    "local-agent-companion-0.11.0-darwin-arm64.vsix"
   );
   assert.equal(
     nativePackageName("0.11.0", "win32-x64", "ollama"),
-    "codex-dev-companion-0.11.0-ollama-win32-x64.vsix"
+    "local-agent-companion-0.11.0-ollama-win32-x64.vsix"
   );
   assert.equal(
     nativePackageName("0.11.0", "linux-x64", "openai"),
-    "codex-dev-companion-0.11.0-openai-linux-x64.vsix"
+    "local-agent-companion-0.11.0-openai-linux-x64.vsix"
   );
   assert.deepEqual(packageArguments("0.11.0", "win32-x64"), [
     "package",
@@ -43,7 +43,7 @@ test("builds a versioned target-specific package command", () => {
     "--target",
     "win32-x64",
     "--out",
-    "codex-dev-companion-0.11.0-win32-x64.vsix"
+    "local-agent-companion-0.11.0-win32-x64.vsix"
   ]);
   assert.throws(() => nativePackageName("latest", "linux-x64"), /Invalid package version/);
   assert.throws(() => nativePackageName("0.11.0", "universal"), /Unsupported VSIX target/);
@@ -64,7 +64,7 @@ test("invokes the local VSCE CLI through Node without a shell or npx shim", () =
     "--target",
     "win32-x64",
     "--out",
-    "codex-dev-companion-0.11.0-win32-x64.vsix"
+    "local-agent-companion-0.11.0-win32-x64.vsix"
   ]);
   assert.doesNotMatch(invocation.args.join(" "), /npx(?:\.cmd)?/i);
 });

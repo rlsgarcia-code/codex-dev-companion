@@ -14,7 +14,7 @@ import type { LiteLlmAuthHeader, LiteLlmModelProfiles } from "./litellm";
 import { parseAgentRuntime } from "./runtime";
 import type { AgentRuntime, RunMode } from "./types";
 
-export const CONNECTION_PROFILE_KIND = "local-dev-companion-connection-profile";
+export const CONNECTION_PROFILE_KIND = "local-agent-companion-connection-profile";
 export const CONNECTION_PROFILE_VERSION = 1;
 
 export type ConnectionProfile = {
@@ -63,7 +63,7 @@ export function parseConnectionProfile(value: unknown): ConnectionProfile {
   assertNoSecretFields(root);
   assertAllowedKeys(root, ROOT_KEYS, "profile");
   if (root.kind !== CONNECTION_PROFILE_KIND || root.version !== CONNECTION_PROFILE_VERSION) {
-    throw new Error("Unsupported Local Dev Companion connection-profile format or version.");
+    throw new Error("Unsupported Local Agent Companion connection-profile format or version.");
   }
   const exportedAt = boundedString(root.exportedAt, "Profile exportedAt must be an ISO timestamp.", 100);
   if (!Number.isFinite(Date.parse(exportedAt))) throw new Error("Profile exportedAt must be an ISO timestamp.");

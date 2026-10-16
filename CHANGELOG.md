@@ -10,7 +10,7 @@
 - Added VS Code-native corporate MCP onboarding from clipboard or JSON files, with placeholder resolution, per-header Secret Storage, explicit tool allowlists, enable/disable/remove controls, and a read-only handshake/catalog test.
 - Added official LangChain MCP tool adaptation for both agent runtimes, exact-route HTTPS transport with redirects blocked and corporate CA reuse, plus approval before every MCP tool call and no MCP access in Plan-only mode.
 - Added VS Code-native Problems, symbol, definition/reference, call-hierarchy, code-action, and bounded multi-file rename tools, with diagnostic baseline/compare evidence.
-- Added an invalidatable local structural project map, related-test suggestions, and repository playbooks under `.codex-agent/playbooks`, without source-code embeddings or a hosted index.
+- Added an invalidatable local structural project map, related-test suggestions, and repository playbooks under `.local-agent/playbooks`, without source-code embeddings or a hosted index.
 - Added approval-gated managed local server/watcher processes with direct spawn, bounded logs, loopback URL discovery, readiness, restart, and process-tree cleanup; no shell, daemon, native module, or elevation is introduced.
 - Added categorized source-derived memory with file fingerprints, automatic stale-recall suppression, module-summary guidance, and exact recalled-memory previews in the run receipt.
 - Added an optional independent completion reviewer through the same configured LiteLLM model, using redacted bounded diff excerpts plus command, diagnostic, process, and browser evidence.
@@ -150,7 +150,7 @@
 
 ## 0.10.0
 
-- Added optional LangChain Chroma vector-store retrieval for `.codex-agent/memory.md`, backed by a bundled local-only ChromaDB service with no Docker requirement.
+- Added optional LangChain Chroma vector-store retrieval for `.local-agent/memory.md`, backed by a bundled local-only ChromaDB service with no Docker requirement.
 - Added an embedding-model selector populated by the same authenticated LiteLLM model catalog used by the chat model, while reusing the Secret Storage key, gateway header, and imported corporate CA.
 - Persist active LangGraph checkpoints with `MemorySaver` and keep a bounded local conversation projection for restoration.
 - Keep transient editor context out of persisted human messages and inject only semantically relevant durable memory when embeddings are configured.
@@ -207,11 +207,11 @@
 
 ## 0.6.0
 
-- Replaced the Codex SDK runtime with a custom local agent loop over LiteLLM Chat Completions.
+- Replaced the previous hosted SDK runtime with a custom local agent loop over LiteLLM Chat Completions.
 - Added local function tools for workspace search, bounded file reads, exact edits, file creation, planning, project memory, and approved command execution.
 - Added streamed Chat Completions parsing, including fragmented tool calls, usage, cancellation, and non-streaming fallback.
 - Persist recent user/assistant context locally with bounded conversation compaction.
-- Removed Responses API, Codex model catalogs, Codex binaries, and the `@openai/codex-sdk` dependency.
+- Removed Responses API, hosted model catalogs, hosted binaries, and the previous SDK dependency.
 - Kept the LiteLLM virtual key exclusively in VS Code Secret Storage and corporate CA support inside the workspace.
 
 ## 0.5.0
@@ -224,7 +224,7 @@
 ## 0.2.4
 
 - Added workspace-scoped corporate CA PEM selection for Azure gateways.
-- Pass the selected certificate to the local Codex runtime through `CODEX_CA_CERTIFICATE`.
+- Pass the selected certificate to the local Local Agent runtime through `LOCAL_AGENT_CA_CERTIFICATE`.
 - Reject certificate paths and symbolic links that resolve outside the opened workspace.
 
 ## 0.2.3
@@ -236,7 +236,7 @@
 ## 0.2.2
 
 - Aligned Azure setup labels with existing `AzureChatOpenAI` values: OpenAI API Base, Deployment ID, API Version, and API Key.
-- Reject deployment-specific URLs so Codex can construct the Azure Responses route correctly.
+- Reject deployment-specific URLs so Local Agent can construct the Azure Responses route correctly.
 
 ## 0.2.1
 
@@ -245,8 +245,8 @@
 
 ## 0.2.0
 
-- Enforced a fully local Codex runtime with Azure OpenAI as the only external model endpoint.
-- Added isolated `CODEX_HOME` state and a minimal environment allowlist.
+- Enforced a fully local Local Agent runtime with Azure OpenAI as the only external model endpoint.
+- Added isolated `LOCAL_AGENT_HOME` state and a minimal environment allowlist.
 - Added secure Azure API-key storage through VS Code Secret Storage.
 - Disabled hosted web search, runtime update checks, and network access for agent shell commands.
 - Added Azure provider validation and unit tests.
@@ -254,7 +254,7 @@
 ## 0.1.0
 
 - Initial VS Code sidebar experience.
-- Codex SDK thread start, streaming, resume, and cancellation.
+- Initial local agent thread start, streaming, resume, and cancellation.
 - Automatic editor context and pinned selections.
-- Project memory in `.codex-agent/memory.md`.
+- Project memory in `.local-agent/memory.md`.
 - Plan, command, file-change, tool, and usage events.

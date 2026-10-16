@@ -2,7 +2,7 @@ import { realpath } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-const PLAYBOOK_DIRECTORY = path.join(".codex-agent", "playbooks");
+const PLAYBOOK_DIRECTORY = path.join(".local-agent", "playbooks");
 const MAX_PLAYBOOKS = 100;
 const MAX_PLAYBOOK_BYTES = 128_000;
 const MAX_PLAYBOOK_CHARACTERS = 24_000;
@@ -72,6 +72,6 @@ async function safePlaybookPath(workspaceRoot: string, requested: string): Promi
 function assertInside(root: string, candidate: string): void {
   const relative = path.relative(root, candidate);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("Playbooks must remain inside .codex-agent/playbooks.");
+    throw new Error("Playbooks must remain inside .local-agent/playbooks.");
   }
 }

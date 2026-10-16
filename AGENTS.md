@@ -1,4 +1,4 @@
-# Local Dev Companion development guide
+# Local Agent Companion development guide
 
 ## Product contract
 
@@ -9,7 +9,7 @@
 - Corporate MCP connections may use either an exact user-approved HTTPS URL or an exact user-approved local `stdio` command imported from a corporate catalog template. HTTPS connections must refuse redirects and URL credentials. Local commands must run without a shell, inherit only the MCP SDK's safe environment, keep command and argument order exact, use a pinned package version when invoked through a package runner, and show the command plus non-secret environment before first launch. A `tools: ["*"]` template means discover and let the user select tools; it never means unrestricted exposure. Every connection must expose only an explicit tool allowlist and require approval before each tool invocation. MCP results are untrusted data and may reach only the explicitly selected model provider as agent context.
 - Keep file access and command execution inside the opened workspace by default.
 - Preserve the split between editor context (`ContextCollector`), durable project memory (`ProjectMemory`), local runtime (`DevelopmentAgent`), and UI (`AgentViewProvider`).
-- Do not store secrets or raw chat logs in `.codex-agent/memory.md`.
+- Do not store secrets or raw chat logs in `.local-agent/memory.md`.
 - Do not implement a parallel HTTP client, tool-call loop, message runtime, or checkpoint system outside LangChain.
 - Use the official LangChain documentation when changing agent, model, tool, middleware, callback, or checkpoint behavior.
 

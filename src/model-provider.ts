@@ -13,7 +13,7 @@ declare const __LOCAL_COMPANION_PROVIDER_VARIANT__: string | undefined;
 export type ModelProvider = "litellm" | "ollama" | "openai";
 export type ProviderVariant = "litellm" | "ollama" | "openai";
 
-export const OPENAI_API_KEY_SECRET = "codexDevCompanion.openAiApiKey";
+export const OPENAI_API_KEY_SECRET = "localAgentCompanion.openAiApiKey";
 export const OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
 

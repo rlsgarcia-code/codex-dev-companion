@@ -6,7 +6,7 @@ export function memoryChunks(memoryText: string, maximumCharacters = 1_200): str
       line &&
       !line.startsWith("<!--") &&
       !line.startsWith("# Project memory") &&
-      line !== "Durable facts, decisions, conventions, and follow-ups for the development agent."
+      line !== "Durable facts, decisions, conventions, and follow-ups for the workspace agent."
     );
   const chunks: string[] = [];
   let current = "";

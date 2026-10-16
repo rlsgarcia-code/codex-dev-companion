@@ -142,7 +142,7 @@ test("keeps persisted profiles non-secret and derives opaque Secret Storage keys
   assert.equal(profile.headers.apikey, undefined);
   assert.deepEqual(profile.secretHeaders, ["apikey", "Authorization"]);
   const key = mcpSecretStorageKey(id, "Authorization");
-  assert.match(key, /^codexDevCompanion\.mcp\.[a-f0-9]{24}$/);
+  assert.match(key, /^localAgentCompanion\.mcp\.[a-f0-9]{24}$/);
   assert.doesNotMatch(key, /authorization/i);
   assert.equal(safeMcpToolPrefix("Databricks SQL"), "databricks_sql");
 });

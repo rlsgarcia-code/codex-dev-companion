@@ -11,7 +11,7 @@ export const RELEASE_TARGETS = [
 ];
 
 export function expectedReleaseAssets(version) {
-  return RELEASE_TARGETS.map((target) => `codex-dev-companion-${version}-${target}.vsix`);
+  return RELEASE_TARGETS.map((target) => `local-agent-companion-${version}-${target}.vsix`);
 }
 
 export function verifyReleaseMetadata({

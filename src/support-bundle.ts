@@ -2,7 +2,7 @@ import type { LiteLlmAuthHeader, LiteLlmModelPreset, LiteLlmReasoningEffort } fr
 import type { AgentRuntime, RunMode } from "./types";
 import type { ModelProvider } from "./model-provider";
 
-export const SUPPORT_BUNDLE_KIND = "local-dev-companion-support-bundle";
+export const SUPPORT_BUNDLE_KIND = "local-agent-companion-support-bundle";
 export const SUPPORT_BUNDLE_VERSION = 1;
 
 export type SupportBundleInput = {

@@ -48,7 +48,7 @@ test("keeps project playbooks and structural indexing local", () => {
 });
 
 test("teaches both agent runtimes to author secret-free workspace MCP templates", () => {
-  assert.match(agent, /\.codex-agent\/mcp\/<server-slug>\.json/);
+  assert.match(agent, /\.local-agent\/mcp\/<server-slug>\.json/);
   assert.match(agent, /<secret:Human-readable title>/);
   assert.match(agent, /<input:Human-readable title>/);
   assert.match(agent, /Preserve exact pinned package versions and argument order/);

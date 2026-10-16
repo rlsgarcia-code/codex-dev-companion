@@ -14,12 +14,12 @@ test("defaults unknown completion-notification settings to the quiet hidden-view
 test("notifies completed and failed background runs without including user content", () => {
   assert.deepEqual(completionNotification("whenHidden", false, "completed"), {
     level: "information",
-    message: "Local Companion finished the request.",
+    message: "Local Agent Companion finished the request.",
     action: "Open result"
   });
   assert.deepEqual(completionNotification("whenHidden", false, "failed"), {
     level: "warning",
-    message: "Local Companion needs attention.",
+    message: "Local Agent Companion needs attention.",
     action: "Open result"
   });
 });

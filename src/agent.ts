@@ -112,7 +112,7 @@ import type {
 import { acquireWorkspaceRunLease, workspaceRunLeaseOwner } from "./workspace-run-lease";
 import type { WorkspaceRunLease } from "./workspace-run-lease";
 
-const CONVERSATION_KEY_PREFIX = "codexDevCompanion.localConversation";
+const CONVERSATION_KEY_PREFIX = "localAgentCompanion.localConversation";
 
 type ConnectionDiagnosticOptions = {
   connection: ModelConnection;
@@ -254,7 +254,7 @@ export class DevelopmentAgent implements vscode.Disposable {
       };
     }
 
-    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
     const provider = configuredModelProvider(configuration);
     const providerWasExplicitlySelected = modelProviderSettingIsExplicit(configuration);
     const secretName = modelProviderSecret(provider);
@@ -309,7 +309,7 @@ export class DevelopmentAgent implements vscode.Disposable {
   public async listModels(endpointInput: string, transientApiKey = ""): Promise<ModelCatalogResult> {
     const workspace = vscode.workspace.workspaceFolders?.[0];
     if (!workspace) throw new Error("Open a workspace before loading the model catalog.");
-    const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
+    const provider = configuredModelProvider(vscode.workspace.getConfiguration("localAgentCompanion"));
     if (provider === "ollama") {
       return this.listOllamaModels(endpointInput);
     }
@@ -479,7 +479,7 @@ export class DevelopmentAgent implements vscode.Disposable {
               fetch: embeddingFetch
             }
           });
-          const vector = await embeddings.embedQuery("Local Dev Companion connection diagnostic");
+          const vector = await embeddings.embedQuery("Local Agent Companion connection diagnostic");
           if (!Array.isArray(vector) || !vector.length) {
             throw new Error("The embeddings endpoint returned an empty vector.");
           }
@@ -559,7 +559,7 @@ export class DevelopmentAgent implements vscode.Disposable {
         workspaceRoot: workspace.uri.fsPath,
         sessionId: this.sessionId
       });
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
       const runtime = parseAgentRuntime(configuration.get("agentRuntime"));
       const maxContextCharacters = configuration.get<number>("maxContextCharacters", 24_000);
       const maxConversationCharacters = configuration.get<number>("maxConversationCharacters", 48_000);
@@ -1216,7 +1216,7 @@ export class DevelopmentAgent implements vscode.Disposable {
     });
     if (!messages.length) return;
     const maximumCharacters = vscode.workspace
-      .getConfiguration("codexDevCompanion")
+      .getConfiguration("localAgentCompanion")
       .get<number>("maxConversationCharacters", 48_000);
     thread.messages = this.compactPersistedConversation(messages, maximumCharacters);
     thread.title = titleFromRequest(thread.messages.find((message) => message.role === "user")?.content ?? "");
@@ -1350,7 +1350,7 @@ export class DevelopmentAgent implements vscode.Disposable {
     const importedCertificate = await readImportedGatewayCa(this.extensionContext);
     if (importedCertificate) return [...rootCertificates, importedCertificate];
 
-    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
     const configuredPath = configuration.get<string>("gatewayCaCertificatePath", "").trim();
     if (!configuredPath) return undefined;
     const candidate = resolveWorkspaceCertificatePath(workspaceRoot, configuredPath);
@@ -1446,7 +1446,7 @@ Operating rules:
 ${toolGuidance}
 ${browserGuidance}
 ${mcpGuidance}
-- When the user asks you to create an MCP configuration or provides an MCP JSON structure for that purpose, create a reusable template at .codex-agent/mcp/<server-slug>.json unless the user specified another workspace path. Preserve whether the catalog template uses an HTTPS URL or a local stdio command. Use <secret:Human-readable title> for every credential header or environment variable and <input:Human-readable title> for variable URL, argument, or non-secret environment values; never use an unqualified placeholder in a new template. Preserve exact pinned package versions and argument order for local commands; never substitute @latest.
+- When the user asks you to create an MCP configuration or provides an MCP JSON structure for that purpose, create a reusable template at .local-agent/mcp/<server-slug>.json unless the user specified another workspace path. Preserve whether the catalog template uses an HTTPS URL or a local stdio command. Use <secret:Human-readable title> for every credential header or environment variable and <input:Human-readable title> for variable URL, argument, or non-secret environment values; never use an unqualified placeholder in a new template. Preserve exact pinned package versions and argument order for local commands; never substitute @latest.
 - MCP template authoring is separate from connection approval. Never ask for, reproduce, or write a live credential, never attempt to access VS Code Secret Storage, and never connect or test the MCP automatically. If supplied JSON appears to contain a live credential, replace it with a titled secret placeholder instead of persisting it. After creating the template, tell the user to import it from the plug menu under Add MCP from workspace templates, where credentials are collected securely, local commands or endpoints are reviewed, wildcard catalogs are discovered, and an explicit tool allowlist is selected.
 - Prefer VS Code language-service evidence over text guesses: use inspect_symbols, inspect_code_navigation, inspect_code_actions, and inspect_problems when relevant. Apply an exact edit-only quick fix with apply_code_action when it is safer than reproducing the edit manually; extension-command actions are intentionally unavailable. For implementation work, capture a Problems baseline before edits and compare it after verification.
 - Use inspect_project_map to understand modules, imports, scripts, dependents, and related tests without loading the whole repository. Use suggest_verification after deciding which files changed, run the narrowest relevant checks first, then expand according to risk.
@@ -1547,13 +1547,13 @@ ${memory}`;
       return `${message}\n\nOpen model provider settings and leave Temperature blank so the parameter is omitted for this model.`;
     }
     if (/missing subscription key/i.test(message)) {
-      return `${message}\n\nThe LiteLLM gateway did not receive the key in its expected header. Open “Local Companion: Configure Model Provider” and choose “api-key” for an AzureChatOpenAI-compatible hub or “Ocp-Apim-Subscription-Key” for standard Azure API Management.`;
+      return `${message}\n\nThe LiteLLM gateway did not receive the key in its expected header. Open “Local Agent Companion: Configure Model Provider” and choose “api-key” for an AzureChatOpenAI-compatible hub or “Ocp-Apim-Subscription-Key” for standard Azure API Management.`;
     }
     if (/auth|unauthorized|forbidden|\b401\b|\b403\b/i.test(message)) {
-      return `${message}\n\nCheck the selected provider endpoint, model, stored key, and provider-specific settings in “Local Companion: Configure Model Provider”.`;
+      return `${message}\n\nCheck the selected provider endpoint, model, stored key, and provider-specific settings in “Local Agent Companion: Configure Model Provider”.`;
     }
     if (/certificate|self[- ]signed|unable to verify|CERT_/i.test(message)) {
-      return `${message}\n\nFor LiteLLM with a private corporate CA, import the PEM once using “Local Companion: Configure Model Provider”.`;
+      return `${message}\n\nFor LiteLLM with a private corporate CA, import the PEM once using “Local Agent Companion: Configure Model Provider”.`;
     }
     if (/connection error/i.test(message)) {
       return `${message}\n\nCheck whether the selected provider is running and reachable. For LiteLLM with a private corporate CA, import its PEM in model provider settings.`;

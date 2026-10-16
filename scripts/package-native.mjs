@@ -37,7 +37,7 @@ export function nativePackageName(version, target, providerVariant = "litellm") 
     throw new Error(`Unsupported provider variant: ${providerVariant}`);
   }
   const suffix = providerVariant === "litellm" ? "" : `-${providerVariant}`;
-  return `codex-dev-companion-${version}${suffix}-${target}.vsix`;
+  return `local-agent-companion-${version}${suffix}-${target}.vsix`;
 }
 
 export function packageArguments(version, target, providerVariant = "litellm") {

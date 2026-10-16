@@ -7,7 +7,7 @@ const source = readFileSync("src/extension.ts", "utf8");
 test("routes the command palette to the single guided LiteLLM form", () => {
   assert.match(
     source,
-    /registerCommand\("codexDevCompanion\.configureLiteLlm", async \(\) => \{\s+await provider\.openConnectionSettings\(\);\s+\}\)/
+    /registerCommand\("localAgentCompanion\.configureLiteLlm", async \(\) => \{\s+await provider\.openConnectionSettings\(\);\s+\}\)/
   );
   assert.doesNotMatch(source, /LiteLLM setup \([1-8]\/8\)/);
   assert.doesNotMatch(source, /showQuickPick/);

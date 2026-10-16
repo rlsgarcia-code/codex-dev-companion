@@ -5,9 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Obrigado por ajudar a melhorar o Local Dev Companion.
+        Obrigado por ajudar a melhorar o Local Agent Companion.
 
-        Antes de continuar, gere **Export support bundle** na sidebar e revise o arquivo localmente. Não publique chave, certificado, endpoint privado, nome de projeto, caminho interno, conversa, prompt, código proprietário ou log não sanitizado. Para vulnerabilidades, use o [relatório privado de segurança](https://github.com/rlsgarcia-code/codex-dev-companion/security/advisories/new).
+        Antes de continuar, gere **Export support bundle** na sidebar e revise o arquivo localmente. Não publique chave, certificado, endpoint privado, nome de projeto, caminho interno, conversa, prompt, código proprietário ou log não sanitizado. Para vulnerabilidades, use o [relatório privado de segurança](https://github.com/rlsgarcia-code/local-agent-companion/security/advisories/new).
 
   - type: input
     id: extension-version
@@ -52,7 +52,7 @@ body:
     attributes:
       label: Artefato instalado
       description: Informe apenas o nome público do VSIX e, se possível, seu SHA-256.
-      placeholder: codex-dev-companion-win32-x64.vsix — SHA-256 ...
+      placeholder: local-agent-companion-win32-x64.vsix — SHA-256 ...
     validations:
       required: true
 

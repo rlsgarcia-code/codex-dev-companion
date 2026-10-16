@@ -63,7 +63,7 @@ export class SemanticProjectMemory implements vscode.Disposable {
       options.signal?.throwIfAborted();
       const documents = chunks.map((pageContent, index) => new Document({
         pageContent,
-        metadata: { workspace_id: workspaceId, source: ".codex-agent/memory.md", chunk: index }
+        metadata: { workspace_id: workspaceId, source: ".local-agent/memory.md", chunk: index }
       }));
       const ids = chunks.map((chunk, index) => createHash("sha256")
         .update(`${workspaceId}\0${modelId}\0${index}\0${chunk}`)

@@ -1,6 +1,6 @@
-# Local Dev Companion
+# Local Agent Companion
 
-[![CI](https://github.com/rlsgarcia-code/codex-dev-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/rlsgarcia-code/codex-dev-companion/actions/workflows/ci.yml)
+[![CI](https://github.com/rlsgarcia-code/local-agent-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/rlsgarcia-code/local-agent-companion/actions/workflows/ci.yml)
 
 Uma extensão de Visual Studio Code com dois runtimes de agente construídos exclusivamente sobre primitivas do **LangChain**, executados localmente. O VSIX padrão conecta somente ao LiteLLM; variantes instaladas explicitamente podem acrescentar Ollama local ou OpenAI direta. MCPs corporativos HTTPS ou `stdio` continuam sendo importados e aprovados pelo usuário.
 
@@ -19,7 +19,7 @@ POST/GET/DELETE <MCP_URL_EXATA>          # opcional, somente em conexões MCP co
 GET <REGISTRY_NPM_CORPORATIVO>           # opcional, realizado pelo npx aprovado para obter pacote fixado
 ```
 
-Não há runtime Codex, loop próprio paralelo, login ChatGPT, ferramentas hospedadas, web search, descoberta pública de MCP, LangSmith, telemetria ou verificação de atualização. A instalação padrão não contém acesso habilitado à OpenAI Platform; a rota direta só é aceita pelo artefato OpenAI escolhido explicitamente.
+Não há runtime externo hospedado, loop paralelo de mensagens, login ChatGPT, ferramentas hospedadas, web search, descoberta pública de MCP, LangSmith, telemetria ou verificação de atualização. A instalação padrão não contém acesso habilitado à OpenAI Platform; a rota direta só é aceita pelo artefato OpenAI escolhido explicitamente.
 
 ## Capacidades
 
@@ -45,7 +45,7 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, ferramentas hospe
 - Centro de revisão ao final de cada execução, reunindo resultado, plano final, arquivos, diffs, restauração, comandos, saídas, verificações, memória e uso do modelo.
 - Revisão por arquivo com diff nativo **before ↔ after**, restauração individual e uma ação para desfazer em conjunto todas as alterações de arquivo completamente capturadas, sempre protegidas contra a perda de edições posteriores.
 - Checkpoints das threads da sessão gerenciados por `MemorySaver`, com projeções limitadas de usuário/assistente no armazenamento local do workspace para restauração após reiniciar o VS Code.
-- Memória durável e auditável em `.codex-agent/memory.md`, com recuperação semântica opcional pelo ChromaDB local.
+- Memória durável e auditável em `.local-agent/memory.md`, com recuperação semântica opcional pelo ChromaDB local.
 - Memória categorizada com proveniência opcional por arquivo: fatos e resumos derivados do código deixam de ser recuperados automaticamente quando a fonte muda, e o recibo da execução mostra quais lembranças influenciaram o turno.
 - Central de memória na sidebar para consultar, adicionar, editar e excluir entradas duráveis, abrir a fonte Markdown e compreender o modo de recuperação ativo.
 - Planejamento apresentado na própria sidebar.
@@ -54,7 +54,7 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, ferramentas hospe
 - Mapa estrutural local e invalidável do projeto, com módulos, imports, dependentes, scripts e testes relacionados sem embeddings do código-fonte nem um índice hospedado.
 - Seleção progressiva de verificações: sugere testes relacionados aos arquivos alterados, executa primeiro o alvo mais estreito e compara Problems antes/depois quando apropriado.
 - Processos locais gerenciados para servidores e watchers, com saída limitada, detecção de URL `localhost`, readiness, status, reinício e encerramento da árvore sem shell e sem serviço de sistema.
-- Playbooks versionáveis em `.codex-agent/playbooks/*.md`, lidos sob demanda como orientação não confiável e nunca executados automaticamente.
+- Playbooks versionáveis em `.local-agent/playbooks/*.md`, lidos sob demanda como orientação não confiável e nunca executados automaticamente.
 - Validação de aplicações locais em navegador isolado: abre a URL de `localhost` para acompanhamento no VS Code, inspeciona texto/controles/console, interage por referências estáveis e produz uma análise visual opcional pelo mesmo modelo LiteLLM.
 - Evidência visual comparativa opcional, com baseline efêmero antes da mudança e análise before/after no mesmo modelo multimodal, registrada no **Review run** sem persistir a imagem no projeto.
 - Revisor final independente e configurável, chamado pelo mesmo `ChatOpenAICompletions`, que recebe evidência limitada e redigida — incluindo recortes reais das mudanças, comandos, diagnósticos, navegador e processos — e sinaliza risco ou verificação ausente sem inventar sucesso.
@@ -69,7 +69,7 @@ Não há runtime Codex, loop próprio paralelo, login ChatGPT, ferramentas hospe
 - Chaves LiteLLM e OpenAI armazenadas separadamente e exclusivamente no Secret Storage do VS Code; Ollama local não solicita nem armazena chave.
 - Transporte restrito às rotas exatas de Chat Completions e embeddings: HTTPS para LiteLLM/OpenAI e loopback `http(s)` para Ollama. Métodos inesperados, parâmetros na URL e redirects são recusados antes que credenciais possam sair para outro destino.
 - Bundle PEM corporativo opcional, importado uma vez para o armazenamento global local da extensão.
-- Conexões MCP corporativas via ícone de plugue: importe templates HTTPS ou `stdio` do catálogo pela área de transferência, por arquivo ou pelo catálogo editável do workspace em `.codex-agent/mcp.json` e `.codex-agent/mcp/*.json`; placeholders são preenchidos em diálogos nativos e somente as ferramentas selecionadas são expostas.
+- Conexões MCP corporativas via ícone de plugue: importe templates HTTPS ou `stdio` do catálogo pela área de transferência, por arquivo ou pelo catálogo editável do workspace em `.local-agent/mcp.json` e `.local-agent/mcp/*.json`; placeholders são preenchidos em diálogos nativos e somente as ferramentas selecionadas são expostas.
 - Adaptador MCP oficial do LangChain com URL HTTPS exata ou processo local sem shell, CA corporativa reutilizada no transporte HTTP, credenciais de header/ambiente no Secret Storage e aprovação antes de cada chamada de ferramenta.
 - Catálogo de modelos opcional carregado da URL informada pelo usuário com `Cache-Control: no-cache` e `api-key` usando a chave do Secret Storage.
 - Aviso de primeiro uso na própria sidebar enquanto gateway, alias de chat e chave segura ainda não estiverem configurados.
@@ -88,15 +88,15 @@ O modelo selecionado precisa suportar **Chat Completions function calling**. A a
 
 ## Instalação para usuários
 
-Não é necessário clonar o repositório nem instalar Node.js. Abra a página de [Releases](https://github.com/rlsgarcia-code/codex-dev-companion/releases), entre na versão mais recente e baixe o VSIX correspondente à sua máquina:
+Não é necessário clonar o repositório nem instalar Node.js. Abra a página de [Releases](https://github.com/rlsgarcia-code/local-agent-companion/releases), entre na versão mais recente e baixe o VSIX correspondente à sua máquina:
 
 | Sistema | Arquivo |
 | --- | --- |
-| Windows 64 bits | `codex-dev-companion-<versão>-win32-x64.vsix` |
-| macOS com Apple Silicon | `codex-dev-companion-<versão>-darwin-arm64.vsix` |
-| macOS com processador Intel | `codex-dev-companion-<versão>-darwin-x64.vsix` |
-| Linux 64 bits | `codex-dev-companion-<versão>-linux-x64.vsix` |
-| Linux ARM64 | `codex-dev-companion-<versão>-linux-arm64.vsix` |
+| Windows 64 bits | `local-agent-companion-<versão>-win32-x64.vsix` |
+| macOS com Apple Silicon | `local-agent-companion-<versão>-darwin-arm64.vsix` |
+| macOS com processador Intel | `local-agent-companion-<versão>-darwin-x64.vsix` |
+| Linux 64 bits | `local-agent-companion-<versão>-linux-x64.vsix` |
+| Linux ARM64 | `local-agent-companion-<versão>-linux-arm64.vsix` |
 
 Depois:
 
@@ -113,14 +113,14 @@ Cada release inclui `SHA256SUMS.txt` para ambientes que exigem validação de in
 Requer Node.js 22 ou superior. Este fluxo apenas instala as dependências locais, constrói a extensão e gera o VSIX da plataforma atual; ele não lê a configuração do VS Code, não exige que o LiteLLM já esteja configurado e não faz chamada de validação ao gateway:
 
 ```bash
-git clone https://github.com/rlsgarcia-code/codex-dev-companion.git
-cd codex-dev-companion
+git clone https://github.com/rlsgarcia-code/local-agent-companion.git
+cd local-agent-companion
 npm ci --ignore-scripts
 npm run package
-code --install-extension ./codex-dev-companion-0.11.0-<plataforma>.vsix --force
+code --install-extension ./local-agent-companion-0.11.0-<plataforma>.vsix --force
 ```
 
-`npm run package` detecta sistema e arquitetura, grava o `TargetPlatform` no manifesto e gera um nome explícito como `codex-dev-companion-0.11.0-win32-x64.vsix`. Use `--force` durante o piloto quando estiver substituindo outro build com o mesmo número de versão; depois execute **Developer: Reload Window** para carregar a cópia instalada. O VSIX contém o binário local do ChromaDB para a plataforma em que foi gerado. Gere o pacote no mesmo sistema/arquitetura em que ele será instalado (macOS arm64/x64, Linux arm64/x64 ou Windows x64). Hosts não suportados são recusados em vez de gerar um pacote incorretamente identificado como universal. Não é necessário Docker nem instalar um servidor Chroma separadamente. Os binários necessários são fornecidos por pacotes npm específicos da plataforma e o projeto desabilita scripts de lifecycle durante a instalação de dependências.
+`npm run package` detecta sistema e arquitetura, grava o `TargetPlatform` no manifesto e gera um nome explícito como `local-agent-companion-0.11.0-win32-x64.vsix`. Use `--force` durante o piloto quando estiver substituindo outro build com o mesmo número de versão; depois execute **Developer: Reload Window** para carregar a cópia instalada. O VSIX contém o binário local do ChromaDB para a plataforma em que foi gerado. Gere o pacote no mesmo sistema/arquitetura em que ele será instalado (macOS arm64/x64, Linux arm64/x64 ou Windows x64). Hosts não suportados são recusados em vez de gerar um pacote incorretamente identificado como universal. Não é necessário Docker nem instalar um servidor Chroma separadamente. Os binários necessários são fornecidos por pacotes npm específicos da plataforma e o projeto desabilita scripts de lifecycle durante a instalação de dependências.
 
 `npm run package` executa somente o build local e o empacotamento. A chave, o endpoint, o certificado e os aliases serão configurados pelo usuário dentro do VS Code depois da instalação.
 
@@ -139,7 +139,7 @@ npm run package:ollama
 npm run package:openai
 ```
 
-Os arquivos opcionais recebem o provedor no nome, por exemplo `codex-dev-companion-0.11.0-ollama-win32-x64.vsix` e `codex-dev-companion-0.11.0-openai-win32-x64.vsix`. Instale somente um deles com **Install from VSIX…** ou `code --install-extension <caminho-absoluto-do-vsix> --force`, depois execute **Developer: Reload Window**. Como todos usam o mesmo ID da extensão, a variante escolhida substitui a anterior e preserva threads, memória e configurações locais. Quando ainda não existe uma escolha explícita de provedor, cada variante abre com o provedor indicado no nome; uma seleção posterior do usuário é preservada.
+Os arquivos opcionais recebem o provedor no nome, por exemplo `local-agent-companion-0.11.0-ollama-win32-x64.vsix` e `local-agent-companion-0.11.0-openai-win32-x64.vsix`. Instale somente um deles com **Install from VSIX…** ou `code --install-extension <caminho-absoluto-do-vsix> --force`, depois execute **Developer: Reload Window**. Como todos usam o mesmo ID da extensão, a variante escolhida substitui a anterior e preserva threads, memória e configurações locais. Quando ainda não existe uma escolha explícita de provedor, cada variante abre com o provedor indicado no nome; uma seleção posterior do usuário é preservada.
 
 Cada artefato contém uma allowlist de provedores definida no build:
 
@@ -147,7 +147,7 @@ Cada artefato contém uma allowlist de provedores definida no build:
 - Ollama: LiteLLM ou Ollama, limitado a `localhost`, `127.0.0.1` ou `[::1]`;
 - OpenAI: LiteLLM ou a base fixa `https://api.openai.com/v1`.
 
-Uma alteração manual em `settings.json` não habilita um provedor que não pertença ao VSIX instalado. A seleção fica em **Local Companion: Configure Model Provider**. Ollama não pede chave; OpenAI e LiteLLM mantêm segredos separados no Secret Storage.
+Uma alteração manual em `settings.json` não habilita um provedor que não pertença ao VSIX instalado. A seleção fica em **Local Agent Companion: Configure Model Provider**. Ollama não pede chave; OpenAI e LiteLLM mantêm segredos separados no Secret Storage.
 
 Quando concluir, o comando imprime `NATIVE_VSIX_READY` seguido do caminho absoluto do arquivo criado. Use exatamente esse caminho na instalação. O empacotador chama a cópia local do VSCE diretamente pelo Node, sem `npx`, shell, download ou dependência do terminal escolhido.
 
@@ -167,29 +167,29 @@ Cada push para `main` e cada pull request executa type-check, testes, smoke loca
 - Linux arm64 e x64;
 - Windows x64.
 
-Os arquivos de validação ficam disponíveis nos artifacts da execução do GitHub Actions por 14 dias. Releases versionadas publicam permanentemente os cinco VSIX nativos e um arquivo de checksums na página de [Releases](https://github.com/rlsgarcia-code/codex-dev-companion/releases). O empacotamento local com `npm run package` continua gerando o VSIX somente para a máquina atual.
+Os arquivos de validação ficam disponíveis nos artifacts da execução do GitHub Actions por 14 dias. Releases versionadas publicam permanentemente os cinco VSIX nativos e um arquivo de checksums na página de [Releases](https://github.com/rlsgarcia-code/local-agent-companion/releases). O empacotamento local com `npm run package` continua gerando o VSIX somente para a máquina atual.
 
 O pipeline usa GitHub Actions fixadas por commit imutável. Atualizações de dependências npm e das próprias Actions chegam semanalmente como pull requests do Dependabot e precisam passar pela revisão e por todos os gates; não há atualização ou publicação automática da extensão.
 
-Antes de promover uma versão para uso amplo, execute o [roteiro de piloto corporativo](https://github.com/rlsgarcia-code/codex-dev-companion/blob/main/docs/CORPORATE-PILOT.md) na máquina e rede de destino. Ele cobre compatibilidade do Extension Host, gateway/PEM, modelos, Chroma, duas janelas, recuperação e privacidade, e inclui um formato de retorno que não expõe dados internos.
+Antes de promover uma versão para uso amplo, execute o [roteiro de piloto corporativo](https://github.com/rlsgarcia-code/local-agent-companion/blob/main/docs/CORPORATE-PILOT.md) na máquina e rede de destino. Ele cobre compatibilidade do Extension Host, gateway/PEM, modelos, Chroma, duas janelas, recuperação e privacidade, e inclui um formato de retorno que não expõe dados internos.
 
-Falhas reproduzíveis podem ser registradas pelo formulário **Relatar uma falha**, depois da revisão local do bundle sanitizado. O formulário exige confirmação explícita de que nenhum dado corporativo foi incluído. Vulnerabilidades devem usar exclusivamente o [relatório privado de segurança](https://github.com/rlsgarcia-code/codex-dev-companion/security/advisories/new).
+Falhas reproduzíveis podem ser registradas pelo formulário **Relatar uma falha**, depois da revisão local do bundle sanitizado. O formulário exige confirmação explícita de que nenhum dado corporativo foi incluído. Vulnerabilidades devem usar exclusivamente o [relatório privado de segurança](https://github.com/rlsgarcia-code/local-agent-companion/security/advisories/new).
 
 ## Primeiro uso
 
 1. Abra uma pasta de projeto no VS Code.
 2. Pressione `Ctrl/Cmd + Shift + P`.
-3. Execute **Local Companion: Configure Model Provider**.
+3. Execute **Local Agent Companion: Configure Model Provider**.
 4. Escolha o runtime e informe os valores de conexão e as capacidades do modelo abaixo.
-5. Abra **Local Companion** na barra lateral direita.
+5. Abra **Local Agent Companion** na barra lateral direita.
 
 O comando abre a Secondary Sidebar diretamente no único formulário de configuração da extensão. **Set up** apresenta o processo em três etapas curtas: **Provider**, **Models** e **Verify**. O seletor mostra somente os provedores permitidos pelo VSIX instalado. A navegação só avança depois dos campos obrigatórios da etapa atual; parâmetros de compatibilidade permanecem recolhidos em **Advanced model settings**. Usuários que já possuem uma configuração também podem percorrer as etapas para revisar somente a parte desejada. Não existe um segundo wizard modal com valores ou regras diferentes.
 
 ### Conectar um MCP corporativo
 
-1. Copie o JSON `mcpServers` fornecido pelo catálogo corporativo, salve-o como arquivo `.json` ou mantenha templates compartilháveis em `.codex-agent/mcp.json` e `.codex-agent/mcp/*.json`.
+1. Copie o JSON `mcpServers` fornecido pelo catálogo corporativo, salve-o como arquivo `.json` ou mantenha templates compartilháveis em `.local-agent/mcp.json` e `.local-agent/mcp/*.json`.
 2. Clique no ícone de plugue no cabeçalho do chat.
-3. Escolha a origem: clipboard, arquivo avulso ou **workspace templates**. A ação **Create an editable workspace template** cria `.codex-agent/mcp/example.json` como ponto de partida.
+3. Escolha a origem: clipboard, arquivo avulso ou **workspace templates**. A ação **Create an editable workspace template** cria `.local-agent/mcp/example.json` como ponto de partida.
 4. Preencha os valores comuns e as credenciais solicitadas pelos títulos dos placeholders.
 5. Revise a URL final ou o comando local exato, selecione a allowlist de ferramentas e confirme a conexão.
 6. Execute **Test connection**. O teste faz somente o handshake e a descoberta do catálogo de ferramentas; não executa ferramentas do servidor.
@@ -240,7 +240,7 @@ No Playwright MCP, Chrome ou Edge precisa estar instalado no mesmo ambiente em q
 - Templates legados como `<WORKSPACE>` e `<SUBSCRIPTION KEY>` continuam aceitos: placeholders na URL e em argumentos são comuns; em headers e variáveis cujo nome indica credencial, são tratados como segredo.
 - O mesmo placeholder titulado repetido em headers durante uma importação é solicitado uma vez. Nunca coloque o valor real do token no JSON.
 
-O próprio agente pode criar o arquivo a partir de uma estrutura enviada no chat. Basta pedir para criar um template MCP; sem um caminho indicado, ele usa `.codex-agent/mcp/<nome-do-servidor>.json`, converte credenciais aparentes em `<secret:Título>` e valores variáveis em `<input:Título>`. Essa ação cria somente o template: o agente não solicita segredos, não acessa o Secret Storage e não conecta nem testa o servidor. A importação e a aprovação continuam no menu do plugue. Não envie tokens reais na conversa, pois as mensagens necessárias à inferência são processadas pelo provedor configurado.
+O próprio agente pode criar o arquivo a partir de uma estrutura enviada no chat. Basta pedir para criar um template MCP; sem um caminho indicado, ele usa `.local-agent/mcp/<nome-do-servidor>.json`, converte credenciais aparentes em `<secret:Título>` e valores variáveis em `<input:Título>`. Essa ação cria somente o template: o agente não solicita segredos, não acessa o Secret Storage e não conecta nem testa o servidor. A importação e a aprovação continuam no menu do plugue. Não envie tokens reais na conversa, pois as mensagens necessárias à inferência são processadas pelo provedor configurado.
 
 A URL resolvida ou o comando/argumentos exatos, valores não sensíveis, estado habilitado e allowlist ficam no estado local do workspace. Headers e variáveis de ambiente reconhecidos como segredo ficam individualmente no Secret Storage. O valor `Bearer` é montado localmente. Templates podem ser versionados porque contêm somente marcadores; o conteúdo importado não vira uma conexão até a aprovação final. Depois da importação, a conexão é uma cópia aprovada: editar o template não muda silenciosamente endpoint, comando, ambiente ou ferramentas; reimporte-o para aplicar uma revisão. Arquivos da pasta de templates são limitados, links simbólicos são ignorados e nenhuma conexão é descoberta ou ativada automaticamente. O certificado corporativo importado para o LiteLLM é reutilizado pelo MCP HTTPS. Antes de cada ferramenta, o VS Code exibe uma aprovação modal e informa que o resultado corporativo pode ser incluído na próxima chamada ao provedor configurado. **Plan only** não conecta nem disponibiliza ferramentas MCP.
 
@@ -252,11 +252,11 @@ O rodapé mostra apenas um resumo como **Ask first · Standard**. Ao abri-lo, **
 
 Use **Brief** quando ainda não souber como escrever uma solicitação técnica. O formulário guarda localmente um objetivo obrigatório e campos opcionais de escopo, conclusão e restrições, todos limitados. **Use in message** acrescenta uma estrutura clara ao rascunho atual, inclui um acordo de trabalho para planejar e validar, e devolve o foco ao compositor. Nenhuma chamada ao gateway é feita e nada é executado até o envio explícito; **Clear** apaga somente os campos do briefing, sem alterar o rascunho da conversa.
 
-Use **＋ File** acima do compositor para localizar e anexar um arquivo do workspace à próxima conversa. Para um trecho específico, selecione o código no editor e execute **Local Companion: Add Selection to Context**. O inspetor mostra exatamente quais itens estão fixados, quais arquivos de orientação serão incluídos, a estimativa de tokens, o uso do limite configurado, o modo da memória e o custo aproximado do prompt antes do envio. A seleção fica bloqueada durante a execução para deixar claro qual contexto pertence à solicitação em andamento. A estimativa local usa quatro caracteres por token; o uso exato continua sendo exibido a partir da resposta do provedor.
+Use **＋ File** acima do compositor para localizar e anexar um arquivo do workspace à próxima conversa. Para um trecho específico, selecione o código no editor e execute **Local Agent Companion: Add Selection to Context**. O inspetor mostra exatamente quais itens estão fixados, quais arquivos de orientação serão incluídos, a estimativa de tokens, o uso do limite configurado, o modo da memória e o custo aproximado do prompt antes do envio. A seleção fica bloqueada durante a execução para deixar claro qual contexto pertence à solicitação em andamento. A estimativa local usa quatro caracteres por token; o uso exato continua sendo exibido a partir da resposta do provedor.
 
 Ao final, **Review run** inclui um recibo local de contexto sem copiar seu conteúdo: arquivo ativo, quantidade de diagnósticos e caminhos amostrados, nomes das orientações incluídas, fontes fixadas, modo da memória, uso do orçamento e indicação de truncamento ou fallback semântico. Assim é possível auditar por que o agente recebeu determinada informação sem gravar uma segunda cópia dos arquivos ou da memória.
 
-Tarefas longas podem continuar enquanto a sidebar estiver oculta. Por padrão, o VS Code mostra uma notificação genérica e um badge somente quando a execução termina ou falha fora de vista; a ação **Open result** retorna diretamente à conversa. A mensagem não inclui pedido, resposta, nome do projeto, caminho ou modelo. Procure por **Local Dev Companion: Completion Notifications** nas configurações do VS Code para escolher entre **whenHidden**, **always** e **never**. Execuções canceladas não geram notificação.
+Tarefas longas podem continuar enquanto a sidebar estiver oculta. Por padrão, o VS Code mostra uma notificação genérica e um badge somente quando a execução termina ou falha fora de vista; a ação **Open result** retorna diretamente à conversa. A mensagem não inclui pedido, resposta, nome do projeto, caminho ou modelo. Procure por **Local Agent Companion: Completion Notifications** nas configurações do VS Code para escolher entre **whenHidden**, **always** e **never**. Execuções canceladas não geram notificação.
 
 Ao selecionar **Cancel run**, a interface primeiro mostra **Stopping…** e desabilita novos cliques enquanto o runtime propaga o sinal para a recuperação de embeddings, a chamada do modelo e as ferramentas locais. A execução só recebe o resultado **Run cancelled** depois que o runtime confirma a interrupção; uma solicitação de parada nunca é apresentada antecipadamente como tarefa já cancelada. O pedido permanece disponível para edição ou nova execução.
 
@@ -295,7 +295,7 @@ Se precisar de ajuda para diagnosticar uma instalação, clique em **Export supp
 
 Quando a causa é reconhecida, o próprio resultado apresenta uma ação específica. Por exemplo, é possível aplicar `reasoning_effort: none`, omitir Temperature/Top P ou trocar o header da chave e repetir o teste automaticamente. Correções de URL, alias, chave ou CA apenas direcionam o usuário ao controle apropriado porque esses valores não devem ser adivinhados. Uma correção validada continua pendente até o usuário clicar em **Save connection**.
 
-Para ativar recuperação semântica, abra **LiteLLM**, informe **Models URL**, clique em **Load** e selecione um alias em **Embedding Model**. Uma única consulta alimenta os dois seletores. Para Ollama, a extensão consulta também `/api/show` para ler a capacidade declarada `embedding`; o filtro por nomes como `embed`, `bge`, `e5`, `gte` e `minilm` fica apenas como fallback para versões que não retornam essa metadata. A extensão deriva `POST /embeddings` da mesma base LiteLLM usada por Chat Completions, inicia o ChromaDB empacotado em `127.0.0.1`, salva os vetores no armazenamento privado local do VS Code e indexa somente entradas de `.codex-agent/memory.md`. O arquivo Markdown continua sendo a fonte de verdade legível e versionável. A mesma chave, cabeçalho e CA do gateway são reutilizados; nenhum dado é enviado ao Chroma Cloud.
+Para ativar recuperação semântica, abra **LiteLLM**, informe **Models URL**, clique em **Load** e selecione um alias em **Embedding Model**. Uma única consulta alimenta os dois seletores. Para Ollama, a extensão consulta também `/api/show` para ler a capacidade declarada `embedding`; o filtro por nomes como `embed`, `bge`, `e5`, `gte` e `minilm` fica apenas como fallback para versões que não retornam essa metadata. A extensão deriva `POST /embeddings` da mesma base LiteLLM usada por Chat Completions, inicia o ChromaDB empacotado em `127.0.0.1`, salva os vetores no armazenamento privado local do VS Code e indexa somente entradas de `.local-agent/memory.md`. O arquivo Markdown continua sendo a fonte de verdade legível e versionável. A mesma chave, cabeçalho e CA do gateway são reutilizados; nenhum dado é enviado ao Chroma Cloud.
 
 Nas variantes Ollama e OpenAI, informe o modelo de embeddings explicitamente no mesmo formulário. No Ollama, **List local models** consulta a API local `/api/tags` — o equivalente seguro ao `ollama list` — e preenche os modelos instalados sem usar shell ou rede externa. Ollama usa a rota OpenAI-compatible em loopback; OpenAI usa a base fixa oficial. Desativar **Embedding Model** mantém somente a memória textual local em qualquer variante.
 
@@ -392,7 +392,7 @@ Quando houver um estado anterior significativo, o agente pode manter uma baselin
 
 A sessão usa perfil efêmero, bloqueia downloads, service workers, campos de senha e qualquer requisição HTTP, HTTPS ou WebSocket que não seja loopback. Recursos externos usados pela página, como fontes ou scripts em CDN, aparecem em `blockedRequests` e precisam ser servidos localmente para essa validação. A última captura fica no armazenamento privado da extensão e é substituída na próxima conferência; ao fechar a sessão, ela é apagada.
 
-Em **Plan only**, o agente pode abrir, inspecionar e capturar a aplicação, mas não recebe a ferramenta de interação. O controle começa desligado; o ícone atualiza `codexDevCompanion.localBrowserToolsEnabled` somente para o workspace e fica indisponível durante uma execução. Desligá-lo fecha imediatamente a sessão isolada e remove todas as ferramentas de navegador do próximo run.
+Em **Plan only**, o agente pode abrir, inspecionar e capturar a aplicação, mas não recebe a ferramenta de interação. O controle começa desligado; o ícone atualiza `localAgentCompanion.localBrowserToolsEnabled` somente para o workspace e fica indisponível durante uma execução. Desligá-lo fecha imediatamente a sessão isolada e remove todas as ferramentas de navegador do próximo run.
 
 Quando o controle está ativo, alterações em interfaces web têm uma etapa de conclusão explícita: o agente deve verificar o fluxo afetado, conferir erros da página e do console e, quando o modelo aceitar imagens, realizar a conferência visual final. Se a aplicação ou o navegador não puder ser executado, a resposta deve dizer precisamente o que permaneceu sem verificação.
 
@@ -403,7 +403,7 @@ npm install
 npm run verify
 ```
 
-Abra esta pasta no VS Code e pressione `F5`. Na janela **Extension Development Host**, abra uma pasta de código e clique em **Local Companion** na Secondary Sidebar.
+Abra esta pasta no VS Code e pressione `F5`. Na janela **Extension Development Host**, abra uma pasta de código e clique em **Local Agent Companion** na Secondary Sidebar.
 
 Antes de contribuir, leia [CONTRIBUTING.md](CONTRIBUTING.md). Vulnerabilidades devem seguir [SECURITY.md](SECURITY.md), sem publicar credenciais, endpoints corporativos ou provas de conceito sensíveis em issues.
 
@@ -417,12 +417,12 @@ Para gerar e reinstalar o pacote:
 
 ```bash
 npm run package:verified
-code --install-extension codex-dev-companion-0.11.0-<plataforma>.vsix --force
+code --install-extension local-agent-companion-0.11.0-<plataforma>.vsix --force
 ```
 
 ## Memória
 
-O arquivo `.codex-agent/memory.md` é a fonte de verdade da memória do projeto. Ele deve conter somente decisões, fatos, convenções, follow-ups e resumos de módulo duráveis e verificáveis. Entradas derivadas do código podem registrar caminhos e fingerprints das fontes; se uma fonte mudar ou desaparecer, a entrada continua auditável no Markdown, mas é omitida do contexto do agente até ser atualizada. A central da sidebar projeta no máximo 200 entradas recentes sem criar um segundo armazenamento; entradas antigas continuam preservadas no Markdown. Cada entrada gerenciada tem limite de 4.000 caracteres e o arquivo é recusado para mutações automáticas acima de 2 MB, evitando regravações parciais. Quando um modelo de embeddings está configurado, a extensão transforma essas entradas em chunks limitados, gera embeddings pelo provedor selecionado e mantém o índice no ChromaDB local.
+O arquivo `.local-agent/memory.md` é a fonte de verdade da memória do projeto. Ele deve conter somente decisões, fatos, convenções, follow-ups e resumos de módulo duráveis e verificáveis. Entradas derivadas do código podem registrar caminhos e fingerprints das fontes; se uma fonte mudar ou desaparecer, a entrada continua auditável no Markdown, mas é omitida do contexto do agente até ser atualizada. A central da sidebar projeta no máximo 200 entradas recentes sem criar um segundo armazenamento; entradas antigas continuam preservadas no Markdown. Cada entrada gerenciada tem limite de 4.000 caracteres e o arquivo é recusado para mutações automáticas acima de 2 MB, evitando regravações parciais. Quando um modelo de embeddings está configurado, a extensão transforma essas entradas em chunks limitados, gera embeddings pelo provedor selecionado e mantém o índice no ChromaDB local.
 
 Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status transitório ou transcrições do chat.
 
@@ -434,7 +434,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 - Erros operacionais, diagnósticos, resultados de leitura/pesquisa e stdout/stderr passam por remoção local de chaves conhecidas, cabeçalhos de autenticação, credenciais em URLs, tokens comuns e blocos de chave privada antes de aparecerem na interface ou retornarem ao modelo.
 - A memória do projeto recusa entradas que contenham a chave configurada ou padrões reconhecíveis de credenciais; mensagens normais do usuário e respostas do agente não são reescritas silenciosamente.
 - Arquivos normalmente usados para credenciais — como `.env`, `.npmrc`, PEM/chaves privadas, keystores, `tfvars` e credenciais cloud — ficam fora do contexto automático, do seletor e de buscas amplas. Uma leitura direta exige confirmação local para aquele arquivo e ainda remove padrões reconhecidos antes de enviar o texto ao modelo.
-- Conversas ficam somente no `workspaceState` local e limitado do VS Code; não são copiadas para `.codex-agent/memory.md`.
+- Conversas ficam somente no `workspaceState` local e limitado do VS Code; não são copiadas para `.local-agent/memory.md`.
 - LiteLLM e OpenAI exigem HTTPS; Ollama aceita somente `http(s)` em loopback.
 - O certificado PEM opcional é validado e copiado para o armazenamento global local da extensão; o caminho original não é persistido.
 - Arquivos só podem ser lidos ou alterados dentro do workspace aberto.
@@ -451,29 +451,29 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 
 | Configuração | Padrão | Finalidade |
 | --- | --- | --- |
-| `codexDevCompanion.modelProvider` | provedor do VSIX | Seleciona `litellm`, `ollama` ou `openai`; a variante padrão usa LiteLLM e cada variante opcional começa no provedor indicado no nome até o usuário fazer uma escolha explícita. Opções ausentes do VSIX instalado são recusadas. |
-| `codexDevCompanion.agentRuntime` | `standard` | Escolhe `LangChain Agent` (`standard`) ou `Deep Agent` (`deep`) por workspace. |
-| `codexDevCompanion.liteLlmEndpoint` | vazio | Campo legado compartilhado com a base exata do provedor selecionado. |
-| `codexDevCompanion.liteLlmModelsEndpoint` | vazio | URL HTTPS opcional do catálogo consultado sob demanda com `api-key` e sem cache. |
-| `codexDevCompanion.liteLlmAuthHeader` | `authorization` | Cabeçalho que transporta a chave até o gateway. |
-| `codexDevCompanion.liteLlmModel` | vazio | Alias exato do modelo liberado. |
-| `codexDevCompanion.autonomyMode` | `review` | Autonomia padrão do workspace: `review`, `execute` ou `plan`. |
-| `codexDevCompanion.liteLlmModelProfiles` | `{}` | Preset e parâmetros opcionais de reasoning/sampling por alias; campos ausentes não são enviados. |
-| `codexDevCompanion.gatewayCaCertificatePath` | vazio | Configuração legada por workspace; certificados existentes são migrados automaticamente para o armazenamento global local. |
-| `codexDevCompanion.autoContext` | `true` | Inclui contexto atual do editor e orientação padrão do repositório. |
-| `codexDevCompanion.maxContextCharacters` | `24000` | Limite do contexto coletado por turno. |
-| `codexDevCompanion.maxConversationCharacters` | `48000` | Limite do histórico recente enviado ao modelo. |
-| `codexDevCompanion.semanticMemoryEnabled` | `true` | Habilita recuperação semântica local quando há alias de embeddings. |
-| `codexDevCompanion.embeddingModel` | vazio | Alias LiteLLM usado em `POST /embeddings`; vazio mantém somente memória textual. |
-| `codexDevCompanion.semanticMemoryResults` | `5` | Número máximo de chunks relevantes recuperados por turno. |
-| `codexDevCompanion.standardRecursionLimit` | `200` | Limite LangGraph do runtime padrão; o Deep Agent usa o limite nativo alto. |
-| `codexDevCompanion.finalReviewMode` | `changes` | Segunda revisão pelo mesmo alias LiteLLM: `changes`, `always` ou `off`. |
-| `codexDevCompanion.localBrowserToolsEnabled` | `false` | Disponibiliza, após ativação pelo ícone do chat, ferramentas LangChain protegidas por aprovação para aplicações em loopback. |
-| `codexDevCompanion.localBrowserChannel` | `auto` | Usa Edge primeiro no Windows e Chrome primeiro nas demais plataformas, com fallback entre ambos. |
-| `codexDevCompanion.localBrowserExecutablePath` | vazio | Caminho absoluto opcional para um navegador Chromium corporativo já instalado. |
-| `codexDevCompanion.localBrowserOpenPreview` | `true` | Abre para o usuário a mesma URL local que está sendo validada na sessão isolada. |
+| `localAgentCompanion.modelProvider` | provedor do VSIX | Seleciona `litellm`, `ollama` ou `openai`; a variante padrão usa LiteLLM e cada variante opcional começa no provedor indicado no nome até o usuário fazer uma escolha explícita. Opções ausentes do VSIX instalado são recusadas. |
+| `localAgentCompanion.agentRuntime` | `standard` | Escolhe `LangChain Agent` (`standard`) ou `Deep Agent` (`deep`) por workspace. |
+| `localAgentCompanion.liteLlmEndpoint` | vazio | Campo legado compartilhado com a base exata do provedor selecionado. |
+| `localAgentCompanion.liteLlmModelsEndpoint` | vazio | URL HTTPS opcional do catálogo consultado sob demanda com `api-key` e sem cache. |
+| `localAgentCompanion.liteLlmAuthHeader` | `authorization` | Cabeçalho que transporta a chave até o gateway. |
+| `localAgentCompanion.liteLlmModel` | vazio | Alias exato do modelo liberado. |
+| `localAgentCompanion.autonomyMode` | `review` | Autonomia padrão do workspace: `review`, `execute` ou `plan`. |
+| `localAgentCompanion.liteLlmModelProfiles` | `{}` | Preset e parâmetros opcionais de reasoning/sampling por alias; campos ausentes não são enviados. |
+| `localAgentCompanion.gatewayCaCertificatePath` | vazio | Configuração legada por workspace; certificados existentes são migrados automaticamente para o armazenamento global local. |
+| `localAgentCompanion.autoContext` | `true` | Inclui contexto atual do editor e orientação padrão do repositório. |
+| `localAgentCompanion.maxContextCharacters` | `24000` | Limite do contexto coletado por turno. |
+| `localAgentCompanion.maxConversationCharacters` | `48000` | Limite do histórico recente enviado ao modelo. |
+| `localAgentCompanion.semanticMemoryEnabled` | `true` | Habilita recuperação semântica local quando há alias de embeddings. |
+| `localAgentCompanion.embeddingModel` | vazio | Alias LiteLLM usado em `POST /embeddings`; vazio mantém somente memória textual. |
+| `localAgentCompanion.semanticMemoryResults` | `5` | Número máximo de chunks relevantes recuperados por turno. |
+| `localAgentCompanion.standardRecursionLimit` | `200` | Limite LangGraph do runtime padrão; o Deep Agent usa o limite nativo alto. |
+| `localAgentCompanion.finalReviewMode` | `changes` | Segunda revisão pelo mesmo alias LiteLLM: `changes`, `always` ou `off`. |
+| `localAgentCompanion.localBrowserToolsEnabled` | `false` | Disponibiliza, após ativação pelo ícone do chat, ferramentas LangChain protegidas por aprovação para aplicações em loopback. |
+| `localAgentCompanion.localBrowserChannel` | `auto` | Usa Edge primeiro no Windows e Chrome primeiro nas demais plataformas, com fallback entre ambos. |
+| `localAgentCompanion.localBrowserExecutablePath` | vazio | Caminho absoluto opcional para um navegador Chromium corporativo já instalado. |
+| `localAgentCompanion.localBrowserOpenPreview` | `true` | Abre para o usuário a mesma URL local que está sendo validada na sessão isolada. |
 
-O prefixo `codexDevCompanion` foi mantido para que configurações e segredos de instalações anteriores continuem válidos.
+O prefixo `localAgentCompanion` foi mantido para que configurações e segredos de instalações anteriores continuem válidos.
 
 ## Arquitetura
 
@@ -482,7 +482,7 @@ VS Code Secondary Sidebar
     │
     ├── AgentViewProvider ── chat, threads, timeline, plano e configurações
     ├── ContextCollector ─── editor, seleção, diagnósticos, arquivos e orientação do projeto
-    ├── ProjectMemory ────── .codex-agent/memory.md (fonte de verdade)
+    ├── ProjectMemory ────── .local-agent/memory.md (fonte de verdade)
     ├── ChangeReviewManager  snapshots efêmeros, diff e restauração protegida
     ├── VsCodeIntelligence ─ Problems, símbolos, navegação, code actions e rename
     ├── LocalProjectIndex ── mapa estrutural local, testes relacionados e playbooks

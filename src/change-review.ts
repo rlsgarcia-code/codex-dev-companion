@@ -68,7 +68,7 @@ export class ChangeReviewManager implements vscode.TextDocumentContentProvider, 
       "vscode.diff",
       before,
       after,
-      `${change.path} · before ↔ after Local Companion`
+      `${change.path} · before ↔ after Local Agent Companion`
     );
   }
 

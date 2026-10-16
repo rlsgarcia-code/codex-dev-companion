@@ -89,8 +89,8 @@ import type {
 import { parseIncomingMessage } from "./webview-protocol";
 import type { IncomingMessage } from "./webview-protocol";
 
-const LEGACY_HISTORY_KEY = "codexDevCompanion.history";
-const DRAFTS_KEY = "codexDevCompanion.threadDrafts";
+const LEGACY_HISTORY_KEY = "localAgentCompanion.history";
+const DRAFTS_KEY = "localAgentCompanion.threadDrafts";
 const MAX_DRAFT_CHARACTERS = 50_000;
 
 function parseFinalReviewMode(value: unknown): "off" | "changes" | "always" {
@@ -165,18 +165,18 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor(() => this.postContextState()),
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (event.affectsConfiguration("codexDevCompanion.autoContext")) this.postContextState();
-        if (event.affectsConfiguration("codexDevCompanion.autonomyMode")) {
+        if (event.affectsConfiguration("localAgentCompanion.autoContext")) this.postContextState();
+        if (event.affectsConfiguration("localAgentCompanion.autonomyMode")) {
           const mode = this.autonomyMode();
           this.post({ type: "autonomyChanged", mode, message: `${runModeLabel(mode)} selected` });
         }
-        if (event.affectsConfiguration("codexDevCompanion.localBrowserToolsEnabled")) {
+        if (event.affectsConfiguration("localAgentCompanion.localBrowserToolsEnabled")) {
           this.postBrowserControlState();
         }
-        if (event.affectsConfiguration("codexDevCompanion.finalReviewMode")) {
+        if (event.affectsConfiguration("localAgentCompanion.finalReviewMode")) {
           this.post({
             type: "finalReviewChanged",
-            mode: parseFinalReviewMode(vscode.workspace.getConfiguration("codexDevCompanion").get("finalReviewMode"))
+            mode: parseFinalReviewMode(vscode.workspace.getConfiguration("localAgentCompanion").get("finalReviewMode"))
           });
         }
       })
@@ -205,7 +205,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   public async openConnectionSettings(): Promise<void> {
     this.connectionSettingsRequested = true;
-    await vscode.commands.executeCommand("workbench.view.extension.codexDevCompanion");
+    await vscode.commands.executeCommand("workbench.view.extension.localAgentCompanion");
     this.reveal();
     await this.postConnectionSettings();
   }
@@ -532,7 +532,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async liteLlmSettingsSnapshot(): Promise<LiteLlmSettingsSnapshot> {
-    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
     const provider = configuredModelProvider(configuration);
     const providerWasExplicitlySelected = modelProviderSettingIsExplicit(configuration);
     const model = providerWasExplicitlySelected ? configuration.get<string>("liteLlmModel", "") : "";
@@ -582,7 +582,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async configureGatewayCa(): Promise<void> {
     try {
       await this.assertProviderConfigurationEditable();
-      const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
+      const provider = configuredModelProvider(vscode.workspace.getConfiguration("localAgentCompanion"));
       if (!modelProviderSupportsCorporateCa(provider)) {
         throw new Error("Corporate CA import is available only for the LiteLLM provider.");
       }
@@ -659,12 +659,12 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         },
         {
           label: "$(folder-library) Add MCP from workspace templates",
-          description: "Choose .codex-agent/mcp.json or a JSON file in .codex-agent/mcp/",
+          description: "Choose .local-agent/mcp.json or a JSON file in .local-agent/mcp/",
           value: "add-workspace"
         },
         {
           label: "$(new-file) Create an editable workspace template",
-          description: "Create .codex-agent/mcp/example.json without credentials",
+          description: "Create .local-agent/mcp/example.json without credentials",
           value: "create-workspace"
         },
         ...connections.map((connection) => ({
@@ -721,7 +721,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async readWorkspaceMcpTemplate(): Promise<string | undefined> {
     const candidates: Array<{ uri: vscode.Uri; label: string; description: string }> = [];
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      const single = vscode.Uri.joinPath(folder.uri, ".codex-agent", "mcp.json");
+      const single = vscode.Uri.joinPath(folder.uri, ".local-agent", "mcp.json");
       try {
         const stat = await vscode.workspace.fs.stat(single);
         if ((stat.type & vscode.FileType.File) && !(stat.type & vscode.FileType.SymbolicLink) && stat.size <= 64_000) {
@@ -731,14 +731,14 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         // An absent optional template is expected.
       }
 
-      const directory = vscode.Uri.joinPath(folder.uri, ".codex-agent", "mcp");
+      const directory = vscode.Uri.joinPath(folder.uri, ".local-agent", "mcp");
       try {
         const entries = await vscode.workspace.fs.readDirectory(directory);
         for (const [entry, type] of entries.sort(([left], [right]) => left.localeCompare(right)).slice(0, 50)) {
           if (!(type & vscode.FileType.File) || type & vscode.FileType.SymbolicLink || !entry.toLowerCase().endsWith(".json")) continue;
           const uri = vscode.Uri.joinPath(directory, entry);
           const stat = await vscode.workspace.fs.stat(uri);
-          if (stat.size <= 64_000) candidates.push({ uri, label: entry, description: `${folder.name}/.codex-agent/mcp` });
+          if (stat.size <= 64_000) candidates.push({ uri, label: entry, description: `${folder.name}/.local-agent/mcp` });
         }
       } catch {
         // An absent optional template directory is expected.
@@ -746,7 +746,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
     if (!candidates.length) {
       const create = await vscode.window.showInformationMessage(
-        "No workspace MCP templates were found in .codex-agent/mcp.json or .codex-agent/mcp/.",
+        "No workspace MCP templates were found in .local-agent/mcp.json or .local-agent/mcp/.",
         "Create template"
       );
       if (create === "Create template") await this.createWorkspaceMcpTemplate();
@@ -774,7 +774,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           folder: candidate
         })), { title: "Choose the workspace for the MCP template", ignoreFocusOut: true }))?.folder;
     if (!folder) return;
-    const directory = vscode.Uri.joinPath(folder.uri, ".codex-agent", "mcp");
+    const directory = vscode.Uri.joinPath(folder.uri, ".local-agent", "mcp");
     const destination = vscode.Uri.joinPath(directory, "example.json");
     await vscode.workspace.fs.createDirectory(directory);
     try {
@@ -1304,9 +1304,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async exportConnectionProfile(): Promise<void> {
     try {
-      const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
+      const provider = configuredModelProvider(vscode.workspace.getConfiguration("localAgentCompanion"));
       if (provider !== "litellm") throw new Error("Portable connection profiles are currently available only for LiteLLM.");
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
       const requiresCorporateCa = await hasImportedGatewayCa(this.extensionContext)
         || Boolean(configuration.get<string>("gatewayCaCertificatePath", "").trim());
       const profile = createConnectionProfile({
@@ -1329,9 +1329,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         }
       });
       const destination = await vscode.window.showSaveDialog({
-        title: "Export Local Dev Companion connection profile",
+        title: "Export Local Agent Companion connection profile",
         saveLabel: "Export profile",
-        filters: { "Local Dev Companion profile": ["json"] }
+        filters: { "Local Agent Companion profile": ["json"] }
       });
       if (!destination) return;
       await vscode.workspace.fs.writeFile(
@@ -1351,12 +1351,12 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     try {
       await this.assertProviderConfigurationEditable();
       const selected = await vscode.window.showOpenDialog({
-        title: "Import Local Dev Companion connection profile",
+        title: "Import Local Agent Companion connection profile",
         openLabel: "Review profile",
         canSelectFiles: true,
         canSelectFolders: false,
         canSelectMany: false,
-        filters: { "Local Dev Companion profile": ["json"] }
+        filters: { "Local Agent Companion profile": ["json"] }
       });
       if (!selected?.[0]) return;
       const stat = await vscode.workspace.fs.stat(selected[0]);
@@ -1364,7 +1364,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       const source = new TextDecoder().decode(await vscode.workspace.fs.readFile(selected[0]));
       const profile = parseConnectionProfile(JSON.parse(source) as unknown);
       const confirmation = await vscode.window.showInformationMessage(
-        "Import this Local Dev Companion connection profile?",
+        "Import this Local Agent Companion connection profile?",
         {
           modal: true,
           detail: [
@@ -1380,7 +1380,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       if (confirmation !== "Import profile") return;
       await this.assertProviderConfigurationEditable();
 
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
       await Promise.all([
         configuration.update("modelProvider", "litellm", vscode.ConfigurationTarget.Global),
         configuration.update("liteLlmEndpoint", profile.gateway.endpoint, vscode.ConfigurationTarget.Global),
@@ -1415,7 +1415,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async exportSupportBundle(diagnostics: unknown): Promise<void> {
     try {
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
       const model = configuration.get<string>("liteLlmModel", "");
       const modelProfiles = parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"));
       const profile = liteLlmModelProfile(modelProfiles, model);
@@ -1487,7 +1487,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         diagnostics
       });
       const destination = await vscode.window.showSaveDialog({
-        title: "Export sanitized Local Dev Companion support bundle",
+        title: "Export sanitized Local Agent Companion support bundle",
         saveLabel: "Export support bundle",
         filters: { "Sanitized support bundle": ["json"] }
       });
@@ -1507,7 +1507,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async listModels(endpointInput: string, transientApiKey: string): Promise<void> {
     try {
-      const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
+      const provider = configuredModelProvider(vscode.workspace.getConfiguration("localAgentCompanion"));
       if (provider === "ollama") {
         const catalog = await this.agent.listModels(endpointInput, "");
         this.post({
@@ -1521,7 +1521,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       }
       const endpoint = normalizeLiteLlmModelsEndpoint(endpointInput);
       const catalog = await this.agent.listModels(endpoint, transientApiKey);
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
       await configuration.update("liteLlmModelsEndpoint", endpoint, vscode.ConfigurationTarget.Global);
       this.post({ type: "modelsLoaded", models: catalog.models, endpoint, message: `${catalog.models.length} models loaded` });
     } catch (error) {
@@ -1544,7 +1544,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     try {
       await this.assertProviderConfigurationEditable();
       const runtime = parseAgentRuntime(value);
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
       await configuration.update("agentRuntime", runtime, vscode.ConfigurationTarget.Workspace);
       this.agent.reloadRuntimeConfiguration();
       this.post({
@@ -1565,7 +1565,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     try {
       await this.assertProviderConfigurationEditable();
       const mode = parseFinalReviewMode(value);
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
       await configuration.update("finalReviewMode", mode, vscode.ConfigurationTarget.Workspace);
       this.post({
         type: "finalReviewChanged",
@@ -1579,7 +1579,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     } catch (error) {
       this.post({
         type: "finalReviewChangeError",
-        mode: parseFinalReviewMode(vscode.workspace.getConfiguration("codexDevCompanion").get("finalReviewMode")),
+        mode: parseFinalReviewMode(vscode.workspace.getConfiguration("localAgentCompanion").get("finalReviewMode")),
         message: await this.safeError(error)
       });
     }
@@ -1588,7 +1588,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async setLocalBrowserToolsEnabled(enabled: boolean): Promise<void> {
     try {
       await this.assertProviderConfigurationEditable();
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
       await this.agent.setLocalBrowserToolsEnabled(enabled);
       await configuration.update("localBrowserToolsEnabled", enabled, vscode.ConfigurationTarget.Workspace);
       this.post({
@@ -1609,7 +1609,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private localBrowserToolsEnabled(): boolean {
     return vscode.workspace
-      .getConfiguration("codexDevCompanion")
+      .getConfiguration("localAgentCompanion")
       .get<boolean>("localBrowserToolsEnabled", false);
   }
 
@@ -1622,7 +1622,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async saveLiteLlmSettings(message: Extract<IncomingMessage, { type: "saveLiteLlm" }>): Promise<void> {
     try {
       await this.assertProviderConfigurationEditable();
-      const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+      const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
       const { connection, modelsEndpoint, modelProfiles } = await this.parseLiteLlmForm(message);
       const secretName = modelProviderSecret(connection.provider);
       await Promise.all([
@@ -1707,7 +1707,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async parseLiteLlmForm(message: LiteLlmFormFields) {
-    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
     const provider = parseModelProvider(message.provider);
     const secretName = modelProviderSecret(provider);
     const existingApiKey = secretName ? await this.extensionContext.secrets.get(secretName) : undefined;
@@ -1840,7 +1840,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async notifyRunCompletion(outcome: RunOutcome): Promise<void> {
-    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
     const mode = parseCompletionNotificationMode(configuration.get("completionNotifications"));
     const notification = completionNotification(mode, Boolean(this.view?.visible), outcome);
     if (!notification) return;
@@ -1851,7 +1851,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       ? await vscode.window.showWarningMessage(notification.message, notification.action)
       : await vscode.window.showInformationMessage(notification.message, notification.action);
     if (selection !== notification.action) return;
-    await vscode.commands.executeCommand("workbench.view.extension.codexDevCompanion");
+    await vscode.commands.executeCommand("workbench.view.extension.localAgentCompanion");
     this.reveal();
   }
 
@@ -1956,7 +1956,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async memoryPayload() {
-    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
     const [snapshot, storedSecrets] = await Promise.all([
       this.memory.snapshot(),
       this.storedModelSecrets()
@@ -1989,7 +1989,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       const storedSecrets = await this.storedModelSecrets();
       const note = await vscode.window.showInputBox({
         title: "Add durable project memory",
-        prompt: "Save only a confirmed decision, fact, or convention. This writes to .codex-agent/memory.md.",
+        prompt: "Save only a confirmed decision, fact, or convention. This writes to .local-agent/memory.md.",
         ignoreFocusOut: true,
         validateInput: (value) => this.validateMemoryEntry(value, storedSecrets)
       });
@@ -2043,7 +2043,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         "Delete this durable project-memory entry?",
         {
           modal: true,
-          detail: `${entry.date ? `Saved ${entry.date}. ` : ""}This updates .codex-agent/memory.md and cannot be undone by the memory center.`
+          detail: `${entry.date ? `Saved ${entry.date}. ` : ""}This updates .local-agent/memory.md and cannot be undone by the memory center.`
         },
         "Delete memory"
       );
@@ -2221,14 +2221,14 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private autonomyMode(): RunMode {
     return parseRunMode(
-      vscode.workspace.getConfiguration("codexDevCompanion").get("autonomyMode")
+      vscode.workspace.getConfiguration("localAgentCompanion").get("autonomyMode")
     );
   }
 
   private async selectAutonomy(value: RunMode): Promise<void> {
     const mode = parseRunMode(value);
     await vscode.workspace
-      .getConfiguration("codexDevCompanion")
+      .getConfiguration("localAgentCompanion")
       .update("autonomyMode", mode, vscode.ConfigurationTarget.Workspace);
   }
 
@@ -2290,7 +2290,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async contextState() {
-    const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+    const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
     const autoContext = configuration.get<boolean>("autoContext", true);
     const maximumCharacters = configuration.get<number>("maxContextCharacters", 24_000);
     const semanticMemoryEnabled = configuration.get<boolean>("semanticMemoryEnabled", true);
@@ -2396,7 +2396,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
           <button class="primary-action" id="memory-add" type="button">Add memory</button>
           <button class="secondary-action" id="memory-open-file" type="button">Open memory.md</button>
         </div>
-        <p class="thread-note">Entries stay in <code>.codex-agent/memory.md</code>. Semantic vectors refresh automatically on the next retrieval.</p>
+        <p class="thread-note">Entries stay in <code>.local-agent/memory.md</code>. Semantic vectors refresh automatically on the next retrieval.</p>
       </section>
 
       <section class="brief-panel hidden" id="brief-panel" role="region" aria-labelledby="brief-panel-title" aria-hidden="true">
@@ -2691,7 +2691,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         <span class="utility-links"><button class="memory-link" id="brief" type="button" aria-expanded="false" aria-controls="brief-panel">Brief</button><button class="memory-link" id="litellm" type="button" aria-expanded="false" aria-controls="litellm-settings">LiteLLM</button><button class="memory-link" id="memory" type="button" aria-expanded="false" aria-controls="memory-panel">Memory</button></span>
       </div>
       <div class="composer">
-        <textarea id="prompt" rows="3" aria-label="Message to the development agent" aria-describedby="composer-hint" placeholder="Ask about the code, request a change, or explore an idea…"></textarea>
+        <textarea id="prompt" rows="3" aria-label="Message to the workspace agent" aria-describedby="composer-hint" placeholder="Ask about the code, request a change, or explore an idea…"></textarea>
         <div class="composer-actions">
           <details class="run-controls" id="run-controls">
             <summary aria-label="Configure how this request runs"><span id="run-controls-label">Ask first · Standard</span></summary>

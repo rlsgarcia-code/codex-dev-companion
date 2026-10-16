@@ -1,6 +1,6 @@
 # Contribuindo
 
-Obrigado por ajudar a melhorar o Local Dev Companion. Alterações devem preservar o contrato local e auditável da extensão.
+Obrigado por ajudar a melhorar o Local Agent Companion. Alterações devem preservar o contrato local e auditável da extensão.
 
 ## Ambiente
 
@@ -21,7 +21,7 @@ npm run smoke:chroma
 
 `test:extension-host` usa a infraestrutura oficial do VS Code, baixa a versão mínima suportada na primeira execução e abre um perfil isolado do Extension Development Host. Ele confirma ativação, registro de comandos e os fluxos de abrir a sidebar, criar thread e abrir a configuração sem chave ou chamada ao gateway. Defina `VSCODE_EXECUTABLE_PATH` para reutilizar um executável de teste específico ou `VSCODE_TEST_VERSION` para validar outra versão.
 
-Depois de `npm run package`, execute `npm run test:vsix-install -- ./codex-dev-companion-<versão>-<plataforma>.vsix`. Esse segundo teste instala o artefato em um perfil vazio e confirma que a extensão carregada veio desse diretório de instalação, evitando que o código-fonte do Extension Development Host mascare um VSIX incompleto. O CI e o workflow de release executam esse gate nos pacotes Linux x64 e Windows x64.
+Depois de `npm run package`, execute `npm run test:vsix-install -- ./local-agent-companion-<versão>-<plataforma>.vsix`. Esse segundo teste instala o artefato em um perfil vazio e confirma que a extensão carregada veio desse diretório de instalação, evitando que o código-fonte do Extension Development Host mascare um VSIX incompleto. O CI e o workflow de release executam esse gate nos pacotes Linux x64 e Windows x64.
 
 Os smoke tests criam somente serviços temporários em `127.0.0.1`. O teste de Chat Completions usa prompts de diagnóstico que não alteram arquivos; o teste do Chroma grava apenas em um diretório temporário, valida heartbeat/versão e confirma o encerramento do processo nativo.
 
@@ -44,7 +44,7 @@ Consulte `AGENTS.md` antes de alterar agente, modelo, ferramentas, middleware, c
 ## Segurança e privacidade
 
 - Nunca inclua chaves, certificados corporativos, endpoints privados ou transcrições reais em commits, fixtures ou logs.
-- Não grave conversas ou segredos em `.codex-agent/memory.md`.
+- Não grave conversas ou segredos em `.local-agent/memory.md`.
 - Novos caminhos de arquivo precisam validar caminho real e links simbólicos.
 - Novos comandos precisam passar pela política local, executar sem shell e exigir aprovação explícita.
 - Mudanças que afetam dados do workspace devem incluir testes de negação, limites e recuperação segura.
@@ -72,7 +72,7 @@ Use os formulários estruturados para falhas e melhorias; issues em branco ficam
 2. Execute `npm run audit:prod` e `npm run package`; confira o VSIX local com sufixo de plataforma. Pacotes que contêm o Chroma nativo nunca devem ser distribuídos como universais.
 3. Execute `docs/CORPORATE-PILOT.md` na máquina e rede de destino e registre somente o retorno sanitizado.
 4. Faça commit e envie `main` somente depois que o CI estiver verde e o piloto não tiver bloqueadores.
-5. Crie e envie uma tag anotada com a mesma versão, por exemplo `git tag -a v0.12.0 -m "Local Dev Companion 0.12.0"` e `git push origin v0.12.0`.
+5. Crie e envie uma tag anotada com a mesma versão, por exemplo `git tag -a v0.12.0 -m "Local Agent Companion 0.12.0"` e `git push origin v0.12.0`.
 6. Confira a release e seus cinco VSIX nativos mais `SHA256SUMS.txt`.
 
 O workflow de release recusa tags diferentes da versão do pacote, versões ausentes no changelog, conjuntos incompletos de plataformas e qualquer tentativa de sobrescrever uma release já publicada. Uma execução interrompida pode continuar enquanto a release ainda for rascunho.

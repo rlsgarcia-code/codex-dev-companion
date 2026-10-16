@@ -18,19 +18,19 @@ test("keeps professional extension metadata and a valid package icon", () => {
       };
     };
   };
-  assert.equal(manifest.homepage, "https://github.com/rlsgarcia-code/codex-dev-companion#readme");
-  assert.equal(manifest.bugs?.url, "https://github.com/rlsgarcia-code/codex-dev-companion/issues");
+  assert.equal(manifest.homepage, "https://github.com/rlsgarcia-code/local-agent-companion#readme");
+  assert.equal(manifest.bugs?.url, "https://github.com/rlsgarcia-code/local-agent-companion/issues");
   assert.equal(manifest.icon, "media/extension-icon.png");
   assert.ok(manifest.keywords?.includes("local-first"));
   assert.equal(manifest.capabilities?.untrustedWorkspaces?.supported, false);
   assert.match(manifest.capabilities?.untrustedWorkspaces?.description ?? "", /must be trusted/);
-  const autonomy = manifest.contributes?.configuration?.properties?.["codexDevCompanion.autonomyMode"];
+  const autonomy = manifest.contributes?.configuration?.properties?.["localAgentCompanion.autonomyMode"];
   assert.equal(autonomy?.default, "review");
   assert.deepEqual(autonomy?.enum, ["review", "execute", "plan"]);
-  const provider = manifest.contributes?.configuration?.properties?.["codexDevCompanion.modelProvider"];
+  const provider = manifest.contributes?.configuration?.properties?.["localAgentCompanion.modelProvider"];
   assert.equal(provider?.default, "litellm");
   assert.deepEqual(provider?.enum, ["litellm", "ollama", "openai"]);
-  const notifications = manifest.contributes?.configuration?.properties?.["codexDevCompanion.completionNotifications"];
+  const notifications = manifest.contributes?.configuration?.properties?.["localAgentCompanion.completionNotifications"];
   assert.equal(notifications?.default, "whenHidden");
   assert.deepEqual(notifications?.enum, ["whenHidden", "always", "never"]);
   assert.equal(
@@ -80,7 +80,7 @@ test("CI verifies and packages every supported native target", () => {
     "xvfb-run -a npm run test:extension-host",
     "npm run smoke:chroma",
     "vsce package --no-dependencies --target",
-    "xvfb-run -a npm run test:vsix-install -- codex-dev-companion-linux-x64.vsix"
+    "xvfb-run -a npm run test:vsix-install -- local-agent-companion-linux-x64.vsix"
   ]) {
     assert.ok(workflow.includes(command), `missing CI command: ${command}`);
   }
@@ -90,7 +90,7 @@ test("CI verifies and packages every supported native target", () => {
   assert.match(workflow, /if: matrix\.target == 'linux-x64'[\s\S]*xvfb-run -a npm run test:extension-host/);
   assert.match(workflow, /Verify the local packaging entrypoint on Windows\s+if: matrix\.target == 'win32-x64'\s+run: npm run package/);
   assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:extension-host/);
-  assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:vsix-install -- codex-dev-companion-win32-x64\.vsix/);
+  assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:vsix-install -- local-agent-companion-win32-x64\.vsix/);
 });
 
 test("tagged releases publish a complete, immutable, checksummed native package set", () => {
@@ -115,14 +115,14 @@ test("tagged releases publish a complete, immutable, checksummed native package 
   assert.match(workflow, /gh release create[\s\S]*--draft/);
   assert.match(workflow, /gh release edit[\s\S]*--draft=false/);
   assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: npm run test:extension-host/);
-  assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: \|[\s\S]*Get-Content package\.json[\s\S]*npm run test:vsix-install -- "release\/codex-dev-companion-\$version-win32-x64\.vsix"/);
+  assert.match(workflow, /if: matrix\.target == 'win32-x64'\s+run: \|[\s\S]*Get-Content package\.json[\s\S]*npm run test:vsix-install -- "release\/local-agent-companion-\$version-win32-x64\.vsix"/);
   assertWorkflowActionsPinned(workflow);
 });
 
 test("repository policy documents stay present", () => {
   const readme = readFileSync("README.md", "utf8");
   assert.match(readme, /code --install-extension .*<plataforma>\.vsix --force/);
-  assert.doesNotMatch(readme, /code --install-extension codex-dev-companion-0\.11\.0\.vsix/);
+  assert.doesNotMatch(readme, /code --install-extension local-agent-companion-0\.11\.0\.vsix/);
   assert.match(readFileSync("CONTRIBUTING.md", "utf8"), /Contrato arquitetural/);
   assert.match(readFileSync("SECURITY.md", "utf8"), /Report a vulnerability/);
   assert.match(readFileSync("docs/CORPORATE-PILOT.md", "utf8"), /Critério de aprovação/);

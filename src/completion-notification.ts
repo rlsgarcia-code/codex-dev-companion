@@ -22,12 +22,12 @@ export function completionNotification(
   return outcome === "failed"
     ? {
         level: "warning",
-        message: "Local Companion needs attention.",
+        message: "Local Agent Companion needs attention.",
         action: "Open result"
       }
     : {
         level: "information",
-        message: "Local Companion finished the request.",
+        message: "Local Agent Companion finished the request.",
         action: "Open result"
       };
 }

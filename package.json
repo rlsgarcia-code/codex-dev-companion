@@ -1,17 +1,17 @@
 {
-  "name": "codex-dev-companion",
-  "displayName": "Local Dev Companion",
-  "description": "A local LangChain development agent for VS Code with user-configured LiteLLM and approval-gated corporate MCP connections.",
+  "name": "local-agent-companion",
+  "displayName": "Local Agent Companion",
+  "description": "A local LangChain agent foundation for VS Code with user-configured LiteLLM and approval-gated corporate MCP connections.",
   "version": "0.11.0",
   "publisher": "local",
   "license": "MIT",
-  "homepage": "https://github.com/rlsgarcia-code/codex-dev-companion#readme",
+  "homepage": "https://github.com/rlsgarcia-code/local-agent-companion#readme",
   "bugs": {
-    "url": "https://github.com/rlsgarcia-code/codex-dev-companion/issues"
+    "url": "https://github.com/rlsgarcia-code/local-agent-companion/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/rlsgarcia-code/codex-dev-companion.git"
+    "url": "https://github.com/rlsgarcia-code/local-agent-companion.git"
   },
   "icon": "media/extension-icon.png",
   "keywords": [
@@ -34,15 +34,15 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:codexDevCompanion.chat",
-    "onCommand:codexDevCompanion.open",
-    "onCommand:codexDevCompanion.newThread",
-    "onCommand:codexDevCompanion.configureLiteLlm"
+    "onView:localAgentCompanion.chat",
+    "onCommand:localAgentCompanion.open",
+    "onCommand:localAgentCompanion.newThread",
+    "onCommand:localAgentCompanion.configureLiteLlm"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
-      "description": "Local Companion reads project files and can execute explicitly approved local tools, so the workspace must be trusted."
+      "description": "Local Agent Companion reads project files and can execute explicitly approved local tools, so the workspace must be trusted."
     }
   },
   "main": "./dist/extension.js",
@@ -50,71 +50,71 @@
     "viewsContainers": {
       "secondarySidebar": [
         {
-          "id": "codexDevCompanion",
-          "title": "Local Companion",
-          "icon": "media/codex-companion.svg"
+          "id": "localAgentCompanion",
+          "title": "Local Agent Companion",
+          "icon": "media/local-agent-companion.svg"
         }
       ]
     },
     "views": {
-      "codexDevCompanion": [
+      "localAgentCompanion": [
         {
           "type": "webview",
-          "id": "codexDevCompanion.chat",
-          "name": "Development Agent"
+          "id": "localAgentCompanion.chat",
+          "name": "Workspace Agent"
         }
       ]
     },
     "commands": [
       {
-        "command": "codexDevCompanion.open",
-        "title": "Local Companion: Open Agent"
+        "command": "localAgentCompanion.open",
+        "title": "Local Agent Companion: Open Agent"
       },
       {
-        "command": "codexDevCompanion.newThread",
-        "title": "Local Companion: New Thread"
+        "command": "localAgentCompanion.newThread",
+        "title": "Local Agent Companion: New Thread"
       },
       {
-        "command": "codexDevCompanion.addSelection",
-        "title": "Local Companion: Add Selection to Context"
+        "command": "localAgentCompanion.addSelection",
+        "title": "Local Agent Companion: Add Selection to Context"
       },
       {
-        "command": "codexDevCompanion.addFileContext",
-        "title": "Local Companion: Add File to Context"
+        "command": "localAgentCompanion.addFileContext",
+        "title": "Local Agent Companion: Add File to Context"
       },
       {
-        "command": "codexDevCompanion.remember",
-        "title": "Local Companion: Remember Note"
+        "command": "localAgentCompanion.remember",
+        "title": "Local Agent Companion: Remember Note"
       },
       {
-        "command": "codexDevCompanion.configureLiteLlm",
-        "title": "Local Companion: Configure Model Provider"
+        "command": "localAgentCompanion.configureLiteLlm",
+        "title": "Local Agent Companion: Configure Model Provider"
       },
       {
-        "command": "codexDevCompanion.clearLiteLlmKey",
-        "title": "Local Companion: Remove Current Provider Key"
+        "command": "localAgentCompanion.clearLiteLlmKey",
+        "title": "Local Agent Companion: Remove Current Provider Key"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "codexDevCompanion.addSelection",
+          "command": "localAgentCompanion.addSelection",
           "group": "navigation@50",
           "when": "editorHasSelection"
         }
       ],
       "view/title": [
         {
-          "command": "codexDevCompanion.newThread",
-          "when": "view == codexDevCompanion.chat",
+          "command": "localAgentCompanion.newThread",
+          "when": "view == localAgentCompanion.chat",
           "group": "navigation"
         }
       ]
     },
     "configuration": {
-      "title": "Local Dev Companion",
+      "title": "Local Agent Companion",
       "properties": {
-        "codexDevCompanion.modelProvider": {
+        "localAgentCompanion.modelProvider": {
           "type": "string",
           "enum": [
             "litellm",
@@ -129,7 +129,7 @@
           "default": "litellm",
           "description": "Model provider selected for this installation. Optional providers are rejected unless their explicit VSIX variant is installed."
         },
-        "codexDevCompanion.agentRuntime": {
+        "localAgentCompanion.agentRuntime": {
           "type": "string",
           "enum": [
             "standard",
@@ -143,7 +143,7 @@
           "scope": "resource",
           "description": "Agent runtime used for this workspace. Both options use the selected Chat Completions provider."
         },
-        "codexDevCompanion.autonomyMode": {
+        "localAgentCompanion.autonomyMode": {
           "type": "string",
           "enum": [
             "review",
@@ -157,14 +157,14 @@
           ],
           "default": "review",
           "scope": "resource",
-          "description": "Default autonomy level for new Local Companion requests in this workspace."
+          "description": "Default autonomy level for new Local Agent Companion requests in this workspace."
         },
-        "codexDevCompanion.liteLlmEndpoint": {
+        "localAgentCompanion.liteLlmEndpoint": {
           "type": "string",
           "default": "",
           "description": "Selected provider base URL or complete Chat Completions URL. OpenAI is fixed to api.openai.com; Ollama is restricted to loopback."
         },
-        "codexDevCompanion.liteLlmAuthHeader": {
+        "localAgentCompanion.liteLlmAuthHeader": {
           "type": "string",
           "enum": [
             "authorization",
@@ -179,17 +179,17 @@
           "default": "authorization",
           "description": "HTTP header used to authenticate the Chat Completions request."
         },
-        "codexDevCompanion.liteLlmModel": {
+        "localAgentCompanion.liteLlmModel": {
           "type": "string",
           "default": "",
           "description": "Exact model or gateway alias used by the selected provider."
         },
-        "codexDevCompanion.liteLlmModelsEndpoint": {
+        "localAgentCompanion.liteLlmModelsEndpoint": {
           "type": "string",
           "default": "",
           "description": "Optional HTTPS model-catalog URL queried with Cache-Control: no-cache and the stored key in the api-key header."
         },
-        "codexDevCompanion.liteLlmModelProfiles": {
+        "localAgentCompanion.liteLlmModelProfiles": {
           "type": "object",
           "default": {},
           "additionalProperties": {
@@ -233,34 +233,34 @@
             },
             "additionalProperties": false
           },
-          "description": "Optional Chat Completions parameters stored per exact model alias. Missing fields are omitted from the request. Prefer the LiteLLM form in the Local Companion sidebar."
+          "description": "Optional Chat Completions parameters stored per exact model alias. Missing fields are omitted from the request. Prefer the LiteLLM form in the Local Agent Companion sidebar."
         },
-        "codexDevCompanion.gatewayCaCertificatePath": {
+        "localAgentCompanion.gatewayCaCertificatePath": {
           "type": "string",
           "default": "",
           "scope": "resource",
           "description": "Legacy workspace-relative corporate CA PEM path. Existing values are migrated automatically to the extension's global local storage."
         },
-        "codexDevCompanion.autoContext": {
+        "localAgentCompanion.autoContext": {
           "type": "boolean",
           "default": true,
           "description": "Include the active file, selection, diagnostics and workspace summary with each request."
         },
-        "codexDevCompanion.maxContextCharacters": {
+        "localAgentCompanion.maxContextCharacters": {
           "type": "number",
           "default": 24000,
           "minimum": 2000,
           "maximum": 100000,
           "description": "Maximum number of characters collected from the editor for one request."
         },
-        "codexDevCompanion.maxConversationCharacters": {
+        "localAgentCompanion.maxConversationCharacters": {
           "type": "number",
           "default": 48000,
           "minimum": 8000,
           "maximum": 200000,
           "description": "Maximum number of recent conversation characters retained as model context."
         },
-        "codexDevCompanion.completionNotifications": {
+        "localAgentCompanion.completionNotifications": {
           "type": "string",
           "enum": [
             "whenHidden",
@@ -268,7 +268,7 @@
             "never"
           ],
           "enumDescriptions": [
-            "Notify only when the Local Companion sidebar is not visible.",
+            "Notify only when the Local Agent Companion sidebar is not visible.",
             "Notify after every completed or failed run.",
             "Never show run-completion notifications."
           ],
@@ -276,31 +276,31 @@
           "scope": "window",
           "description": "Controls local VS Code notifications after completed or failed agent runs. Notifications never include request, response, project, path, or model content."
         },
-        "codexDevCompanion.semanticMemoryEnabled": {
+        "localAgentCompanion.semanticMemoryEnabled": {
           "type": "boolean",
           "default": true,
           "description": "Use the bundled local ChromaDB vector store to retrieve relevant entries from project memory. Requires an embedding model alias."
         },
-        "codexDevCompanion.embeddingModel": {
+        "localAgentCompanion.embeddingModel": {
           "type": "string",
           "default": "",
           "description": "Selected-provider model used only for embeddings. Leave blank to use memory.md without semantic retrieval."
         },
-        "codexDevCompanion.semanticMemoryResults": {
+        "localAgentCompanion.semanticMemoryResults": {
           "type": "number",
           "default": 5,
           "minimum": 1,
           "maximum": 12,
           "description": "Maximum number of semantically relevant project-memory chunks injected into a run."
         },
-        "codexDevCompanion.standardRecursionLimit": {
+        "localAgentCompanion.standardRecursionLimit": {
           "type": "number",
           "default": 200,
           "minimum": 30,
           "maximum": 2000,
           "description": "LangGraph recursion limit for the standard runtime. Deep Agent uses its own high native limit and compaction behavior."
         },
-        "codexDevCompanion.finalReviewMode": {
+        "localAgentCompanion.finalReviewMode": {
           "type": "string",
           "enum": [
             "off",
@@ -316,13 +316,13 @@
           "scope": "resource",
           "description": "Optional independent final review through the same selected Chat Completions provider. No additional service is contacted."
         },
-        "codexDevCompanion.localBrowserToolsEnabled": {
+        "localAgentCompanion.localBrowserToolsEnabled": {
           "type": "boolean",
           "default": false,
           "scope": "resource",
           "description": "Allow the agent to request approval-gated LangChain tools for inspecting and visually checking applications on localhost. Toggle this from the browser icon in the sidebar. Non-loopback browser traffic is blocked."
         },
-        "codexDevCompanion.localBrowserChannel": {
+        "localAgentCompanion.localBrowserChannel": {
           "type": "string",
           "enum": [
             "auto",
@@ -338,13 +338,13 @@
           "scope": "machine",
           "description": "Installed browser used for local app validation. The extension never downloads a browser."
         },
-        "codexDevCompanion.localBrowserExecutablePath": {
+        "localAgentCompanion.localBrowserExecutablePath": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "description": "Optional absolute path to a corporate Chromium-based browser. Leave blank to find installed Edge or Chrome automatically."
         },
-        "codexDevCompanion.localBrowserOpenPreview": {
+        "localAgentCompanion.localBrowserOpenPreview": {
           "type": "boolean",
           "default": true,
           "scope": "resource",

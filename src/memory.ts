@@ -11,13 +11,13 @@ import {
 import type { DurableMemorySnapshot } from "./memory-entries";
 import { redactSensitiveText } from "./redaction";
 
-const MEMORY_DIRECTORY = ".codex-agent";
+const MEMORY_DIRECTORY = ".local-agent";
 const MEMORY_FILE = "memory.md";
 const MAX_MEMORY_FILE_BYTES = 2_000_000;
 const MAX_MEMORY_SOURCE_BYTES = 1_500_000;
 const DEFAULT_MEMORY = `# Project memory
 
-Durable facts, decisions, conventions, and follow-ups for the development agent.
+Durable facts, decisions, conventions, and follow-ups for the workspace agent.
 
 <!-- Keep entries concise, dated, and verifiable. Do not store secrets. -->
 `;

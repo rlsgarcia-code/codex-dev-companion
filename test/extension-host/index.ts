@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-const EXTENSION_ID = "local.codex-dev-companion";
+const EXTENSION_ID = "local.local-agent-companion";
 const EXPECTED_COMMANDS = [
-  "codexDevCompanion.open",
-  "codexDevCompanion.newThread",
-  "codexDevCompanion.addSelection",
-  "codexDevCompanion.addFileContext",
-  "codexDevCompanion.remember",
-  "codexDevCompanion.configureLiteLlm",
-  "codexDevCompanion.clearLiteLlmKey"
+  "localAgentCompanion.open",
+  "localAgentCompanion.newThread",
+  "localAgentCompanion.addSelection",
+  "localAgentCompanion.addFileContext",
+  "localAgentCompanion.remember",
+  "localAgentCompanion.configureLiteLlm",
+  "localAgentCompanion.clearLiteLlmKey"
 ] as const;
 
 async function completesWithin<T>(label: string, operation: PromiseLike<T>, timeoutMs = 10_000): Promise<T> {
@@ -62,7 +62,7 @@ export async function run(): Promise<void> {
     assert.ok(registeredCommands.has(command), `${command} must be registered after activation`);
   }
 
-  const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
+  const configuration = vscode.workspace.getConfiguration("localAgentCompanion");
   assert.equal(configuration.get("agentRuntime"), "standard");
   assert.equal(configuration.get("localBrowserToolsEnabled"), false);
   assert.equal(configuration.get("localBrowserChannel"), "auto");
@@ -72,16 +72,16 @@ export async function run(): Promise<void> {
   assert.equal(configuration.get("completionNotifications"), "whenHidden");
 
   await completesWithin(
-    "opening the Local Companion view",
-    vscode.commands.executeCommand("codexDevCompanion.open")
+    "opening the Local Agent Companion view",
+    vscode.commands.executeCommand("localAgentCompanion.open")
   );
   await completesWithin(
     "creating a new local thread",
-    vscode.commands.executeCommand("codexDevCompanion.newThread")
+    vscode.commands.executeCommand("localAgentCompanion.newThread")
   );
   await completesWithin(
     "opening the LiteLLM settings surface",
-    vscode.commands.executeCommand("codexDevCompanion.configureLiteLlm")
+    vscode.commands.executeCommand("localAgentCompanion.configureLiteLlm")
   );
 
   assert.equal(extension.isActive, true, "sidebar commands must not deactivate or crash the extension");

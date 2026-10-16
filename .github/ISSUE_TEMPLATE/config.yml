@@ -1,6 +1,6 @@
 blank_issues_enabled: false
 contact_links:
   - name: Relatar uma vulnerabilidade em privado
-    url: https://github.com/rlsgarcia-code/codex-dev-companion/security/advisories/new
+    url: https://github.com/rlsgarcia-code/local-agent-companion/security/advisories/new
     about: Não publique detalhes de segurança, credenciais ou provas de conceito em uma issue pública.
 

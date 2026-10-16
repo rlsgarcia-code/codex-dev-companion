@@ -19,23 +19,23 @@ export function activate(context: vscode.ExtensionContext): void {
     provider,
     changeReview,
     vscode.workspace.registerTextDocumentContentProvider(ChangeReviewManager.scheme, changeReview),
-    vscode.window.registerWebviewViewProvider("codexDevCompanion.chat", provider, {
+    vscode.window.registerWebviewViewProvider("localAgentCompanion.chat", provider, {
       webviewOptions: { retainContextWhenHidden: true }
     }),
-    vscode.commands.registerCommand("codexDevCompanion.open", async () => {
-      await vscode.commands.executeCommand("workbench.view.extension.codexDevCompanion");
+    vscode.commands.registerCommand("localAgentCompanion.open", async () => {
+      await vscode.commands.executeCommand("workbench.view.extension.localAgentCompanion");
       provider.reveal();
     }),
-    vscode.commands.registerCommand("codexDevCompanion.newThread", async () => {
+    vscode.commands.registerCommand("localAgentCompanion.newThread", async () => {
       try {
         await provider.newThread();
       } catch (error) {
         void vscode.window.showErrorMessage(safeErrorMessage(error));
       }
     }),
-    vscode.commands.registerCommand("codexDevCompanion.addSelection", () => provider.addSelection()),
-    vscode.commands.registerCommand("codexDevCompanion.addFileContext", () => provider.addFileContext()),
-    vscode.commands.registerCommand("codexDevCompanion.remember", async () => {
+    vscode.commands.registerCommand("localAgentCompanion.addSelection", () => provider.addSelection()),
+    vscode.commands.registerCommand("localAgentCompanion.addFileContext", () => provider.addFileContext()),
+    vscode.commands.registerCommand("localAgentCompanion.remember", async () => {
       const note = await vscode.window.showInputBox({
         title: "Remember for this project",
         prompt: "Save a durable decision, convention, or fact. Do not store secrets.",
@@ -53,11 +53,11 @@ export function activate(context: vscode.ExtensionContext): void {
       const uri = await memory.append(note);
       void vscode.window.showInformationMessage(`Project memory updated: ${vscode.workspace.asRelativePath(uri)}`);
     }),
-    vscode.commands.registerCommand("codexDevCompanion.configureLiteLlm", async () => {
+    vscode.commands.registerCommand("localAgentCompanion.configureLiteLlm", async () => {
       await provider.openConnectionSettings();
     }),
-    vscode.commands.registerCommand("codexDevCompanion.clearLiteLlmKey", async () => {
-      const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
+    vscode.commands.registerCommand("localAgentCompanion.clearLiteLlmKey", async () => {
+      const provider = configuredModelProvider(vscode.workspace.getConfiguration("localAgentCompanion"));
       const secretName = modelProviderSecret(provider);
       if (secretName) await context.secrets.delete(secretName);
       await agent.reloadProviderConfiguration();

@@ -29,7 +29,7 @@ import { connectStdioMcpClient } from "./mcp-stdio";
 import { redactSensitiveText, safeErrorMessage } from "./redaction";
 import type { AgentUiEvent, RunMode } from "./types";
 
-const MCP_PROFILES_KEY = "codexDevCompanion.mcpConnections.v1";
+const MCP_PROFILES_KEY = "localAgentCompanion.mcpConnections.v1";
 
 type McpConnectionInputBase = {
   id?: string;
@@ -297,7 +297,7 @@ export class CorporateMcpManager {
         sensitiveValues: resolved.sensitiveValues
       });
     }
-    const client = new Client({ name: "local-dev-companion", version: "0.11.0" });
+    const client = new Client({ name: "local-agent-companion", version: "0.11.0" });
     const transport = new StreamableHTTPClientTransport(new URL(profile.url), {
       requestInit: { headers: resolved.values, redirect: "manual" },
       redirectPolicy: "same-origin",

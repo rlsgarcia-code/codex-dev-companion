@@ -276,7 +276,7 @@ export class LocalBrowserSession implements vscode.Disposable {
       if (isAllowedLocalBrowserResource(route.url())) route.connectToServer();
       else {
         this.blockedRequests.add(redactedBlockedUrl(route.url()));
-        await route.close({ code: 1008, reason: "Local Companion permits loopback WebSockets only" });
+        await route.close({ code: 1008, reason: "Local Agent Companion permits loopback WebSockets only" });
       }
     });
     context.on("page", (openedPage) => {

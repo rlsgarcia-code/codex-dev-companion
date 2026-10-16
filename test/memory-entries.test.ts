@@ -9,7 +9,7 @@ import {
 
 const MEMORY = `# Project memory
 
-Durable facts, decisions, conventions, and follow-ups for the development agent.
+Durable facts, decisions, conventions, and follow-ups for the workspace agent.
 
 - 2026-10-10: Use exact replacements for audited edits.
 - Keep this undated convention too.

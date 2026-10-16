@@ -1,6 +1,6 @@
 # Piloto corporativo
 
-Este roteiro valida o Local Dev Companion na máquina e na rede em que ele será realmente usado. Não registre nem compartilhe chave, endpoint, certificado, prompt, caminho interno ou conteúdo de arquivos.
+Este roteiro valida o Local Agent Companion na máquina e na rede em que ele será realmente usado. Não registre nem compartilhe chave, endpoint, certificado, prompt, caminho interno ou conteúdo de arquivos.
 
 ## Antes de começar
 
@@ -19,7 +19,7 @@ Instale o VSIX correspondente ao sistema em que o **Extension Host** executa. Em
 ## Validação essencial
 
 1. Instale o VSIX em um perfil de teste do VS Code e reinicie a janela. Ao substituir outro build com o mesmo número de versão, use `code --install-extension <arquivo>.vsix --force` e execute **Developer: Reload Window**.
-2. Abra **Developer: Show Running Extensions** e confirme que **Local Dev Companion** está ativo e sem erro.
+2. Abra **Developer: Show Running Extensions** e confirme que **Local Agent Companion** está ativo e sem erro.
 3. Abra a sidebar direita, crie duas threads, alterne entre elas e recarregue a janela. Os rascunhos e títulos devem permanecer corretos, sem congelamento.
 4. Confirme que o seletor mostra somente os provedores previstos pelo nome do VSIX. Configure provedor, modelo e, quando exigida, chave segura; para LiteLLM, importe o PEM se necessário. Feche e abra outra janela do VS Code; a conexão deve continuar funcionando sem solicitar novamente chave ou PEM.
 5. Execute **Test connection**. O catálogo, Chat Completions com tool metadata e embeddings opcionais devem informar resultados separados e acionáveis.
@@ -36,7 +36,7 @@ Instale o VSIX correspondente ao sistema em que o **Extension Host** executa. Em
 16. Com um alias multimodal, solicite uma conferência visual depois de alterar a interface. Com um alias somente de texto, confirme que a falha visual é explicada e que a inspeção estrutural continua utilizável.
 17. Peça a identificação de símbolo, referências e Problems de um arquivo suportado pelo VS Code. Confirme que uma comparação após a edição não apresenta diagnósticos novos inesperados.
 18. Inicie um servidor de desenvolvimento pelo agente. Confirme aprovação, readiness em `localhost`, logs limitados, reinício e encerramento sem prompt administrativo nem processo órfão.
-19. Adicione um playbook fictício em `.codex-agent/playbooks`, peça o fluxo correspondente e confirme que o arquivo é tratado como orientação, não como comando automático.
+19. Adicione um playbook fictício em `.local-agent/playbooks`, peça o fluxo correspondente e confirme que o arquivo é tratado como orientação, não como comando automático.
 20. Faça uma pequena mudança com **Final review** em `changes`. A revisão deve citar somente evidência existente, expor verificações ausentes e nunca enviar conteúdo de `.env`, PEM ou outro caminho sensível.
 21. Em uma mudança visual, capture um estado anterior e compare com o resultado final. Confirme que **Review run** mostra a observação textual e que nenhuma imagem foi gravada no repositório.
 22. Copie um template MCP corporativo com placeholders e headers sensíveis. Importe-o pelo ícone de plugue, confirme que os segredos não aparecem em settings, memória, logs ou arquivos, e execute **Test connection**; nenhuma ferramenta ou SQL deve rodar nesse teste.

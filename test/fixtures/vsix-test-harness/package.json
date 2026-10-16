@@ -1,6 +1,6 @@
 {
   "name": "local-companion-vsix-test-harness",
-  "displayName": "Local Companion VSIX Test Harness",
+  "displayName": "Local Agent Companion VSIX Test Harness",
   "version": "0.0.0",
   "publisher": "local-test",
   "private": true,

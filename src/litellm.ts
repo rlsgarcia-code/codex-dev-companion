@@ -1,7 +1,7 @@
 import { X509Certificate } from "node:crypto";
 import * as path from "node:path";
 
-export const LITELLM_API_KEY_SECRET = "codexDevCompanion.liteLlmApiKey";
+export const LITELLM_API_KEY_SECRET = "localAgentCompanion.liteLlmApiKey";
 
 export type LiteLlmAuthHeader = "authorization" | "api-key" | "ocp-apim-subscription-key";
 
