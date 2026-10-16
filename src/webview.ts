@@ -40,11 +40,13 @@ import type {
 } from "./litellm";
 import {
   AVAILABLE_MODEL_PROVIDERS,
+  configuredModelProvider,
   modelProviderAuthHeader,
   modelProviderDefaultEndpoint,
   modelProviderLabel,
   modelProviderRequiresKey,
   modelProviderSecret,
+  modelProviderSettingIsExplicit,
   modelProviderSupportsCatalog,
   modelProviderSupportsCorporateCa,
   parseModelProvider,
@@ -531,9 +533,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async liteLlmSettingsSnapshot(): Promise<LiteLlmSettingsSnapshot> {
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-    const configuredProvider = parseModelProvider(configuration.get("modelProvider"));
-    const provider = AVAILABLE_MODEL_PROVIDERS.includes(configuredProvider) ? configuredProvider : "litellm";
-    const model = configuration.get<string>("liteLlmModel", "");
+    const provider = configuredModelProvider(configuration);
+    const providerWasExplicitlySelected = modelProviderSettingIsExplicit(configuration);
+    const model = providerWasExplicitlySelected ? configuration.get<string>("liteLlmModel", "") : "";
     const modelProfiles = parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"));
     const profile = liteLlmModelProfile(modelProfiles, model);
     const resolvedPreset = resolveLiteLlmModelPreset(model, profile.preset);
@@ -553,8 +555,10 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       requiresKey: modelProviderRequiresKey(provider),
       supportsCatalog: modelProviderSupportsCatalog(provider),
       supportsCorporateCa: modelProviderSupportsCorporateCa(provider),
-      endpoint: configuration.get<string>("liteLlmEndpoint", "") || modelProviderDefaultEndpoint(provider),
-      modelsEndpoint: configuration.get<string>("liteLlmModelsEndpoint", ""),
+      endpoint: providerWasExplicitlySelected
+        ? configuration.get<string>("liteLlmEndpoint", "") || modelProviderDefaultEndpoint(provider)
+        : modelProviderDefaultEndpoint(provider),
+      modelsEndpoint: providerWasExplicitlySelected ? configuration.get<string>("liteLlmModelsEndpoint", "") : "",
       model,
       hasApiKey,
       caCertificatePath: hasGlobalCa
@@ -578,7 +582,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async configureGatewayCa(): Promise<void> {
     try {
       await this.assertProviderConfigurationEditable();
-      const provider = parseModelProvider(vscode.workspace.getConfiguration("codexDevCompanion").get("modelProvider"));
+      const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
       if (!modelProviderSupportsCorporateCa(provider)) {
         throw new Error("Corporate CA import is available only for the LiteLLM provider.");
       }
@@ -1300,7 +1304,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private async exportConnectionProfile(): Promise<void> {
     try {
-      const provider = parseModelProvider(vscode.workspace.getConfiguration("codexDevCompanion").get("modelProvider"));
+      const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
       if (provider !== "litellm") throw new Error("Portable connection profiles are currently available only for LiteLLM.");
       const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
       const requiresCorporateCa = await hasImportedGatewayCa(this.extensionContext)
@@ -1415,7 +1419,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       const model = configuration.get<string>("liteLlmModel", "");
       const modelProfiles = parseLiteLlmModelProfiles(configuration.get("liteLlmModelProfiles"));
       const profile = liteLlmModelProfile(modelProfiles, model);
-      const provider = parseModelProvider(configuration.get("modelProvider"));
+      const provider = configuredModelProvider(configuration);
       const secretName = modelProviderSecret(provider);
       const [threadSnapshot, memorySnapshot, keyPresent, corporateCaPresent] = await Promise.all([
         this.agent.threadSnapshot(),

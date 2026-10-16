@@ -2,11 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AVAILABLE_MODEL_PROVIDERS,
+  configuredModelProvider,
   modelProvidersForVariant,
   normalizeOllamaEndpoint,
   OPENAI_BASE_URL,
   validateModelConnection
 } from "../src/model-provider";
+
+function providerConfiguration(value?: unknown) {
+  return {
+    get: <T>(_section: string) => value as T | undefined,
+    inspect: <T>(_section: string) => value === undefined ? undefined : { globalValue: value as T }
+  };
+}
 
 test("keeps optional providers out of the default test and production variant", () => {
   assert.deepEqual(AVAILABLE_MODEL_PROVIDERS, ["litellm"]);
@@ -18,6 +26,13 @@ test("keeps optional providers out of the default test and production variant", 
     model: "gpt-4o",
     apiKey: "secret"
   }), /not included in this extension package/);
+});
+
+test("defaults an optional package to its named provider until the user explicitly chooses", () => {
+  assert.equal(configuredModelProvider(providerConfiguration(), "ollama"), "ollama");
+  assert.equal(configuredModelProvider(providerConfiguration(), "openai"), "openai");
+  assert.equal(configuredModelProvider(providerConfiguration("litellm"), "ollama"), "litellm");
+  assert.equal(configuredModelProvider(providerConfiguration("openai"), "ollama"), "ollama");
 });
 
 test("restricts Ollama endpoints to credential-free loopback URLs", () => {

@@ -37,12 +37,38 @@ export function modelProvidersForVariant(variant: ProviderVariant): readonly Mod
 
 export const AVAILABLE_MODEL_PROVIDERS: readonly ModelProvider[] = modelProvidersForVariant(PROVIDER_VARIANT);
 
+type ModelProviderConfiguration = {
+  get<T>(section: string): T | undefined;
+  inspect<T>(section: string): {
+    globalValue?: T;
+    workspaceValue?: T;
+    workspaceFolderValue?: T;
+  } | undefined;
+};
+
 export type ModelConnection = Required<LiteLlmConnection> & {
   provider: ModelProvider;
 };
 
 export function parseModelProvider(value: unknown): ModelProvider {
   return value === "ollama" || value === "openai" ? value : "litellm";
+}
+
+export function modelProviderSettingIsExplicit(configuration: ModelProviderConfiguration): boolean {
+  const inspected = configuration.inspect<unknown>("modelProvider");
+  return inspected?.globalValue !== undefined
+    || inspected?.workspaceValue !== undefined
+    || inspected?.workspaceFolderValue !== undefined;
+}
+
+export function configuredModelProvider(
+  configuration: ModelProviderConfiguration,
+  variant: ProviderVariant = PROVIDER_VARIANT
+): ModelProvider {
+  const configured = modelProviderSettingIsExplicit(configuration)
+    ? parseModelProvider(configuration.get("modelProvider"))
+    : variant;
+  return modelProvidersForVariant(variant).includes(configured) ? configured : variant;
 }
 
 export function assertModelProviderAvailable(

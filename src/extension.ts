@@ -3,7 +3,7 @@ import { DevelopmentAgent } from "./agent";
 import { ChangeReviewManager } from "./change-review";
 import { ContextCollector } from "./context";
 import { ProjectMemory } from "./memory";
-import { modelProviderLabel, modelProviderSecret, parseModelProvider } from "./model-provider";
+import { configuredModelProvider, modelProviderLabel, modelProviderSecret } from "./model-provider";
 import { redactSensitiveText, safeErrorMessage } from "./redaction";
 import { AgentViewProvider } from "./webview";
 
@@ -57,7 +57,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await provider.openConnectionSettings();
     }),
     vscode.commands.registerCommand("codexDevCompanion.clearLiteLlmKey", async () => {
-      const provider = parseModelProvider(vscode.workspace.getConfiguration("codexDevCompanion").get("modelProvider"));
+      const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
       const secretName = modelProviderSecret(provider);
       if (secretName) await context.secrets.delete(secretName);
       await agent.reloadProviderConfiguration();

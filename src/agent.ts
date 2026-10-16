@@ -51,12 +51,14 @@ import {
 } from "./litellm";
 import type { LiteLlmModelProfile } from "./litellm";
 import {
+  configuredModelProvider,
   modelClientAuthentication,
   modelProviderAuthHeader,
+  modelProviderDefaultEndpoint,
   modelProviderSecret,
+  modelProviderSettingIsExplicit,
   modelProviderSupportsCatalog,
   modelProviderSupportsCorporateCa,
-  parseModelProvider,
   validateModelConnection,
   type ModelConnection
 } from "./model-provider";
@@ -245,15 +247,18 @@ export class DevelopmentAgent implements vscode.Disposable {
     }
 
     const configuration = vscode.workspace.getConfiguration("codexDevCompanion");
-    const provider = parseModelProvider(configuration.get("modelProvider"));
+    const provider = configuredModelProvider(configuration);
+    const providerWasExplicitlySelected = modelProviderSettingIsExplicit(configuration);
     const secretName = modelProviderSecret(provider);
     const apiKey = secretName ? await this.extensionContext.secrets.get(secretName) : undefined;
     let connection: ModelConnection;
     try {
       connection = validateModelConnection({
         provider,
-        endpoint: configuration.get<string>("liteLlmEndpoint", ""),
-        model: configuration.get<string>("liteLlmModel", ""),
+        endpoint: providerWasExplicitlySelected
+          ? configuration.get<string>("liteLlmEndpoint", "")
+          : modelProviderDefaultEndpoint(provider),
+        model: providerWasExplicitlySelected ? configuration.get<string>("liteLlmModel", "") : "",
         apiKey: apiKey ?? "",
         authHeader: modelProviderAuthHeader(provider, configuration.get("liteLlmAuthHeader"))
       });
@@ -296,7 +301,7 @@ export class DevelopmentAgent implements vscode.Disposable {
   public async listModels(endpointInput: string, transientApiKey = ""): Promise<string[]> {
     const workspace = vscode.workspace.workspaceFolders?.[0];
     if (!workspace) throw new Error("Open a workspace before loading the model catalog.");
-    const provider = parseModelProvider(vscode.workspace.getConfiguration("codexDevCompanion").get("modelProvider"));
+    const provider = configuredModelProvider(vscode.workspace.getConfiguration("codexDevCompanion"));
     if (!modelProviderSupportsCatalog(provider)) {
       throw new Error("This provider uses an explicit model name and does not use the LiteLLM catalog.");
     }
@@ -498,14 +503,17 @@ export class DevelopmentAgent implements vscode.Disposable {
       const maxContextCharacters = configuration.get<number>("maxContextCharacters", 24_000);
       const maxConversationCharacters = configuration.get<number>("maxConversationCharacters", 48_000);
       const autoContext = configuration.get<boolean>("autoContext", true);
-      const provider = parseModelProvider(configuration.get("modelProvider"));
+      const provider = configuredModelProvider(configuration);
+      const providerWasExplicitlySelected = modelProviderSettingIsExplicit(configuration);
       const secretName = modelProviderSecret(provider);
       const apiKey = secretName ? await this.extensionContext.secrets.get(secretName) : undefined;
       sensitiveValues = apiKey ? [apiKey] : [];
       const connection = validateModelConnection({
         provider,
-        endpoint: configuration.get<string>("liteLlmEndpoint", ""),
-        model: configuration.get<string>("liteLlmModel", ""),
+        endpoint: providerWasExplicitlySelected
+          ? configuration.get<string>("liteLlmEndpoint", "")
+          : modelProviderDefaultEndpoint(provider),
+        model: providerWasExplicitlySelected ? configuration.get<string>("liteLlmModel", "") : "",
         apiKey: apiKey ?? "",
         authHeader: modelProviderAuthHeader(provider, configuration.get("liteLlmAuthHeader"))
       });

@@ -132,14 +132,14 @@ O equivalente aos extras de um pacote Python é um VSIX alternativo, instalado d
 # padrão: somente LiteLLM
 npm run package
 
-# opt-in: LiteLLM + Ollama local
+# opt-in: abre com Ollama local; LiteLLM continua selecionável
 npm run package:ollama
 
-# opt-in: LiteLLM + OpenAI Platform direta
+# opt-in: abre com OpenAI Platform; LiteLLM continua selecionável
 npm run package:openai
 ```
 
-Os arquivos opcionais recebem o provedor no nome, por exemplo `codex-dev-companion-0.11.0-ollama-win32-x64.vsix` e `codex-dev-companion-0.11.0-openai-win32-x64.vsix`. Instale somente um deles com **Install from VSIX…** ou `code --install-extension <caminho-absoluto-do-vsix> --force`, depois execute **Developer: Reload Window**. Como todos usam o mesmo ID da extensão, a variante escolhida substitui a anterior e preserva threads, memória e configurações locais.
+Os arquivos opcionais recebem o provedor no nome, por exemplo `codex-dev-companion-0.11.0-ollama-win32-x64.vsix` e `codex-dev-companion-0.11.0-openai-win32-x64.vsix`. Instale somente um deles com **Install from VSIX…** ou `code --install-extension <caminho-absoluto-do-vsix> --force`, depois execute **Developer: Reload Window**. Como todos usam o mesmo ID da extensão, a variante escolhida substitui a anterior e preserva threads, memória e configurações locais. Quando ainda não existe uma escolha explícita de provedor, cada variante abre com o provedor indicado no nome; uma seleção posterior do usuário é preservada.
 
 Cada artefato contém uma allowlist de provedores definida no build:
 
@@ -451,7 +451,7 @@ Nunca armazene nele credenciais, tokens, dados pessoais, hipóteses, status tran
 
 | Configuração | Padrão | Finalidade |
 | --- | --- | --- |
-| `codexDevCompanion.modelProvider` | `litellm` | Seleciona `litellm`, `ollama` ou `openai`; opções ausentes do VSIX instalado são recusadas. |
+| `codexDevCompanion.modelProvider` | provedor do VSIX | Seleciona `litellm`, `ollama` ou `openai`; a variante padrão usa LiteLLM e cada variante opcional começa no provedor indicado no nome até o usuário fazer uma escolha explícita. Opções ausentes do VSIX instalado são recusadas. |
 | `codexDevCompanion.agentRuntime` | `standard` | Escolhe `LangChain Agent` (`standard`) ou `Deep Agent` (`deep`) por workspace. |
 | `codexDevCompanion.liteLlmEndpoint` | vazio | Campo legado compartilhado com a base exata do provedor selecionado. |
 | `codexDevCompanion.liteLlmModelsEndpoint` | vazio | URL HTTPS opcional do catálogo consultado sob demanda com `api-key` e sem cache. |
